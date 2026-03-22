@@ -12,37 +12,38 @@ Perform a context-aware code review of a pull request, using the codebase's `con
 
 ## Step 1 — Ensure context exists
 
-Check if `context.md` exists in the repository root.
+Check if `context.md` AND `.context/` directory exist in the repository root.
 
-If it does NOT exist:
-- Inform the user: "No context.md found. Running /build-context first..."
-- Run the full /build-context flow (see build-context command) to generate it
+If either does NOT exist:
+- Inform the user: "No context found. Running /build-context first..."
+- Run the full /build-context flow (see build-context command) to generate context.md + .context/*.md
 - Then continue with step 2
 
-If it DOES exist:
+If both exist:
 - Continue to step 2
 
-## Step 2 — Load context
+## Step 2 — Load architecture context
 
-Read `context.md` to understand the codebase architecture, invariants, trust boundaries, and key flows.
+Read `context.md` to understand the codebase architecture, module map, key flows, and trust boundaries. Do NOT load any `.context/*.md` files yet — those are loaded selectively in Step 3.
 
-## Step 3 — Identify PR scope
+## Step 3 — Identify PR scope and load relevant deep context
 
 Use `gh pr view` and `gh pr diff` to:
 1. Get the PR description and changed files
-2. Identify which modules/areas are affected
+2. Identify which modules are affected by mapping changed file paths to the Module Map in context.md
+3. Load ONLY the `.context/{module}.md` files for affected modules — do not load unrelated modules
 
 ## Step 4 — Context-informed review
 
-Launch parallel Sonnet agents to independently review the change, each with the relevant context from context.md:
+Launch parallel Sonnet agents to independently review the change. Each agent receives: the PR diff, the architecture overview from context.md, AND the relevant `.context/*.md` files for affected modules.
 
-a. **Agent #1 — Invariant compliance**: Check if the changes violate any invariants documented in context.md. Do the changes maintain the assumptions and postconditions documented for the affected functions?
+a. **Agent #1 — Invariant compliance**: Check if the changes violate any invariants documented in the loaded `.context/*.md` files. Do the changes maintain the assumptions and postconditions documented for the affected functions?
 
-b. **Agent #2 — Bug scan**: Read the file changes and do a shallow scan for obvious bugs. Focus on large bugs, avoid nitpicks. Use the context.md understanding of data flows and trust boundaries to spot issues a context-free review would miss.
+b. **Agent #2 — Bug scan**: Read the file changes and do a shallow scan for obvious bugs. Focus on large bugs, avoid nitpicks. Use the deep context (data flows, trust boundaries, function assumptions) to spot issues a context-free review would miss.
 
 c. **Agent #3 — Historical context**: Read the git blame and history of the modified code. Identify any bugs in light of that historical context.
 
-d. **Agent #4 — Cross-module impact**: Using the cross-function dependencies and workflow reconstructions from context.md, check if the changes could break flows or assumptions in OTHER parts of the codebase that aren't directly modified.
+d. **Agent #4 — Cross-module impact**: Using the cross-module coupling section from context.md and the dependency/dependent sections from loaded `.context/*.md` files, check if the changes could break flows or assumptions in OTHER parts of the codebase that aren't directly modified. If the coupling analysis points to other modules, load those `.context/*.md` files to verify.
 
 ## Step 5 — Confidence scoring
 
@@ -54,7 +55,7 @@ For each issue found in Step 4, launch a parallel Haiku agent to score confidenc
 - **75**: Verified, very likely real, will impact functionality. Existing approach is insufficient.
 - **100**: Absolutely certain, will happen frequently. Evidence directly confirms.
 
-For invariant-related issues, the agent must verify the invariant is actually documented in context.md.
+For invariant-related issues, the agent must verify the invariant is actually documented in the relevant `.context/*.md` file.
 
 ## Step 6 — Filter
 

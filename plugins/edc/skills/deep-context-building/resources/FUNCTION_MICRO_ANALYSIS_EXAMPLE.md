@@ -173,7 +173,7 @@ json(res, { ok: true, session: finalName });
 - `validateProject(res, project)` (routes module): Calls `isValidProjectName()` from validation module. Sends 400 on failure.
 - `validateProjectDir(res, dir)` (routes module): Symlink check + realpath containment. Sends 400/404 on failure.
 - `uniqueSessionName(folderName)` (http module): Calls `tmuxList()` to find unused name. Depends on live tmux state.
-- `tmuxNewSession(name, cwd, cmd, loadSettings)` (tmux module): The actual session creation. See detailed analysis below.
+- `tmuxNewSession(name, cwd, cmd, loadSettings)` (tmux module): The actual session creation.
 
 *External Calls (Outbound):*
 - `mkdirSync(projectDir, { recursive: true })`: Filesystem write. Risk: permission errors, disk full. Silent catch means failure is ignored — directory validation happens next anyway.
@@ -191,7 +191,7 @@ json(res, { ok: true, session: finalName });
 
 *Invariant Coupling:*
 - **Path safety chain:** `isValidProjectName(folderName)` → `join(DEV_DIR, folderName)` → `validateProjectDir(realpath check)` → `tmuxNewSession(cwd)`. Breaking ANY link in this chain allows path traversal.
-- **Session uniqueness:** `uniqueSessionName()` + `tmuxNewSession(has-session guard)` — double defense against duplicate sessions. Breaking uniqueSessionName alone doesn't cause duplicates (tmux guard catches it), but breaking tmux guard without uniqueSessionName causes 409 errors on legitimate requests.
+- **Session uniqueness:** `uniqueSessionName()` + `tmuxNewSession(has-session guard)` — double defense against duplicate sessions.
 - **Command safety chain:** `CMD_REGEX.test(cmd)` → `injectAgentContext(cmd)` → `shellEscape(fullCmd)` → `exec(TMUX, ["new-session", ..., shellCmd])`. The regex is defense-in-depth; shellEscape is the actual injection prevention.
 
 *Assumptions Propagated to Callers:*

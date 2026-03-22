@@ -1,10 +1,12 @@
 # Output Requirements
 
-When performing ultra-granular analysis, output MUST follow this structure for EACH analyzed function.
+When performing ultra-granular analysis, Claude MUST structure output following the Per-Function Microstructure Checklist format demonstrated in [FUNCTION_MICRO_ANALYSIS_EXAMPLE.md](FUNCTION_MICRO_ANALYSIS_EXAMPLE.md).
 
 ---
 
 ## Required Structure
+
+For EACH analyzed function, output MUST include:
 
 **1. Purpose** (mandatory)
 - Clear statement of function's role in the system
@@ -12,17 +14,17 @@ When performing ultra-granular analysis, output MUST follow this structure for E
 - Minimum 2-3 sentences
 
 **2. Inputs & Assumptions** (mandatory)
-- All parameters (explicit and implicit: env vars, global state, config, closures)
+- All parameters (explicit and implicit)
 - All preconditions
-- All trust assumptions (who calls this? is input validated upstream?)
+- All trust assumptions
 - Each input must identify: type, source, trust level
 - Minimum 3 assumptions documented
 
 **3. Outputs & Effects** (mandatory)
 - Return values (or "void" if none)
-- All state writes (in-memory, disk, database, external service)
-- All external interactions (network calls, subprocess spawns, file I/O)
-- All events/signals emitted (EventEmitter, WebSocket messages, IPC)
+- All state writes
+- All external interactions
+- All events emitted
 - All postconditions
 - Minimum 3 effects documented
 

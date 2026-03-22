@@ -32,7 +32,7 @@ Before concluding micro-analysis of a function, verify:
 
 ## Anti-Hallucination Verification
 - [ ] All claims reference specific line numbers (L45, L98-102, etc.)
-- [ ] No vague statements ("probably", "might", "seems to") — replaced with "unclear; need to check X"
+- [ ] No vague statements ("probably", "might", "seems to") - replaced with "unclear; need to check X"
 - [ ] Contradictions resolved (if earlier analysis conflicts with current findings, explicitly updated)
 - [ ] Evidence-based: Every invariant/assumption tied to actual code
 

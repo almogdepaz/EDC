@@ -37,13 +37,23 @@ Use `gh pr view` and `gh pr diff` to:
 
 Launch parallel Sonnet agents to independently review the change. Each agent receives: the PR diff, the architecture overview from context.md, AND the relevant `.context/*.md` files for affected modules.
 
-a. **Agent #1 — Invariant compliance**: Check if the changes violate any invariants documented in the loaded `.context/*.md` files. Do the changes maintain the assumptions and postconditions documented for the affected functions?
+**Critical: how agents use context files vs code**
 
-b. **Agent #2 — Bug scan**: Read the file changes and do a shallow scan for obvious bugs. Focus on large bugs, avoid nitpicks. Use the deep context (data flows, trust boundaries, function assumptions) to spot issues a context-free review would miss.
+Context files contain ONLY hard-to-discover insights (invariants, coupling, implicit contracts, gotchas). They do NOT contain function signatures, type definitions, or surface-level descriptions — agents must READ THE ACTUAL CODE for that. The context files tell agents what to WATCH FOR, not what the code DOES.
+
+- To understand what a function does → `Read` the source file
+- To understand what invariants it must maintain → check `.context/*.md`
+- To understand what other modules it's coupled to → check `.context/*.md`
+- To understand its signature and types → `Read` / `Grep` the code
+- To understand what breaks if you change it → check `.context/*.md`
+
+a. **Agent #1 — Invariant compliance**: Read the changed code directly. Then check `.context/*.md` for invariants and implicit contracts affecting those functions. Does the change violate any documented invariant? Does it break an assumption that downstream code relies on?
+
+b. **Agent #2 — Bug scan**: Read the changed files directly. Do a scan for bugs, using context files for what a surface read would miss: non-obvious data flows, trust boundary assumptions, stateful gotchas documented in fragility notes.
 
 c. **Agent #3 — Historical context**: Read the git blame and history of the modified code. Identify any bugs in light of that historical context.
 
-d. **Agent #4 — Cross-module impact**: Using the cross-module coupling section from context.md and the dependency/dependent sections from loaded `.context/*.md` files, check if the changes could break flows or assumptions in OTHER parts of the codebase that aren't directly modified. If the coupling analysis points to other modules, load those `.context/*.md` files to verify.
+d. **Agent #4 — Cross-module impact**: Using the cross-module coupling sections from context.md and `.context/*.md`, identify modules that could be affected by this change even though they aren't directly modified. READ THE ACTUAL CODE of those coupled modules to verify — don't just report what the context file says might break.
 
 ## Step 5 — Confidence scoring
 

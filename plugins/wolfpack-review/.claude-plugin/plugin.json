@@ -1,0 +1,8 @@
+{
+  "name": "wolfpack-review",
+  "version": "0.1.0",
+  "description": "Context-aware code review plugin. Builds deep codebase context (context.md) then reviews PRs against it.",
+  "author": {
+    "name": "wolfpack"
+  }
+}

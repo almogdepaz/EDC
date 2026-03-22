@@ -1,8 +1,32 @@
 # EDC Plugin — Implementation Plan
 
-## Vision
+## What is EDC?
 
-EDC (Engineering Deep Context) is a Claude Code plugin that builds persistent, structured codebase context and uses it for high-signal PR reviews. The core insight: reviews are better when the reviewer deeply understands the codebase architecture, invariants, and coupling — not just the diff.
+EDC (Engineering Deep Context) is a Claude Code plugin that solves a fundamental problem with AI code review: **agents reviewing PRs have no understanding of the codebase they're reviewing.**
+
+Today's AI code review tools (including Claude Code's built-in `/code-review`) analyze diffs in isolation. They catch surface-level bugs and style issues, but miss the deeper stuff — invariant violations, broken assumptions, cascading effects across modules — because they don't understand the system architecture.
+
+EDC fixes this by building and maintaining a **persistent, structured context layer** for a codebase:
+
+1. **`/edc:build-context`** — Performs deep, line-by-line analysis of the entire codebase (inspired by Trail of Bits' audit-context methodology: first principles, 5 whys, invariant tracking). Outputs:
+   - `context.md` — brief architecture intro: what the system is, module map, actor model, key flows, global invariants, trust boundaries
+   - `.context/*.md` — per-module deep analysis: every non-trivial function's purpose, assumptions, invariants, cross-dependencies
+
+2. **`/edc:review`** — Context-aware PR review. Instead of blindly scanning a diff, it:
+   - Reads `context.md` to understand the architecture
+   - Maps changed files to affected modules
+   - Loads ONLY the relevant `.context/*.md` files (not the whole codebase context)
+   - Runs parallel review agents that can check invariant compliance, cross-module impact, and historical context
+   - Confidence-scores every finding (0-100) and only posts issues scoring ≥80
+
+**The key insight**: context files are committed to the repo, so they persist across sessions, branches, and team members. An agent picking up a PR review can instantly understand the codebase by reading a few hundred lines — not re-analyzing thousands of files.
+
+## Why not just read the code?
+
+- **Context windows are limited.** A 1M-token context still can't hold a large codebase. Pre-built context is curated — only what matters.
+- **Analysis is expensive.** Deep line-by-line analysis of a codebase takes time. Do it once, reuse many times.
+- **Invariants aren't in the code.** "This function assumes the caller already validated auth" isn't written anywhere — it lives in the deep analysis.
+- **Cross-module coupling is invisible.** A change in module A can break module B. You only know this if you've mapped the dependencies.
 
 ## Current State (v0.2.0)
 

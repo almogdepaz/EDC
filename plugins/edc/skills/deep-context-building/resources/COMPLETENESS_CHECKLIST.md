@@ -18,7 +18,7 @@ Before concluding micro-analysis of a function, verify:
 - [ ] Documented at least 5 assumptions (what is assumed true)
 - [ ] Applied First Principles at least once
 - [ ] Applied 5 Whys or 5 Hows at least 3 times total
-- [ ] Risk analysis for all external interactions (subprocess spawns, network calls, file I/O, untrusted input)
+- [ ] Risk analysis for all external dependency calls (total failure, partial failure, state corruption, contract violation, re-entrant invocation)
 
 ---
 

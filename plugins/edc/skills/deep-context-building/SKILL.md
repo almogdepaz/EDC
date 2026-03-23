@@ -67,10 +67,10 @@ Goal: **deep, accurate understanding**, not conclusions.
 
 Before deep analysis, Claude performs a minimal mapping:
 
-1. Identify major modules/files/directories.
+1. Identify major modules, components, and boundaries.
 2. Note obvious public/external entrypoints.
-3. Identify likely actors (users, services, CLI consumers, API callers, external systems).
-4. Identify important state, storage, config, or data structures.
+3. Identify likely actors: users, operators, internal components, and external dependencies.
+4. Identify mutable state, persistent stores, and configuration.
 5. Build a preliminary structure without assuming behavior.
 
 This establishes anchors for detailed analysis.
@@ -127,23 +127,23 @@ When encountering calls, **continue the same micro-first analysis across boundar
 
 #### External Calls — Two Cases
 
-**Case A — External Call Whose Code Exists in the Codebase**
+**Case A — Dependency Whose Implementation Is Available**
 Treat as an internal call:
-- Jump into the target function/module.
+- Jump into the target component.
 - Continue block-by-block micro-analysis.
 - Propagate invariants and assumptions seamlessly.
 - Consider edge cases based on the *actual* code, not a black-box guess.
 
-**Case B — External Call Without Available Code (True External / Black Box)**
+**Case B — External Dependency Without Available Code (True External / Black Box)**
 Analyze as adversarial:
-- Describe parameters sent.
+- Describe arguments, context, and resources consumed.
 - Identify assumptions about the target.
-- Consider all outcomes:
-  - failure/exception
-  - incorrect/unexpected return values
-  - unexpected state changes
-  - misbehavior
-  - timeouts or hangs
+- Consider all failure modes:
+  - total failure (crash, exception, timeout, hang)
+  - partial failure (incorrect or incomplete return values)
+  - state corruption (callee modifies shared state unexpectedly)
+  - contract violation (callee doesn't honor its interface)
+  - re-entrant or recursive invocation (callee calls back into caller before original call completes)
 
 #### Continuity Rule
 Treat the entire call chain as **one continuous execution flow**.

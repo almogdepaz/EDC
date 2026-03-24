@@ -23,11 +23,21 @@ Claude Code plugin for deep codebase understanding and context-aware code review
 
 **Review** uses the context files to catch things a blind diff review would miss: invariant violations, cross-module breakage, regression of known issues.
 
-## Install
+## Install (Claude Code)
 
+**Step 1** — Add the marketplace (one-time):
 ```bash
 claude plugins marketplace add almogdepaz/edc
+```
+
+**Step 2** — Install the plugin:
+```bash
 claude plugins install edc@edc
+```
+
+**Update** to latest version:
+```bash
+claude plugins update edc@edc
 ```
 
 ## Skills

@@ -21,7 +21,7 @@ Parse arguments:
 ## Step 1 — Ensure context exists
 
 Run `/edc:build-context` first. This will:
-- If no `.context/.meta.json` → full build + split (new repo)
+- If no `.context/.meta.json` → full build + split + audit-complexity (new repo)
 - If `.meta.json` exists → incremental update (existing repo)
 
 ## Step 2 — Review

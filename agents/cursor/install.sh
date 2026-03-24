@@ -1,25 +1,27 @@
 #!/bin/bash
-# Install EDC skills into a Cursor project
-# Usage: ./install.sh <project-dir>
+# Install EDC skills for Cursor
+# Usage: ./install.sh [--global (default) | --project <dir>]
 
 set -e
 
-PROJECT="${1:-.}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo "Installing EDC skills into $PROJECT for Cursor..."
+if [ "$1" = "--project" ]; then
+  TARGET="${2:-.}/.cursor"
+  echo "Installing EDC skills into ${2:-.} for Cursor..."
+else
+  TARGET="$HOME/.cursor"
+  echo "Installing EDC skills globally for Cursor at ~/.cursor/..."
+fi
 
-mkdir -p "$PROJECT/.cursor/skills/deep-context-building/resources"
-mkdir -p "$PROJECT/.cursor/skills/differential-review"
-mkdir -p "$PROJECT/.cursor/commands"
+mkdir -p "$TARGET/skills/deep-context-building/resources"
+mkdir -p "$TARGET/skills/differential-review"
+mkdir -p "$TARGET/commands"
 
-# Copy shared skills
-cp "$REPO_ROOT/skills/deep-context-building/SKILL.md" "$PROJECT/.cursor/skills/deep-context-building/"
-cp "$REPO_ROOT/skills/deep-context-building/resources/"* "$PROJECT/.cursor/skills/deep-context-building/resources/"
-cp "$REPO_ROOT/skills/differential-review/"* "$PROJECT/.cursor/skills/differential-review/"
+cp "$REPO_ROOT/skills/deep-context-building/SKILL.md" "$TARGET/skills/deep-context-building/"
+cp "$REPO_ROOT/skills/deep-context-building/resources/"* "$TARGET/skills/deep-context-building/resources/"
+cp "$REPO_ROOT/skills/differential-review/"* "$TARGET/skills/differential-review/"
+cp "$SCRIPT_DIR/.cursor/commands/"* "$TARGET/commands/"
 
-# Copy cursor-specific commands
-cp "$SCRIPT_DIR/.cursor/commands/"* "$PROJECT/.cursor/commands/"
-
-echo "Done. EDC skills installed at $PROJECT/.cursor/"
+echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"

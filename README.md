@@ -11,8 +11,8 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
 - `context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
 - `.context/{module}.md` — deep per-module analysis
 - `.context/issues.md` — actionable list of all problems found
+- `.context/complexity.md` — bloat, duplication, overengineering audit
 - `.context/full-context.md` — complete monolithic analysis
-- `.context/.meta.json` — metadata for incremental updates
 
 **Review** uses the context files to catch things a blind diff review would miss: invariant violations, cross-module breakage, regression of known issues.
 
@@ -25,38 +25,31 @@ claude plugins marketplace add almogdepaz/edc
 claude plugins install edc@edc
 ```
 
-Commands: `/edc:build-context`, `/edc:review <pr>`
-
 ### Cursor
 
 ```bash
-git clone https://github.com/almogdepaz/edc.git
-cd edc && bash agents/cursor/install.sh /path/to/your/project
+curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s cursor
 ```
-
-Copies skills to `.cursor/skills/` and commands to `.cursor/commands/`.
 
 ### Codex
 
 ```bash
-git clone https://github.com/almogdepaz/edc.git
-cd edc && bash agents/codex/install.sh /path/to/your/project
+curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s codex
 ```
-
-Copies skills to `.codex/skills/`. Use `$deep-context-building` and `$differential-review`.
-
-For global install: `bash agents/codex/install.sh --global`
 
 ### Gemini CLI
 
 ```bash
-git clone https://github.com/almogdepaz/edc.git
-cd edc && bash agents/gemini/install.sh /path/to/your/project
+curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
 ```
 
-Copies skills to `.gemini/skills/`.
+### Auto-detect
 
-For global install: `bash agents/gemini/install.sh --global`
+```bash
+curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash
+```
+
+Detects which agent is installed and installs skills globally.
 
 ## Skills
 
@@ -69,12 +62,13 @@ Two generalized skills from Trail of Bits:
 
 ```
 edc/
-  skills/                          # shared skill content (source of truth)
+  install.sh                         # one-line installer for all agents
+  skills/                            # shared skill content (source of truth)
     deep-context-building/
     differential-review/
   agents/
-    claude/                        # Claude Code plugin
-    cursor/                        # Cursor skills + commands
-    codex/                         # Codex skills + AGENTS.md
-    gemini/                        # Gemini CLI skills + GEMINI.md
+    claude/                          # Claude Code plugin (marketplace)
+    cursor/                          # Cursor skills + commands
+    codex/                           # Codex skills + AGENTS.md
+    gemini/                          # Gemini CLI skills + GEMINI.md
 ```

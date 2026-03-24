@@ -5,7 +5,7 @@
 
 set -e
 
-REPO="almogdepaz/edc"
+REPO="almogdepaz/EDC"
 BRANCH="main"
 BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
 AGENT="${1:-}"

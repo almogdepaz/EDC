@@ -4,10 +4,21 @@ description: Builds or updates deep architectural context for the codebase
 
 # Build Context
 
-Check if `.context/.meta.json` exists:
+1. Read current commit: `git rev-parse HEAD`.
+2. Check for `.context/.meta.json` and parse `lastCommit`.
 
-- **If exists** → Incrementally update context based on branch changes. Detect changed files with `git diff`, re-analyze affected modules, update `.context/{module}.md`, `issues.md`, and `context.md`.
-- **If not exists** → Full build:
-  1. Invoke the `edc-context` skill for the full workflow. Write complete analysis to `.context/full-context.md`.
-  2. Split into `context.md` (architecture map) + `.context/{module}.md` (per-module) + `.context/issues.md` (all problems) + `.context/.meta.json` (metadata).
-  3. Audit complexity: compare context expectations to actual code, produce `.context/complexity.md` with bloat score, dead exports, wrapper functions, duplication, oversized files.
+Routing:
+
+- **If `.context/.meta.json` is missing** -> Full build:
+  1. Invoke `edc-context` skill for full workflow -> `.context/full-context.md`
+  2. Split into `context.md` + `.context/{module}.md` + `.context/issues.md` + `.context/.meta.json`
+  3. Run complexity audit -> `.context/complexity.md`
+- **If `.meta.json` exists and `lastCommit` != `HEAD`** -> Incremental update:
+  1. Detect changed files with `git diff` from base.
+  2. Re-analyze affected modules only.
+  3. Update `.context/{module}.md`, `.context/issues.md`, `context.md`, and `.context/.meta.json`.
+- **If `.meta.json` exists and `lastCommit` == `HEAD`** -> Verify context completeness only:
+  - Ensure `context.md`, `.context/issues.md`, and module files referenced by `.meta.json` exist.
+  - If missing/incomplete, run full build.
+
+Always finish with `.context/.meta.json` updated to current `HEAD`.

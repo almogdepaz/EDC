@@ -16,4 +16,10 @@ Run `$edc-context` on the codebase. Write output to `.context/full-context.md`. 
 If `.context/.meta.json` exists, only re-analyze modules with changed files (based on `git diff`).
 
 ### Review a PR
-Ensure context is fresh (build or update), then run `$edc-review` on the diff.
+Always refresh context first, then run `$edc-review` on the diff:
+
+1. Read `git rev-parse HEAD` and `.context/.meta.json`.
+2. If `.meta.json` is missing, build full context.
+3. If `.meta.json` exists but `lastCommit != HEAD`, run incremental context update.
+4. Load `.context/context.md`, `.context/issues.md`, and relevant `.context/{module}.md` before broad searching.
+5. Use grep/search only to validate targeted hypotheses, scoped to changed files + direct dependencies where possible.

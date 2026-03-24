@@ -24,6 +24,7 @@ Code review for PRs, commits, and diffs.
 3. **Adaptive**: Scale to codebase size (SMALL/MEDIUM/LARGE)
 4. **Honest**: Explicitly state coverage limits and confidence level
 5. **Output-Driven**: Always generate comprehensive markdown report file
+6. **Context-First**: Load and rely on `.context/` before broad code searching
 
 ---
 
@@ -64,10 +65,29 @@ Code review for PRs, commits, and diffs.
 ## Workflow Overview
 
 ```
-Pre-Analysis → Phase 0: Triage → Phase 1: Code Analysis → Phase 2: Test Coverage
-    ↓              ↓                    ↓                        ↓
+Context Gate → Pre-Analysis → Phase 0: Triage → Phase 1: Code Analysis → Phase 2: Test Coverage
+      ↓              ↓              ↓                    ↓                        ↓
 Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Phase 6: Report
 ```
+
+---
+
+## Context Gate (Mandatory)
+
+Before any review analysis:
+
+1. Read `.context/.meta.json` and `git rev-parse HEAD`.
+2. If `.meta.json` is missing, context is stale (`lastCommit != HEAD`), or required context files are missing, run `edc-build` and re-check.
+3. Load context in this order:
+   - `.context/context.md`
+   - `.context/issues.md`
+   - relevant `.context/{module}.md` for changed modules
+4. Only after loading context may you use broad search tools.
+
+Search policy:
+- Do not start with repository-wide grep/rg for discovery.
+- Use context files as the primary source of module mapping, invariants, and coupling.
+- Use search only to validate targeted hypotheses, and scope it to changed files + direct dependencies whenever possible.
 
 ---
 
@@ -102,11 +122,14 @@ Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Pha
 
 Before delivering:
 
+- [ ] Context freshness verified (`.context/.meta.json` matches HEAD or was rebuilt)
+- [ ] Context files loaded before broad search
 - [ ] All changed files analyzed
 - [ ] Git blame on removed security code
 - [ ] Blast radius calculated for HIGH risk
 - [ ] Attack scenarios are concrete (not generic)
 - [ ] Findings reference specific line numbers + commits
+- [ ] Report includes "Context Files Consulted" and "Invariants Checked"
 - [ ] Report file generated
 - [ ] User notified with summary
 
@@ -193,6 +216,7 @@ These patterns require adversarial analysis even in quick triage.
 ## Tips for Best Results
 
 **Do:**
+- Run the Context Gate before triage
 - Start with git blame for removed code
 - Calculate blast radius early to prioritize
 - Generate concrete attack scenarios
@@ -201,6 +225,7 @@ These patterns require adversarial analysis even in quick triage.
 - Always generate the output file
 
 **Don't:**
+- Start with broad grep before loading `.context/`
 - Skip git history analysis
 - Make generic findings without evidence
 - Claim full analysis when time-limited

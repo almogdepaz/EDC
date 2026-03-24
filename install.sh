@@ -1,30 +1,21 @@
 #!/bin/bash
 # EDC — Every Day Carry Skills installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash
-#   or:  curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s cursor
-#   or:  curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s codex
-#   or:  curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
+# Usage: curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s <agent>
+# Agents: cursor, codex, gemini (claude uses marketplace)
 
 set -e
 
 REPO="almogdepaz/edc"
 BRANCH="main"
 BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
-AGENT="${1:-auto}"
+AGENT="${1:-}"
 
-# Auto-detect agent
-if [ "$AGENT" = "auto" ]; then
-  if command -v claude &>/dev/null; then AGENT="claude"
-  elif command -v cursor &>/dev/null; then AGENT="cursor"
-  elif command -v codex &>/dev/null; then AGENT="codex"
-  elif command -v gemini &>/dev/null; then AGENT="gemini"
-  else
-    echo "Could not auto-detect agent. Specify one: cursor, codex, gemini"
-    echo "Usage: curl -fsSL $BASE/install.sh | bash -s <agent>"
-    echo ""
-    echo "For Claude Code, use: claude plugins marketplace add $REPO && claude plugins install edc@edc"
-    exit 1
-  fi
+if [ -z "$AGENT" ]; then
+  echo "Usage: curl -fsSL $BASE/install.sh | bash -s <agent>"
+  echo ""
+  echo "Agents: cursor, codex, gemini"
+  echo "For Claude Code: claude plugins marketplace add $REPO && claude plugins install edc@edc"
+  exit 1
 fi
 
 # Shared skill files to download

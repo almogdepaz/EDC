@@ -43,14 +43,6 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
 ```
 
-### Auto-detect
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash
-```
-
-Detects which agent is installed and installs skills globally.
-
 ## Skills
 
 Two generalized skills from Trail of Bits:

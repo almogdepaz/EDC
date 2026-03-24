@@ -5,7 +5,7 @@ allowed-tools:
   - Read
   - Write
   - Glob
-  - Bash
+  - Bash(git *)
 ---
 
 # Split Context

@@ -7,7 +7,7 @@ allowed-tools:
   - Write
   - Grep
   - Glob
-  - Bash
+  - Bash(git *)
 ---
 
 # Update Context

@@ -19,7 +19,7 @@
 ### Validated
 - Compared against TOB on wolfpack (TypeScript), Veil (Rust/ZK), clanker-wallet (TS+Python)
 - EDC is a strict superset of TOB findings (14/14 TOB + 6 additional on clanker-wallet)
-- Full pipeline: build → split → audit-complexity → review
+- Full pipeline: edc-build → edc-split → edc-audit → edc-review
 
 ---
 
@@ -53,7 +53,7 @@ Find invariants CLAIMED in comments/docstrings/names but NOT enforced by code. "
 **Status:** [ ] not started
 
 ### 4. Cognitive Complexity Flagging
-**Add to:** audit-complexity.md, new Step 9
+**Add to:** edc-audit.md, new Step 9
 
 Beyond LOC: nesting depth >3, >5 control flow branches, multiple responsibilities, boolean params, long param lists, god objects.
 

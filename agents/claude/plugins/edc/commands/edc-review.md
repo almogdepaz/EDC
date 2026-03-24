@@ -1,5 +1,5 @@
 ---
-name: edc:review
+name: edc:edc-review
 description: Performs differential review of code changes using codebase context
 argument-hint: "<pr-url|commit-sha|diff-path> [--baseline <ref>]"
 allowed-tools:
@@ -20,7 +20,7 @@ Parse arguments:
 
 ## Step 1 — Ensure context exists
 
-Run `/edc:build-context` first. This will:
+Run `/edc:edc-build` first. This will:
 - If no `.context/.meta.json` → full build + split + audit-complexity (new repo)
 - If `.meta.json` exists → incremental update (existing repo)
 

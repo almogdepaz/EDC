@@ -3,11 +3,11 @@
 ## Current State (v1.0.0)
 
 ### Commands
-- `/edc:build-context` — orchestrator (full build or incremental update)
-- `/edc:split-context` — splits full-context.md into per-module files
-- `/edc:update-context` — incremental update from branch changes
-- `/edc:audit-complexity` — bloat/duplication/overengineering detection
-- `/edc:review` — context-aware differential review
+- `/edc:edc-build` — orchestrator (full build or incremental update)
+- `/edc:edc-split` — splits full-context.md into per-module files
+- `/edc:edc-update` — incremental update from branch changes
+- `/edc:edc-audit` — bloat/duplication/overengineering detection
+- `/edc:edc-review` — context-aware differential review
 
 ### Skills
 - `edc-context` — generalized from Trail of Bits audit-context-building
@@ -114,7 +114,7 @@ Repos with known ground-truth issues. For each repo:
 #### 2. Runner (`benchmark/run.sh`)
 ```
 for each repo in benchmark/*/
-  run /edc:build-context on repo
+  run /edc:edc-build on repo
   collect .context/issues.md + .context/complexity.md
   run scorer against ground-truth.md
 done

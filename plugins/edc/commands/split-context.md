@@ -5,6 +5,7 @@ allowed-tools:
   - Read
   - Write
   - Glob
+  - Bash
 ---
 
 # Split Context
@@ -54,3 +55,23 @@ List each issue with:
 - why it matters
 
 Keep the same issue in the module file too (for context when reading that module), but collect them all in one place so they're actionable.
+
+## .context/.meta.json
+
+Generate a metadata file for incremental updates. Use `git rev-parse HEAD` to get the current commit.
+
+```json
+{
+  "lastCommit": "<HEAD SHA>",
+  "lastFullBuild": "<HEAD SHA>",
+  "lastUpdate": "<ISO timestamp>",
+  "modules": {
+    "module-name": {
+      "files": ["src/path/file1.ts", "src/path/file2.ts"],
+      "contextFile": ".context/module-name.md"
+    }
+  }
+}
+```
+
+The `files` array for each module should list all source files whose analysis ended up in that module's context file. This mapping is used by `/edc:update-context` to determine which modules need re-analysis when files change.

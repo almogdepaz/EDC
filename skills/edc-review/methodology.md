@@ -13,14 +13,14 @@ If `.context/context.md` exists in the repository:
 4. Load `.context/{module}.md` for affected modules
 5. Load `.context/issues.md` to check if changes touch known issues
 
-If `.context/` does NOT exist but `deep-context-building` skill is available:
+If `.context/` does NOT exist but `edc-context` skill is available:
 
 ```bash
 # Checkout baseline commit
 git checkout <baseline_commit>
 
-# Invoke deep-context-building skill on baseline codebase
-deep-context-building --scope [entire project or main source directory]
+# Invoke edc-context skill on baseline codebase
+edc-context --scope [entire project or main source directory]
 ```
 
 **Capture from baseline analysis:**
@@ -200,7 +200,7 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 
 **If `.context/` does NOT exist**, build context for HIGH RISK changes:
 
-Use the `deep-context-building` skill or manually analyze:
+Use the `edc-context` skill or manually analyze:
 
 1. **Map complete function flow:**
    - Entry conditions (preconditions, guards, middleware)

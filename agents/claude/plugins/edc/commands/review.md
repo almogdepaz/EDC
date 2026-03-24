@@ -32,4 +32,4 @@ Read `.context/issues.md` and `.context/complexity.md`. During the review, cross
 
 ## Step 3 — Review
 
-Invoke the `differential-review` skill with the target and baseline arguments for the full workflow. The skill already integrates with `.context/` files for invariant checking and blast radius — the issues.md and complexity.md cross-references from step 2 are additional context for the review.
+Invoke the `edc-review` skill with the target and baseline arguments for the full workflow. The skill already integrates with `.context/` files for invariant checking and blast radius — the issues.md and complexity.md cross-references from step 2 are additional context for the review.

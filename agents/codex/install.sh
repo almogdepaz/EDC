@@ -15,11 +15,11 @@ else
   echo "Installing EDC skills globally for Codex at ~/.codex/skills/..."
 fi
 
-mkdir -p "$TARGET/deep-context-building/resources"
-mkdir -p "$TARGET/differential-review"
+mkdir -p "$TARGET/edc-context/resources"
+mkdir -p "$TARGET/edc-review"
 
-cp "$REPO_ROOT/skills/deep-context-building/SKILL.md" "$TARGET/deep-context-building/"
-cp "$REPO_ROOT/skills/deep-context-building/resources/"* "$TARGET/deep-context-building/resources/"
-cp "$REPO_ROOT/skills/differential-review/"* "$TARGET/differential-review/"
+cp "$REPO_ROOT/skills/edc-context/SKILL.md" "$TARGET/edc-context/"
+cp "$REPO_ROOT/skills/edc-context/resources/"* "$TARGET/edc-context/resources/"
+cp "$REPO_ROOT/skills/edc-review/"* "$TARGET/edc-review/"
 
-echo "Done. Use \$deep-context-building or \$differential-review to invoke."
+echo "Done. Use \$edc-context or \$edc-review to invoke."

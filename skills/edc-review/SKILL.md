@@ -1,5 +1,5 @@
 ---
-name: differential-review
+name: edc-review
 description: >
   Performs differential review of code changes (PRs, commits, diffs).
   Adapts analysis depth to codebase size, uses git history for context, calculates
@@ -114,7 +114,7 @@ Before delivering:
 
 ## Integration
 
-**deep-context-building skill:**
+**edc-context skill:**
 - Pre-Analysis: Build baseline context
 - Phase 4: Deep context on HIGH RISK changes
 
@@ -154,8 +154,8 @@ Time: ~3-4 hours
 ### Deep Audit (Large, Critical Change)
 ```
 Input: 450 files, auth system rewrite
-Strategy: SURGICAL + deep-context-building
-1. Baseline context with deep-context-building
+Strategy: SURGICAL + edc-context
+1. Baseline context with edc-context
 2. Deep analysis on auth changes only
 3. Blast radius analysis
 4. Adversarial modeling

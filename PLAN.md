@@ -10,8 +10,8 @@
 - `/edc:review` — context-aware differential review
 
 ### Skills
-- `deep-context-building` — generalized from Trail of Bits audit-context-building
-- `differential-review` — generalized from Trail of Bits differential-review
+- `edc-context` — generalized from Trail of Bits audit-context-building
+- `edc-review` — generalized from Trail of Bits edc-review
 
 ### Agents
 - Claude Code, Cursor, Codex, Gemini CLI
@@ -26,7 +26,7 @@
 ## Planned Improvements (from research)
 
 ### 1. Fault Injection Thinking
-**Add to:** differential-review methodology.md, Phase 1 step 5
+**Add to:** edc-review methodology.md, Phase 1 step 5
 
 Systematic "what if" failure prompts for each changed function:
 - What if this external dependency fails/hangs/returns garbage?
@@ -39,14 +39,14 @@ Systematic "what if" failure prompts for each changed function:
 **Status:** [ ] not started
 
 ### 2. ATAM Trade-Off Analysis
-**Add to:** deep-context-building SKILL.md, Phase 3 new section 5
+**Add to:** edc-context SKILL.md, Phase 3 new section 5
 
 For each major design decision: what does it optimize, what does it sacrifice, where does the trade-off become painful, what triggers revisiting it.
 
 **Status:** [ ] not started
 
 ### 3. Unenforced Invariant Detection
-**Add to:** deep-context-building SKILL.md, Phase 2 section 5.1
+**Add to:** edc-context SKILL.md, Phase 2 section 5.1
 
 Find invariants CLAIMED in comments/docstrings/names but NOT enforced by code. "Comment says thread-safe but no locking."
 
@@ -60,21 +60,21 @@ Beyond LOC: nesting depth >3, >5 control flow branches, multiple responsibilitie
 **Status:** [ ] not started
 
 ### 5. Security Checklist as Structured Prompts
-**Add to:** differential-review patterns.md, new section
+**Add to:** edc-review patterns.md, new section
 
 Mandatory pass/fail checklist: no hardcoded secrets, input validation, return value checks, auth on endpoints, no injection paths, no sensitive data in logs, path validation, constant-time crypto, timeouts, rate limiting.
 
 **Status:** [ ] not started
 
 ### 6. Manual Taint Tracing
-**Add to:** deep-context-building SKILL.md, Phase 2 section 5.2
+**Add to:** edc-context SKILL.md, Phase 2 section 5.2
 
 Trace untrusted input source → transformations → sink. Note where sanitization happens or doesn't.
 
 **Status:** [ ] not started
 
 ### 7. TRAIL Threat Modeling
-**Add to:** differential-review adversarial.md, new section
+**Add to:** edc-review adversarial.md, new section
 
 Structured threat boundary tracing: identify trust assumptions, ask "what if wrong?", trace cascading impact of violated assumptions.
 

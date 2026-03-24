@@ -15,13 +15,13 @@ else
   echo "Installing EDC skills globally for Cursor at ~/.cursor/..."
 fi
 
-mkdir -p "$TARGET/skills/deep-context-building/resources"
-mkdir -p "$TARGET/skills/differential-review"
+mkdir -p "$TARGET/skills/edc-context/resources"
+mkdir -p "$TARGET/skills/edc-review"
 mkdir -p "$TARGET/commands"
 
-cp "$REPO_ROOT/skills/deep-context-building/SKILL.md" "$TARGET/skills/deep-context-building/"
-cp "$REPO_ROOT/skills/deep-context-building/resources/"* "$TARGET/skills/deep-context-building/resources/"
-cp "$REPO_ROOT/skills/differential-review/"* "$TARGET/skills/differential-review/"
+cp "$REPO_ROOT/skills/edc-context/SKILL.md" "$TARGET/skills/edc-context/"
+cp "$REPO_ROOT/skills/edc-context/resources/"* "$TARGET/skills/edc-context/resources/"
+cp "$REPO_ROOT/skills/edc-review/"* "$TARGET/skills/edc-review/"
 cp "$SCRIPT_DIR/.cursor/commands/"* "$TARGET/commands/"
 
 echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"

@@ -20,15 +20,15 @@ fi
 
 # Shared skill files to download
 SKILLS=(
-  "skills/deep-context-building/SKILL.md"
-  "skills/deep-context-building/resources/COMPLETENESS_CHECKLIST.md"
-  "skills/deep-context-building/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
-  "skills/deep-context-building/resources/OUTPUT_REQUIREMENTS.md"
-  "skills/differential-review/SKILL.md"
-  "skills/differential-review/methodology.md"
-  "skills/differential-review/adversarial.md"
-  "skills/differential-review/reporting.md"
-  "skills/differential-review/patterns.md"
+  "skills/edc-context/SKILL.md"
+  "skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
+  "skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
+  "skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
+  "skills/edc-review/SKILL.md"
+  "skills/edc-review/methodology.md"
+  "skills/edc-review/adversarial.md"
+  "skills/edc-review/reporting.md"
+  "skills/edc-review/patterns.md"
 )
 
 download() {
@@ -62,7 +62,7 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/${f#skills/}"
     done
-    echo "Done. Use \$deep-context-building or \$differential-review to invoke."
+    echo "Done. Use \$edc-context or \$edc-review to invoke."
     ;;
 
   gemini)

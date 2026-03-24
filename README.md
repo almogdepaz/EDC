@@ -47,8 +47,8 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 
 Two generalized skills from Trail of Bits:
 
-- **deep-context-building** — ultra-granular code analysis (from `audit-context-building`)
-- **differential-review** — structured code review with blast radius, adversarial modeling, and reporting (from `differential-review`)
+- **edc-context** — ultra-granular code analysis (from `audit-context-building`)
+- **edc-review** — structured code review with blast radius, adversarial modeling, and reporting (from `edc-review`)
 
 ## Repo Structure
 
@@ -56,8 +56,8 @@ Two generalized skills from Trail of Bits:
 edc/
   install.sh                         # one-line installer for all agents
   skills/                            # shared skill content (source of truth)
-    deep-context-building/
-    differential-review/
+    edc-context/
+    edc-review/
   agents/
     claude/                          # Claude Code plugin (marketplace)
     cursor/                          # Cursor skills + commands

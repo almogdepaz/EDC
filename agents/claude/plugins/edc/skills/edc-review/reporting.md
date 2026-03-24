@@ -306,7 +306,7 @@ new code
 **Priority order for output:**
 1. Current working directory (if project repo)
 2. User's Desktop
-3. `~/.claude/skills/differential-review/output/`
+3. `~/.claude/skills/edc-review/output/`
 
 **Filename format:**
 ```

@@ -1,8 +1,8 @@
 {
   "name": "edc",
-  "version": "0.2.0",
-  "description": "Context-aware code review plugin. Builds deep codebase context (context.md) then reviews PRs against it.",
+  "version": "1.0.0",
+  "description": "EDC — Your Every Day Carry Skills. Deep codebase context and context-aware code review.",
   "author": {
-    "name": "wolfpack"
+    "name": "almogdepaz"
   }
 }

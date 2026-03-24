@@ -1,19 +1,19 @@
 {
-  "name": "wolfpack-plugins",
+  "name": "edc",
   "owner": {
-    "name": "wolfpack"
+    "name": "almogdepaz"
   },
   "metadata": {
-    "version": "0.1.0",
-    "description": "Wolfpack Claude Code plugins for context-aware code review and analysis"
+    "version": "1.0.0",
+    "description": "EDC — Your Every Day Carry Skills. Deep codebase context and context-aware code review."
   },
   "plugins": [
     {
       "name": "edc",
-      "version": "0.2.0",
-      "description": "Context-aware code review plugin. Builds deep codebase context (context.md) then reviews PRs against it.",
+      "version": "1.0.0",
+      "description": "Deep codebase context building and context-aware differential code review.",
       "author": {
-        "name": "wolfpack"
+        "name": "almogdepaz"
       },
       "source": "./plugins/edc"
     }

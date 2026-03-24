@@ -1,149 +1,175 @@
-# EDC Plugin — Implementation Plan
+# EDC — Improvement Plan
 
-## What is EDC?
+## Current State (v1.0.0)
 
-EDC (Engineering Deep Context) is a Claude Code plugin that solves a fundamental problem with AI code review: **agents reviewing PRs have no understanding of the codebase they're reviewing.**
+### Commands
+- `/edc:build-context` — orchestrator (full build or incremental update)
+- `/edc:split-context` — splits full-context.md into per-module files
+- `/edc:update-context` — incremental update from branch changes
+- `/edc:audit-complexity` — bloat/duplication/overengineering detection
+- `/edc:review` — context-aware differential review
 
-Today's AI code review tools (including Claude Code's built-in `/code-review`) analyze diffs in isolation. They catch surface-level bugs and style issues, but miss the deeper stuff — invariant violations, broken assumptions, cascading effects across modules — because they don't understand the system architecture.
+### Skills
+- `deep-context-building` — generalized from Trail of Bits audit-context-building
+- `differential-review` — generalized from Trail of Bits differential-review
 
-EDC fixes this by building and maintaining a **persistent, structured context layer** for a codebase:
+### Agents
+- Claude Code, Cursor, Codex, Gemini CLI
 
-1. **`/edc:build-context`** — Performs deep, line-by-line analysis of the entire codebase (inspired by Trail of Bits' audit-context methodology: first principles, 5 whys, invariant tracking). Outputs:
-   - `context.md` — brief architecture intro: what the system is, module map, actor model, key flows, global invariants, trust boundaries
-   - `.context/*.md` — per-module deep analysis: every non-trivial function's purpose, assumptions, invariants, cross-dependencies
+### Validated
+- Compared against TOB on wolfpack (TypeScript), Veil (Rust/ZK), clanker-wallet (TS+Python)
+- EDC is a strict superset of TOB findings (14/14 TOB + 6 additional on clanker-wallet)
+- Full pipeline: build → split → audit-complexity → review
 
-2. **`/edc:review`** — Context-aware PR review. Instead of blindly scanning a diff, it:
-   - Reads `context.md` to understand the architecture
-   - Maps changed files to affected modules
-   - Loads ONLY the relevant `.context/*.md` files (not the whole codebase context)
-   - Runs parallel review agents that can check invariant compliance, cross-module impact, and historical context
-   - Confidence-scores every finding (0-100) and only posts issues scoring ≥80
+---
 
-**The key insight**: context files are committed to the repo, so they persist across sessions, branches, and team members. An agent picking up a PR review can instantly understand the codebase by reading a few hundred lines — not re-analyzing thousands of files.
+## Planned Improvements (from research)
 
-## Why not just read the code?
+### 1. Fault Injection Thinking
+**Add to:** differential-review methodology.md, Phase 1 step 5
 
-- **Context windows are limited.** A 1M-token context still can't hold a large codebase. Pre-built context is curated — only what matters.
-- **Analysis is expensive.** Deep line-by-line analysis of a codebase takes time. Do it once, reuse many times.
-- **Invariants aren't in the code.** "This function assumes the caller already validated auth" isn't written anywhere — it lives in the deep analysis.
-- **Cross-module coupling is invisible.** A change in module A can break module B. You only know this if you've mapped the dependencies.
+Systematic "what if" failure prompts for each changed function:
+- What if this external dependency fails/hangs/returns garbage?
+- What if this input is malicious/malformed/empty/huge?
+- What if two concurrent callers hit this simultaneously?
+- What if the filesystem is full/readonly/slow?
+- What if the network drops mid-operation?
+- What if this runs on a different platform/timezone/locale?
 
-## Current State (v0.2.0)
+**Status:** [ ] not started
 
-- [x] Marketplace created (`almogdepaz/wolfpack-plugins`, private)
-- [x] Plugin `edc` installed and enabled
-- [x] `/edc:build-context` command — full codebase analysis, outputs `context.md` + `.context/*.md`
-- [x] `/edc:review` command — context-aware PR review with confidence scoring
-- [ ] Neither command has been tested on a real codebase yet
+### 2. ATAM Trade-Off Analysis
+**Add to:** deep-context-building SKILL.md, Phase 3 new section 5
 
-## Output Structure
+For each major design decision: what does it optimize, what does it sacrifice, where does the trade-off become painful, what triggers revisiting it.
 
+**Status:** [ ] not started
+
+### 3. Unenforced Invariant Detection
+**Add to:** deep-context-building SKILL.md, Phase 2 section 5.1
+
+Find invariants CLAIMED in comments/docstrings/names but NOT enforced by code. "Comment says thread-safe but no locking."
+
+**Status:** [ ] not started
+
+### 4. Cognitive Complexity Flagging
+**Add to:** audit-complexity.md, new Step 9
+
+Beyond LOC: nesting depth >3, >5 control flow branches, multiple responsibilities, boolean params, long param lists, god objects.
+
+**Status:** [ ] not started
+
+### 5. Security Checklist as Structured Prompts
+**Add to:** differential-review patterns.md, new section
+
+Mandatory pass/fail checklist: no hardcoded secrets, input validation, return value checks, auth on endpoints, no injection paths, no sensitive data in logs, path validation, constant-time crypto, timeouts, rate limiting.
+
+**Status:** [ ] not started
+
+### 6. Manual Taint Tracing
+**Add to:** deep-context-building SKILL.md, Phase 2 section 5.2
+
+Trace untrusted input source → transformations → sink. Note where sanitization happens or doesn't.
+
+**Status:** [ ] not started
+
+### 7. TRAIL Threat Modeling
+**Add to:** differential-review adversarial.md, new section
+
+Structured threat boundary tracing: identify trust assumptions, ask "what if wrong?", trace cascading impact of violated assumptions.
+
+**Status:** [ ] not started
+
+## Priority
+
+**Phase 1** (easy, high impact): 1, 5, 4
+**Phase 2** (moderate effort): 3, 6, 2
+**Phase 3** (needs design): 7
+
+---
+
+## Benchmark Framework (autoresearch-inspired)
+
+### Concept
+
+Modify → measure → keep/discard → repeat. Same loop as karpathy/autoresearch but for code analysis quality instead of val_bpb.
+
+### Metric
+
+**Recall**: how many known-real issues does a run find?
+**Precision**: how many findings are false positives?
+**Score**: `recall * 0.7 + (1 - false_positive_rate) * 0.3` (recall-weighted — missing real issues is worse than noise)
+
+### Components
+
+#### 1. Training Set (user provides)
+Repos with known ground-truth issues. For each repo:
+- `benchmark/{repo}/` — the codebase (or git URL + commit SHA)
+- `benchmark/{repo}/ground-truth.md` — list of real issues with:
+  - issue description
+  - affected file:line
+  - severity (critical/high/medium/low)
+  - category (invariant violation, missing validation, race condition, dead code, etc.)
+
+#### 2. Runner (`benchmark/run.sh`)
 ```
-repo/
-├── context.md              # brief architecture intro (~50-100 lines)
-│   ├── system overview
-│   ├── module map (table with links to .context/*.md)
-│   ├── actor model
-│   ├── key flows
-│   ├── global invariants
-│   ├── trust boundaries
-│   └── cross-module coupling
-│
-└── .context/               # per-module deep analysis
-    ├── server.md           # full micro-analysis for src/server/
-    ├── cli.md              # full micro-analysis for src/cli/
-    ├── public.md           # PWA frontend analysis
-    └── ...
+for each repo in benchmark/*/
+  run /edc:build-context on repo
+  collect .context/issues.md + .context/complexity.md
+  run scorer against ground-truth.md
+done
 ```
 
-## Phase 1 — Validate & Refine `/build-context` (current)
+#### 3. Scorer (`benchmark/score.py`)
+Compares EDC output against ground truth:
+- for each ground-truth issue: did EDC find it? (fuzzy match on file + description)
+- for each EDC finding: is it in ground truth? (if not, likely false positive — but could be a new real finding, flag for human review)
+- outputs: recall, precision, F1, per-category breakdown
 
-**Goal**: Run on wolfpack, evaluate output quality, iterate on prompt.
+#### 4. Experiment Loop
+```
+1. git checkout -b experiment/<name>
+2. modify a skill file (e.g., add fault injection prompts)
+3. run benchmark/run.sh
+4. compare score against baseline
+5. if improved → keep (merge to main)
+6. if same or worse → discard (delete branch)
+7. log result to benchmark/results.tsv
+8. repeat
+```
 
-- [ ] 1.1 Run `/edc:build-context` on wolfpack repo
-- [ ] 1.2 Evaluate output:
-  - Is `context.md` actually brief? (target: 50-100 lines)
-  - Does the module map correctly identify all modules?
-  - Are `.context/*.md` files appropriately scoped (not too big, not too granular)?
-  - Is the micro-analysis useful or bloated?
-- [ ] 1.3 Tune prompt based on evaluation:
-  - Adjust granularity (function-level analysis may be overkill for some codebases)
-  - Calibrate what "non-trivial function" means
-  - Define sensible module boundaries (directory-based? logical grouping?)
-- [ ] 1.4 Add `.context/` to `.gitignore` template or not (user decides per-repo)
-- [ ] 1.5 Re-run after tuning, compare output quality
+#### 5. Results Log (`benchmark/results.tsv`)
+```
+commit  recall  precision  f1  status  description
+abc1234 0.82    0.91       0.86  keep    baseline
+def5678 0.85    0.89       0.87  keep    added fault injection prompts
+ghi9012 0.80    0.93       0.86  discard removed 5-whys (hurt recall)
+```
 
-## Phase 2 — Incremental Updates
+### Ground Truth Sources
 
-**Goal**: Don't regenerate everything on every run.
+- existing TOB outputs we compared against (wolfpack, Veil, clanker-wallet)
+- known CVEs in open-source projects
+- deliberately-planted bugs in test repos
+- user-provided training set repos
 
-- [ ] 2.1 Detect which files changed since last `/build-context` run (git diff against a stored commit SHA)
-- [ ] 2.2 Only regenerate `.context/*.md` for modules with changed files
-- [ ] 2.3 Re-synthesize `context.md` if module map or global invariants changed
-- [ ] 2.4 Store metadata (last build commit, module→files mapping) in `.context/.meta.json`
-- [ ] 2.5 Add `--force` flag to regenerate everything regardless
+### What Gets Experimented On
 
-## Phase 3 — Validate & Refine `/review`
+Each experiment modifies ONE thing in the skills:
+- add/remove a prompt section
+- rephrase an instruction
+- change quality thresholds
+- add/remove a pattern in patterns.md
+- change the analysis ordering
+- add a new phase or checklist item
 
-**Goal**: Run on a real PR, evaluate review quality.
+The metric tells us if the change helped, hurt, or was neutral.
 
-- [ ] 3.1 Create a test PR on wolfpack
-- [ ] 3.2 Run `/edc:review` against it
-- [ ] 3.3 Evaluate:
-  - Does it correctly load only relevant `.context/*.md` files?
-  - Are the findings high-signal or noisy?
-  - Does the confidence scoring effectively filter false positives?
-  - Is the cross-module impact agent useful?
-- [ ] 3.4 Tune agent prompts based on evaluation
-- [ ] 3.5 Consider adding CLAUDE.md compliance agent (from code-review plugin)
+### Cold Start
 
-## Phase 4 — Context Splitting Improvements
+Before user provides training set:
+1. use clanker-wallet (20 ground-truth issues from our best run)
+2. use wolfpack (TOB's 14 observations as ground truth)
+3. use Veil (cross-referenced EDC + TOB findings as ground truth)
 
-**Goal**: Right-size the context files for agent consumption.
-
-- [ ] 4.1 Define max file size target for `.context/*.md` (e.g., 500 lines)
-- [ ] 4.2 If a module is too large, split into sub-modules (e.g., `.context/server/routes.md`, `.context/server/websocket.md`)
-- [ ] 4.3 Add a "relevance score" to function analyses so agents can skip low-relevance entries
-- [ ] 4.4 Consider a `.context/index.json` that maps file paths → relevant context files (faster lookup for /review)
-
-## Phase 5 — Custom Analysis Profiles
-
-**Goal**: Different analysis depth for different use cases.
-
-- [ ] 5.1 `--profile security` — emphasize trust boundaries, input validation, auth flows
-- [ ] 5.2 `--profile architecture` — emphasize module coupling, data flows, public interfaces
-- [ ] 5.3 `--profile onboarding` — emphasize high-level understanding, skip micro-analysis
-- [ ] 5.4 Profiles stored in `.context/.profiles/` or as frontmatter in context.md
-
-## Phase 6 — Additional Commands
-
-- [ ] 6.1 `/edc:status` — show what context exists, when it was last built, which modules are stale
-- [ ] 6.2 `/edc:update` — incremental update (alias for `build-context` with change detection)
-- [ ] 6.3 `/edc:query <question>` — ask a question about the codebase using context files as grounding
-- [ ] 6.4 `/edc:diff` — show what changed in the codebase since context was last built
-
-## Phase 7 — Plugin Infrastructure
-
-- [ ] 7.1 Add a skill (auto-injected) that loads relevant `.context/*.md` when editing files in the repo
-- [ ] 7.2 Add hooks that warn if context is stale (files changed since last build)
-- [ ] 7.3 Add README.md to the marketplace repo
-- [ ] 7.4 Consider open-sourcing the marketplace repo
-
-## Design Decisions
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Context file format | Markdown | Human-readable, works with git diff, agents parse it natively |
-| Module detection | Directory-based (auto) | Simple, predictable, matches most project structures |
-| Analysis methodology | Trail of Bits audit-context | Proven, thorough, will customize over time |
-| Confidence threshold | 80 (from code-review plugin) | Aggressive filtering reduces noise; can lower if needed |
-| Context storage | Committed to repo | Shared across team, versioned, survives branch switches |
-| Context location | `.context/` directory | Stays out of the way, easy to gitignore if wanted |
-
-## Open Questions
-
-- Should context.md include a version/timestamp to detect staleness?
-- How to handle monorepos with multiple services?
-- Should `/review` update context.md if it discovers the context is wrong?
-- What's the right granularity — every function, or only exported/public ones?
-- Should we support context for non-code files (config, infra, CI)?
+These three give us a baseline score to beat.

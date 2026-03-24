@@ -4,26 +4,24 @@ Detailed phase-by-phase workflow for code review.
 
 ## Pre-Analysis: Baseline Context Building
 
-**FIRST ACTION — Run a context freshness gate before any broad code search:**
+**FIRST ACTION — Check for existing context, then build baseline if needed:**
 
-1. Read current commit (`git rev-parse HEAD`).
-2. Check `.context/.meta.json`:
-   - Missing `.meta.json` -> run `edc-build` (full build path).
-   - Present but `lastCommit != HEAD` -> run `edc-build` (incremental update path).
-   - Present and current -> continue.
-3. Verify required context files exist:
-   - `.context/context.md`
-   - `.context/issues.md`
-   - module files referenced by `.context/.meta.json`
-4. Load baseline context in this order:
-   1. `context.md` (architecture + module map + invariants + coupling)
-   2. `.context/issues.md` (known problems)
-   3. `.context/{module}.md` for affected modules
+If `.context/context.md` exists in the repository:
+1. Read `context.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+2. This IS your baseline — skip the full context build
+3. Map changed files to modules using the Module Map table
+4. Load `.context/{module}.md` for affected modules
+5. Load `.context/issues.md` to check if changes touch known issues
 
-**Search discipline (mandatory):**
-- Do NOT start with repo-wide grep/rg before completing the context load above.
-- Use context files for module mapping and invariant expectations.
-- Use grep/rg only for targeted validation and keep scope to changed files + direct dependencies by default.
+If `.context/` does NOT exist but `edc-context` skill is available:
+
+```bash
+# Checkout baseline commit
+git checkout <baseline_commit>
+
+# Invoke edc-context skill on baseline codebase
+edc-context --scope [entire project or main source directory]
+```
 
 **Capture from baseline analysis:**
 - System-wide invariants (what must ALWAYS be true across all code)
@@ -42,7 +40,7 @@ Detailed phase-by-phase workflow for code review.
 
 **Store baseline context for reference during differential analysis.**
 
-After baseline context is loaded and freshness is confirmed, proceed with differential analysis.
+After baseline analysis, checkout back to head commit to analyze changes.
 
 ---
 
@@ -80,7 +78,6 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 - Check `.context/issues.md` — does this PR touch files with known issues?
 - Check module coupling in `context.md` — does this change have cascade risk?
 - Elevate risk for changes touching fragility clusters documented in `.context/{module}.md`
-- Build a `Context Files Consulted` list now (to include in the final report)
 
 ---
 
@@ -139,7 +136,6 @@ For each changed file:
    - Does the change violate any documented invariant?
    - Does it break an implicit contract with another module?
    - Does the coupling map flag cascade risk?
-   - Record which invariant(s) were checked and the verdict
 
 ---
 

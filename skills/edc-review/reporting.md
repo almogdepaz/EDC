@@ -8,41 +8,6 @@ Comprehensive markdown report structure and formatting guidelines.
 
 Generate markdown report with these mandatory sections:
 
-### 0. Context Inputs & Compliance
-
-- Context freshness status (`.context/.meta.json` vs reviewed commit)
-- Context files consulted list
-- Invariants checked list (with pass/fail or violated/unchanged)
-- Search scope note (confirm context-first, targeted search)
-
-**Template:**
-```markdown
-## Context Inputs & Compliance
-
-**Context Freshness:**
-- Reviewed commit: `<sha>`
-- `.context/.meta.json lastCommit`: `<sha>`
-- Status: MATCH / REBUILT DURING REVIEW
-
-**Context Files Consulted:**
-- `.context/context.md`
-- `.context/issues.md`
-- `.context/<module-a>.md`
-- `.context/<module-b>.md`
-
-**Invariants Checked:**
-| Invariant | Source | Result |
-|-----------|--------|--------|
-| Nonce must increase monotonically | `.context/service.md` | PASS |
-| Auth required for admin endpoints | `.context/api.md` | VIOLATED |
-
-**Search Discipline:**
-- Broad search before context load: NO
-- Search scope: changed files + direct dependencies
-```
-
----
-
 ### 1. Executive Summary
 
 - Severity distribution table
@@ -250,7 +215,6 @@ N HIGH-risk functions without tests → Recommend blocking merge
 ### 8. Analysis Methodology
 
 - Strategy used (DEEP/FOCUSED/SURGICAL)
-- Context-first compliance summary
 - Files analyzed
 - Coverage estimate
 - Techniques applied
@@ -268,11 +232,6 @@ N HIGH-risk functions without tests → Recommend blocking merge
 - HIGH RISK: 100% coverage
 - MEDIUM RISK: 60% coverage
 - LOW RISK: Excluded
-
-**Context-First Compliance:**
-- `.context` freshness validated before triage
-- Context files loaded before broad search
-- Invariants mapped from module context files
 
 **Techniques:**
 - Git blame on all removals
@@ -404,16 +363,3 @@ If file write fails:
 4. Notify user to save manually
 
 **Always prioritize persistent artifact generation over ephemeral chat output.**
-
----
-
-## Report Quality Gate
-
-A report is incomplete unless all of the following are present:
-
-- `Context Inputs & Compliance` section
-- Explicit `Context Files Consulted` list
-- Explicit `Invariants Checked` table/list
-- At least one context citation for each HIGH/MEDIUM finding
-
-If missing, revise the report before delivery.

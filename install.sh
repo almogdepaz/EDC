@@ -51,8 +51,8 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/$f"
     done
-    download "agents/cursor/.cursor/commands/build-context.md" "$TARGET/commands/build-context.md"
-    download "agents/cursor/.cursor/commands/review.md" "$TARGET/commands/review.md"
+    download "agents/cursor/.cursor/commands/edc-build.md" "$TARGET/commands/edc-build.md"
+    download "agents/cursor/.cursor/commands/edc-review.md" "$TARGET/commands/edc-review.md"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"
     ;;
 

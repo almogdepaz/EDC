@@ -1,6 +1,6 @@
 # EDC — Your Every Day Carry Skills
 
-Claude Code plugin for deep codebase understanding and context-aware code review.
+Claude Code plugin for deep codebase understanding and context-aware code review. Inspired by [Trail of Bits](https://github.com/trailofbits/skills)' audit methodology, generalized for any language and any codebase.
 
 ## Commands
 
@@ -26,7 +26,8 @@ Claude Code plugin for deep codebase understanding and context-aware code review
 ## Install
 
 ```bash
-claude plugins install edc@wolfpack-plugins
+claude plugins marketplace add almogdepaz/edc
+claude plugins install edc@edc
 ```
 
 ## Skills

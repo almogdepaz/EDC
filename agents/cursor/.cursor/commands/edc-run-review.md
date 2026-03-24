@@ -4,14 +4,14 @@ description: Performs differential review of code changes using codebase context
 
 # Review
 
-1. **Always run `edc-build` first** before any review analysis.
+1. **Always run `edc-run-build` first** before any review analysis.
    - Missing `.context/.meta.json` -> full context build.
    - Existing but stale context -> incremental update.
    - Existing and current context -> no-op verification.
-2. **Validate freshness after `edc-build`**:
+2. **Validate freshness after `edc-run-build`**:
    - Read `.context/.meta.json`.
    - Compare `lastCommit` with `git rev-parse HEAD`.
-   - If mismatched, run `edc-build` again (or `edc-build --force` if needed) and do not start review until they match.
+   - If mismatched, run `edc-run-build` again (or `edc-run-build --force` if needed) and do not start review until they match.
 3. **Load context files first** to reduce unnecessary search:
    - `.context/context.md` — module map, invariants, coupling, trust boundaries
    - `.context/issues.md` — known problems to cross-reference

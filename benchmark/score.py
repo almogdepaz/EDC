@@ -25,7 +25,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-RESULTS_FILE = Path(__file__).parent / "results.tsv"
+RESULTS_FILE = Path(os.environ.get("EDC_RESULTS_FILE", Path(__file__).parent / "results.tsv"))
 KEYWORD_THRESHOLD = 0.3  # minimum keyword score to trigger LLM judge
 LLM_JUDGE_MODEL = os.environ.get("EDC_JUDGE_MODEL", "sonnet")
 

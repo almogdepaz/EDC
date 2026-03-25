@@ -91,6 +91,7 @@ Structured threat boundary tracing: identify trust assumptions, ask "what if wro
 
 ## Priority
 
+**Phase 0** (prerequisite): Benchmark framework — without measurement, skill improvements are vibes
 **Phase 1** (easy, high impact): 1, 5, 4
 **Phase 2** (moderate effort): 3, 6, 2
 **Phase 3** (needs design): 7
@@ -157,10 +158,23 @@ ghi9012 0.80    0.93       0.86  discard removed 5-whys (hurt recall)
 
 ### Ground Truth Sources
 
-- existing TOB outputs we compared against (wolfpack, Veil, clanker-wallet)
-- known CVEs in open-source projects
-- deliberately-planted bugs in test repos
-- user-provided training set repos
+**Primary (public, language-agnostic):**
+- **curl** (C, ~150k LOC) — 100+ CVEs, each with vulnerable version, fix commit, and detailed writeup at https://curl.se/docs/security.html. Best-documented CVE history in OSS. Primary benchmark repo.
+- **Go x/crypto or hyper** (Go/Rust) — add after curl loop works, for language coverage
+- **redis** (C) — clean codebase, ~15 well-documented CVEs
+
+**Secondary (private, from prior work):**
+- clanker-wallet (20 ground-truth issues from our best run)
+- wolfpack (TOB's 14 observations as ground truth)
+- Veil (cross-referenced EDC + TOB findings as ground truth)
+
+### Execution Order
+
+1. **Build ground truth for curl** — pull CVE list, map to vulnerable commit SHAs, write `benchmark/curl/ground-truth.md`
+2. **Build scorer** — `benchmark/score.py`, compare EDC output vs ground truth (fuzzy match on file + description)
+3. **Get baseline score** — run edc-build on curl at vulnerable commits, score output
+4. **Autoresearch loop** — modify ONE skill variable per experiment, run scorer, keep/discard based on score delta
+5. **Expand** — add Go/Rust repos for language coverage, re-run loop
 
 ### What Gets Experimented On
 
@@ -176,9 +190,13 @@ The metric tells us if the change helped, hurt, or was neutral.
 
 ### Cold Start
 
-Before user provides training set:
-1. use clanker-wallet (20 ground-truth issues from our best run)
-2. use wolfpack (TOB's 14 observations as ground truth)
-3. use Veil (cross-referenced EDC + TOB findings as ground truth)
+curl is the cold start repo. No private data needed, no auth, fully public ground truth.
+Once the loop works on curl, expand to Go/Rust repos and private repos (wolfpack, Veil, clanker-wallet).
 
-These three give us a baseline score to beat.
+### Status
+
+- [ ] Step 1: Build curl ground truth (`benchmark/curl/ground-truth.md`)
+- [ ] Step 2: Build scorer (`benchmark/score.py`)
+- [ ] Step 3: Baseline score on curl
+- [ ] Step 4: First autoresearch experiment
+- [ ] Step 5: Add Go/Rust benchmark repos

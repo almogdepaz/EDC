@@ -18,23 +18,28 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
-# Shared skill files to download
+# Canonical skill files (single source of truth: plugins/edc/skills/)
 SKILLS=(
-  "skills/edc-context/SKILL.md"
-  "skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
-  "skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
-  "skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
-  "skills/edc-review/SKILL.md"
-  "skills/edc-review/methodology.md"
-  "skills/edc-review/adversarial.md"
-  "skills/edc-review/reporting.md"
-  "skills/edc-review/patterns.md"
+  "plugins/edc/skills/edc-context/SKILL.md"
+  "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
+  "plugins/edc/skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
+  "plugins/edc/skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
+  "plugins/edc/skills/edc-review/SKILL.md"
+  "plugins/edc/skills/edc-review/methodology.md"
+  "plugins/edc/skills/edc-review/adversarial.md"
+  "plugins/edc/skills/edc-review/reporting.md"
+  "plugins/edc/skills/edc-review/patterns.md"
 )
 
 download() {
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
   curl -fsSL "$BASE/$src" -o "$dst"
+}
+
+# Strip prefix to get relative skill path for destination
+skill_rel() {
+  echo "${1#plugins/edc/skills/}"
 }
 
 case "$AGENT" in
@@ -49,7 +54,7 @@ case "$AGENT" in
     TARGET="$HOME/.cursor"
     echo "Installing EDC skills globally for Cursor..."
     for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/$f"
+      download "$f" "$TARGET/skills/$(skill_rel "$f")"
     done
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
@@ -60,7 +65,7 @@ case "$AGENT" in
     TARGET="$HOME/.codex/skills"
     echo "Installing EDC skills globally for Codex..."
     for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/${f#skills/}"
+      download "$f" "$TARGET/$(skill_rel "$f")"
     done
     echo "Done. Use \$edc-context or \$edc-review to invoke."
     ;;
@@ -69,7 +74,7 @@ case "$AGENT" in
     TARGET="$HOME/.gemini/skills"
     echo "Installing EDC skills globally for Gemini..."
     for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/${f#skills/}"
+      download "$f" "$TARGET/$(skill_rel "$f")"
     done
     echo "Done. Skills at $TARGET/"
     ;;

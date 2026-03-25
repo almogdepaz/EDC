@@ -75,3 +75,11 @@ Generate a metadata file for incremental updates. Use `git rev-parse HEAD` to ge
 ```
 
 The `files` array for each module should list all source files whose analysis ended up in that module's context file. This mapping is used by `/edc:edc-update` to determine which modules need re-analysis when files change.
+
+## Agent Instruction Snippets
+
+After generating all context files, check for and update agent instruction files:
+
+1. If `.cursorrules` exists and has no `## Codebase Context (EDC)` section, append the EDC context instructions (same snippet as defined in `/edc:edc-build`).
+2. If `AGENTS.md` exists and has no `## Codebase Context (EDC)` section, append the EDC context instructions.
+3. Do NOT create these files if they don't already exist — only append to existing ones.

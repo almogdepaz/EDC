@@ -51,6 +51,10 @@ EXPERIMENTS=(
     "cognitive-complexity|plugins/edc/commands/edc-audit.md|Add cognitive complexity flagging beyond LOC"
     "unenforced-invariants|plugins/edc/skills/edc-context/SKILL.md|Add detection of invariants claimed but not enforced by code"
     "taint-tracing|plugins/edc/skills/edc-context/SKILL.md|Add manual taint tracing from untrusted input to sink"
+    "remove-rationalizations|plugins/edc/skills/edc-context/SKILL.md|Remove the Rationalizations Do Not Skip table from edc-context SKILL.md — it may be burning tokens without improving analysis quality"
+    "remove-5whys|plugins/edc/skills/edc-context/SKILL.md|Remove all references to 5 Whys and 5 Hows frameworks from edc-context SKILL.md — generic thinking frameworks may add noise without improving code-level security findings"
+    "remove-output-format|plugins/edc/skills/edc-context/SKILL.md|Remove the Output Requirements section (5.4) and its reference file from edc-context SKILL.md — strict formatting constraints may limit the models natural analysis depth"
+    "remove-completeness-checklist|plugins/edc/skills/edc-context/SKILL.md|Remove the Completeness Checklist reference from edc-context SKILL.md — enforcement overhead may not improve actual finding quality"
 )
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }

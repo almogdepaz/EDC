@@ -114,7 +114,7 @@ Before delivering:
 
 ## Integration
 
-**edc-context skill:**
+**`edc:edc-context` skill** (NOT `audit-context-building` — that is a different plugin):
 - Pre-Analysis: Build baseline context
 - Phase 4: Deep context on HIGH RISK changes
 
@@ -154,8 +154,8 @@ Time: ~3-4 hours
 ### Deep Audit (Large, Critical Change)
 ```
 Input: 450 files, auth system rewrite
-Strategy: SURGICAL + edc-context
-1. Baseline context with edc-context
+Strategy: SURGICAL + edc:edc-context
+1. Baseline context with edc:edc-context
 2. Deep analysis on auth changes only
 3. Blast radius analysis
 4. Adversarial modeling

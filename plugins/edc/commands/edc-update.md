@@ -41,7 +41,7 @@ Map each changed file to its module using the `modules` mapping in `.meta.json`.
 
 ### Step 3 — Re-analyze affected modules
 
-For each affected module, invoke the `edc-context` skill on ONLY the files in that module. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+For each affected module, invoke the `edc:edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
 
 ### Step 4 — Update .context/{module}.md files
 

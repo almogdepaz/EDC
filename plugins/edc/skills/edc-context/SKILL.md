@@ -111,6 +111,19 @@ For each function:
    - **5 Whys**
    - **5 Hows**
 
+5. **State Machine Analysis** (when function is part of a state machine or non-blocking protocol)
+   - Map every state and transition. What causes each transition?
+   - For non-blocking re-entry: when the function returns early (EAGAIN, WOULDBLOCK, partial completion) and is called again later, are all decisions from the previous call still valid?
+   - What variables are set in one state but consumed in a different state? Can anything between those states invalidate the assumption?
+   - What happens when a multi-step operation takes many calls to complete — do intermediate failures corrupt later logic?
+
+6. **Flag/Boolean Variable Tracing** (for every flag or boolean that controls behavior)
+   - **Where set:** which function, which state, under what conditions
+   - **Where consumed:** which function, which state, how many transitions later
+   - **Corruption window:** can ANY code path between set and use change it unexpectedly? Can a slow/interrupted operation cause the flag to be set in a state where it shouldn't be?
+   - **Impact if wrong:** if the flag has the opposite value at point of use, what breaks? (e.g., wrong buffer size, skipped validation, wrong protocol path)
+   - Pay special attention to flags that control: local vs remote resolution, protocol variant selection, buffer size decisions, security-relevant behavior
+
 ---
 
 ### 5.2 Cross-Function & External Flow Analysis

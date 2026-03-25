@@ -1,0 +1,12 @@
+status	name	target_file	description	score_delta	tested_by
+queued	fault-injection	plugins/edc/skills/edc-review/methodology.md	Add systematic what-if failure prompts for each changed function (dependency fails, malicious input, concurrency, filesystem)
+queued	security-checklist	plugins/edc/skills/edc-review/patterns.md	Add mandatory pass/fail security checklist: hardcoded secrets, input validation, return value checks, auth, injection, logging, crypto
+queued	cognitive-complexity	plugins/edc/commands/edc-audit.md	Flag functions with nesting >3, >5 branches, multiple responsibilities, boolean params, long param lists
+queued	unenforced-invariants	plugins/edc/skills/edc-context/SKILL.md	Detect invariants claimed in comments/docstrings/names but NOT enforced by code
+queued	taint-tracing	plugins/edc/skills/edc-context/SKILL.md	Trace untrusted input source through transformations to sink, note where sanitization happens or doesn't
+queued	remove-rationalizations	plugins/edc/skills/edc-context/SKILL.md	Remove the Rationalizations table — may burn tokens without improving analysis quality
+queued	remove-5whys	plugins/edc/skills/edc-context/SKILL.md	Remove 5 Whys and 5 Hows references — generic frameworks may add noise for code-level analysis
+queued	remove-output-format	plugins/edc/skills/edc-context/SKILL.md	Remove Output Requirements section 5.4 — strict formatting may limit natural analysis depth
+queued	remove-completeness-checklist	plugins/edc/skills/edc-context/SKILL.md	Remove Completeness Checklist reference — enforcement overhead vs actual quality
+tested	state-machine-analysis	plugins/edc/skills/edc-context/SKILL.md	Add state machine transition analysis and non-blocking re-entry bug detection	+partial	exp1
+tested	flag-tracing	plugins/edc/skills/edc-context/SKILL.md	Add flag/boolean variable lifecycle tracing (set point, use point, corruption window)	+partial	exp2

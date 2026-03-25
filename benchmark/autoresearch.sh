@@ -43,19 +43,72 @@ ALL_CVES=(
     "CVE-2020-8285" "CVE-2022-27776" "CVE-2018-1000301"
 )
 
-# Experiment definitions
-# Format: name|file_to_modify|description
-EXPERIMENTS=(
-    "fault-injection|plugins/edc/skills/edc-review/methodology.md|Add fault injection thinking prompts to review methodology"
-    "security-checklist|plugins/edc/skills/edc-review/patterns.md|Add mandatory security checklist as structured prompts"
-    "cognitive-complexity|plugins/edc/commands/edc-audit.md|Add cognitive complexity flagging beyond LOC"
-    "unenforced-invariants|plugins/edc/skills/edc-context/SKILL.md|Add detection of invariants claimed but not enforced by code"
-    "taint-tracing|plugins/edc/skills/edc-context/SKILL.md|Add manual taint tracing from untrusted input to sink"
-    "remove-rationalizations|plugins/edc/skills/edc-context/SKILL.md|Remove the Rationalizations Do Not Skip table from edc-context SKILL.md — it may be burning tokens without improving analysis quality"
-    "remove-5whys|plugins/edc/skills/edc-context/SKILL.md|Remove all references to 5 Whys and 5 Hows frameworks from edc-context SKILL.md — generic thinking frameworks may add noise without improving code-level security findings"
-    "remove-output-format|plugins/edc/skills/edc-context/SKILL.md|Remove the Output Requirements section (5.4) and its reference file from edc-context SKILL.md — strict formatting constraints may limit the models natural analysis depth"
-    "remove-completeness-checklist|plugins/edc/skills/edc-context/SKILL.md|Remove the Completeness Checklist reference from edc-context SKILL.md — enforcement overhead may not improve actual finding quality"
-)
+IDEAS_FILE="$SCRIPT_DIR/ideas.tsv"
+
+# Read queued experiments from ideas ledger
+get_queued_experiments() {
+    tail -n +2 "$IDEAS_FILE" | awk -F'\t' '$1 == "queued" { print $2 "|" $3 "|" $4 }'
+}
+
+# Mark an idea as tested with its result
+mark_idea_tested() {
+    local name="$1"
+    local score_delta="$2"
+    local status="$3"  # keep or discard
+    # Update the line in ideas.tsv
+    python3 -c "
+import csv, sys
+rows = []
+with open('$IDEAS_FILE', 'r') as f:
+    reader = csv.reader(f, delimiter='\t')
+    for row in reader:
+        if len(row) >= 2 and row[1] == '$name':
+            row[0] = 'tested'
+            while len(row) < 6: row.append('')
+            row[4] = '$score_delta'
+            row[5] = '$status'
+        rows.append(row)
+with open('$IDEAS_FILE', 'w') as f:
+    writer = csv.writer(f, delimiter='\t')
+    writer.writerows(rows)
+"
+}
+
+# Generate new experiment ideas based on results so far
+generate_new_ideas() {
+    local current_ideas
+    current_ideas=$(cat "$IDEAS_FILE")
+
+    local prompt="You are an autoresearch agent improving code analysis skills for a security tool called EDC.
+
+CURRENT IDEAS LEDGER (already proposed — do NOT repeat these):
+$current_ideas
+
+RECENT BENCHMARK RESULTS:
+$(cat "$RESULTS_LOG" 2>/dev/null || echo "no results yet")
+
+TASK: Propose 1-3 NEW experiment ideas that are NOT already in the ledger. Each idea should be:
+- A single, atomic change to one skill file
+- Either an addition (new analysis technique) or a subtraction (removing something that may be deadweight)
+- Informed by the benchmark results — what bug categories are we weak on? what might help?
+
+Output ONLY tab-separated lines in this exact format (no headers, no explanation):
+queued\tname\ttarget_file\tone sentence description
+
+Example:
+queued\tcall-chain-depth\tplugins/edc/skills/edc-context/SKILL.md\tAdd explicit call chain depth tracing — follow callee chains 3+ levels deep instead of stopping at 1-hop"
+
+    local new_ideas
+    new_ideas=$(claude -p "$prompt" --output-format text 2>/dev/null || echo "")
+
+    if [ -n "$new_ideas" ]; then
+        # Append only lines that look like valid TSV entries
+        echo "$new_ideas" | grep "^queued" >> "$IDEAS_FILE" || true
+        local count
+        count=$(echo "$new_ideas" | grep -c "^queued" || echo "0")
+        log "Generated $count new experiment ideas"
+    fi
+}
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
@@ -272,12 +325,11 @@ main() {
     fi
     log "Baseline score: $baseline_score"
 
-    # Run experiments
+    # Run experiments from ideas ledger
     local exp_index=0
-    for exp_def in "${EXPERIMENTS[@]}"; do
+    while IFS='|' read -r exp_name exp_file exp_desc; do
         exp_index=$((exp_index + 1))
-
-        IFS='|' read -r exp_name exp_file exp_desc <<< "$exp_def"
+        [ -z "$exp_name" ] && continue
 
         # Filter if specific experiment requested
         if [ -n "$specific_exp" ] && [ "$specific_exp" != "$exp_index" ] && [ "$specific_exp" != "$exp_name" ]; then
@@ -352,11 +404,18 @@ main() {
         # Clean up experiment branch
         git -C "$REPO_ROOT" branch -D "experiment/$exp_name" --quiet 2>/dev/null || true
 
+        # Update ideas ledger
+        mark_idea_tested "$exp_name" "$delta" "$status"
+
         # Log result
         echo -e "$(date -Iseconds)\t$exp_name\t$baseline_score\t$new_score\t$delta\t$status\t$exp_desc" >> "$RESULTS_LOG"
 
         log ""
-    done
+    done < <(get_queued_experiments)
+
+    # Generate new ideas for next run
+    log "Generating new experiment ideas..."
+    generate_new_ideas
 
     log ""
     log "========================================="

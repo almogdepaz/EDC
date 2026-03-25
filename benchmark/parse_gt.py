@@ -22,9 +22,16 @@ def parse(path):
         if not fix or fix.startswith("("):
             continue
 
+        # Extract description (multi-line, between **description:** and next field)
+        desc_match = re.search(
+            r'\*\*description:\*\*\s*(.+?)(?=\n- \*\*|\n###|\Z)',
+            block, re.DOTALL
+        )
+        desc = desc_match.group(1).strip().replace("\n", " ") if desc_match else ""
+
         entries.append("|".join([
             cve, fix, field("affected_file"),
-            field("category"), field("severity"), field("bug_pattern")
+            field("category"), field("severity"), field("bug_pattern"), desc
         ]))
 
     return entries

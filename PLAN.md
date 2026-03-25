@@ -1,6 +1,6 @@
 # EDC — Improvement Plan
 
-## Current State (v1.0.0)
+## Current State (v1.1.0)
 
 ### Commands
 - `/edc:edc-build` — orchestrator (full build or incremental update)
@@ -10,16 +10,25 @@
 - `/edc:edc-review` — context-aware differential review
 
 ### Skills
-- `edc-context` — generalized from Trail of Bits audit-context-building
-- `edc-review` — generalized from Trail of Bits edc-review
+- `edc:edc-context` — generalized from Trail of Bits audit-context-building
+- `edc:edc-review` — generalized from Trail of Bits differential-review
 
 ### Agents
 - Claude Code, Cursor, Codex, Gemini CLI
+
+### Repo Structure
+- Plugin lives at `plugins/edc/` (restructured from `agents/claude/plugins/edc/`)
+- Cursor commands reference shared skills via `plugins/edc/skills/`
+- Marketplace entry at `.claude-plugin/marketplace.json`
 
 ### Validated
 - Compared against TOB on wolfpack (TypeScript), Veil (Rust/ZK), clanker-wallet (TS+Python)
 - EDC is a strict superset of TOB findings (14/14 TOB + 6 additional on clanker-wallet)
 - Full pipeline: edc-build → edc-split → edc-audit → edc-review
+
+### Recent Fixes
+- Skill references disambiguated to `edc:edc-context` with explicit NOT `audit-context-building` guards (prevents collision when both plugins installed)
+- Cursor commands renamed to `edc-run-*` for clarity
 
 ---
 

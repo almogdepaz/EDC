@@ -55,12 +55,14 @@ Two generalized skills from Trail of Bits:
 ```
 edc/
   install.sh                         # one-line installer for all agents
-  skills/                            # shared skill content (source of truth)
-    edc-context/
-    edc-review/
-  agents/
-    claude/                          # Claude Code plugin (marketplace)
-    cursor/                          # Cursor skills + commands
-    codex/                           # Codex skills + AGENTS.md
-    gemini/                          # Gemini CLI skills + GEMINI.md
+  plugins/edc/                       # Claude Code plugin (single source of truth)
+    .claude-plugin/plugin.json
+    commands/                        # claude slash commands
+    skills/                          # canonical skill content
+      edc-context/
+      edc-review/
+  agents/                            # agent-specific wrappers
+    cursor/                          # Cursor commands + install script
+    codex/                           # Codex AGENTS.md + install script
+    gemini/                          # Gemini GEMINI.md + install script
 ```

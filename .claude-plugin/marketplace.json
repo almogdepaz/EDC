@@ -15,7 +15,7 @@
       "author": {
         "name": "almogdepaz"
       },
-      "source": "./agents/claude/plugins/edc"
+      "source": "./plugins/edc"
     }
   ]
 }

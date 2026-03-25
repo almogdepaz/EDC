@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SKILL_SRC="$REPO_ROOT/plugins/edc/skills"
 
 if [ "$1" = "--project" ]; then
   TARGET="${2:-.}/.cursor"
@@ -19,9 +20,9 @@ mkdir -p "$TARGET/skills/edc-context/resources"
 mkdir -p "$TARGET/skills/edc-review"
 mkdir -p "$TARGET/commands"
 
-cp "$REPO_ROOT/skills/edc-context/SKILL.md" "$TARGET/skills/edc-context/"
-cp "$REPO_ROOT/skills/edc-context/resources/"* "$TARGET/skills/edc-context/resources/"
-cp "$REPO_ROOT/skills/edc-review/"* "$TARGET/skills/edc-review/"
+cp "$SKILL_SRC/edc-context/SKILL.md" "$TARGET/skills/edc-context/"
+cp "$SKILL_SRC/edc-context/resources/"* "$TARGET/skills/edc-context/resources/"
+cp "$SKILL_SRC/edc-review/"* "$TARGET/skills/edc-review/"
 cp "$SCRIPT_DIR/.cursor/commands/"* "$TARGET/commands/"
 
 echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"

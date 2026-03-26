@@ -10,3 +10,6 @@ queued	remove-output-format	plugins/edc/skills/edc-context/SKILL.md	Remove Outpu
 queued	remove-completeness-checklist	plugins/edc/skills/edc-context/SKILL.md	Remove Completeness Checklist reference — enforcement overhead vs actual quality
 tested	state-machine-analysis	plugins/edc/skills/edc-context/SKILL.md	Add state machine transition analysis and non-blocking re-entry bug detection	+partial	exp1
 tested	flag-tracing	plugins/edc/skills/edc-context/SKILL.md	Add flag/boolean variable lifecycle tracing (set point, use point, corruption window)	+partial	exp2
+queued	buffer-lifecycle	plugins/edc/skills/edc-context/SKILL.md	Track buffer allocation size source vs write-length source across functions — flag when they derive from different computations or temporal phases (targets CVE-2023-38545-class bugs)
+queued	temporal-assumption-decay	plugins/edc/skills/edc-context/SKILL.md	For any value stored and used later, identify assumptions true at computation time and whether intervening calls/async phases could invalidate them before use
+queued	callsite-narrowing	plugins/edc/skills/edc-review/methodology.md	When a vulnerability pattern matches, require tracing the exact call chain from public entry point to specific vulnerable function before reporting location — reduces partial-match mislocations

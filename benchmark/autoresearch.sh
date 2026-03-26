@@ -197,11 +197,11 @@ Be thorough. Do not skip functions. Do not assume code is safe."
     log "  Analyzing $cve_id ($category)..."
     local start_time=$(date +%s)
 
-    claude -p "$prompt" \
-        --cwd "$cve_dir" \
+    (cd "$cve_dir" && claude -p "$prompt" \
         --allowedTools "Read Grep Glob Write Bash" \
         --max-turns 40 \
         --output-format text \
+        --dangerously-skip-permissions) \
         > "$output_dir/claude-output.txt" 2>&1 || true
 
     local end_time=$(date +%s)
@@ -289,11 +289,11 @@ Rules:
 Make the change now. Edit the appropriate file in the plugins/edc/ directory."
 
     log "Applying experiment: $exp_name"
-    claude -p "$prompt" \
-        --cwd "$REPO_ROOT" \
+    (cd "$REPO_ROOT" && claude -p "$prompt" \
         --allowedTools "Read Edit Grep Glob" \
         --max-turns 10 \
         --output-format text \
+        --dangerously-skip-permissions) \
         > /dev/null 2>&1 || true
 }
 

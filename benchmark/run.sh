@@ -89,11 +89,11 @@ Be thorough. Do not skip functions. Do not assume code is safe."
     echo "    Running EDC analysis..."
     local start_time=$(date +%s)
 
-    claude -p "$prompt" \
-        --cwd "$cve_dir" \
-        --allowedTools "Read Grep Glob Write Bash(git*)" \
-        --max-turns 30 \
+    (cd "$cve_dir" && claude -p "$prompt" \
+        --allowedTools "Read Grep Glob Write Bash" \
+        --max-turns 40 \
         --output-format text \
+        --dangerously-skip-permissions) \
         > "$output_dir/claude-output.txt" 2>&1 || true
 
     local end_time=$(date +%s)

@@ -110,7 +110,13 @@ queued\tcall-chain-depth\tplugins/edc/skills/edc-context/SKILL.md\tAdd explicit 
     fi
 }
 
-log() { echo "[$(date +%H:%M:%S)] $*"; }
+LOGFILE="$SCRIPT_DIR/autoresearch-output.log"
+
+log() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    echo "$msg"
+    echo "$msg" >> "$LOGFILE"
+}
 
 ensure_curl_repo() {
     if [ ! -d "$CURL_REPO/.git" ]; then
@@ -410,6 +416,14 @@ main() {
         # Log result
         echo -e "$(date -Iseconds)\t$exp_name\t$baseline_score\t$new_score\t$delta\t$status\t$exp_desc" >> "$RESULTS_LOG"
 
+        # Progress summary
+        local queued_count
+        queued_count=$(grep -c "^queued" "$IDEAS_FILE" || echo "0")
+        local tested_count
+        tested_count=$(grep -c "^tested" "$IDEAS_FILE" || echo "0")
+        local kept_count
+        kept_count=$(awk -F'\t' '$1=="tested" && $6=="keep"' "$IDEAS_FILE" | wc -l | xargs)
+        log "--- PROGRESS: $tested_count tested, $kept_count kept, $queued_count remaining, baseline=$baseline_score ---"
         log ""
     done < <(get_queued_experiments)
 

@@ -1,5 +1,5 @@
 status	name	target_file	description	score_delta	tested_by
-queued	fault-injection	plugins/edc/skills/edc-review/methodology.md	Add systematic what-if failure prompts for each changed function (dependency fails, malicious input, concurrency, filesystem)
+tested	fault-injection	plugins/edc/skills/edc-review/methodology.md	Add systematic what-if failure prompts for each changed function (dependency fails, malicious input, concurrency, filesystem)	+0.000	auto
 tested	security-checklist	plugins/edc/skills/edc-review/patterns.md	Add mandatory pass/fail security checklist: hardcoded secrets, input validation, return value checks, auth, injection, logging, crypto	+0.000	auto
 queued	cognitive-complexity	plugins/edc/commands/edc-audit.md	Flag functions with nesting >3, >5 branches, multiple responsibilities, boolean params, long param lists
 queued	unenforced-invariants	plugins/edc/skills/edc-context/SKILL.md	Detect invariants claimed in comments/docstrings/names but NOT enforced by code

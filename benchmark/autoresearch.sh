@@ -255,7 +255,6 @@ check, every pointer operation, every state transition."
     local start_time=$(date +%s)
 
     (cd "$cve_dir" && claude -p "$prompt" \
-        --bare \
         --plugin-dir "$REPO_ROOT/plugins/edc" \
         --allowedTools "Read Grep Glob Write Bash Skill" \
         --max-turns 50 \
@@ -341,7 +340,6 @@ Make the change now. Edit the appropriate file in the plugins/edc/ directory."
 
     log "  Applying experiment: $exp_name"
     (cd "$REPO_ROOT" && claude -p "$prompt" \
-        --bare \
         --allowedTools "Read Edit Grep Glob" \
         --max-turns 10 \
         --output-format text \

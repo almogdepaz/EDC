@@ -88,7 +88,6 @@ Be thorough. Do not skip any function."
     local start_time=$(date +%s)
 
     (cd "$cve_dir" && claude -p "$prompt" \
-        --bare \
         --plugin-dir "$SCRIPT_DIR/../plugins/edc" \
         --allowedTools "Read Grep Glob Write Bash Skill" \
         --max-turns 50 \

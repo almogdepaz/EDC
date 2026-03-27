@@ -232,42 +232,33 @@ run_and_score_cve() {
         file_list="$file_list $(echo "$f" | xargs)"
     done
 
-    local prompt="You are performing a security-focused code analysis. \
-Analyze the following files for security vulnerabilities: $file_list
+    local prompt="Run the edc:edc-context skill on ONLY these files: $file_list
 
-For each file, read it completely and analyze every function for:
+This is a security-focused analysis. Perform ultra-granular line-by-line analysis \
+looking for all vulnerabilities including memory safety issues, state machine logic \
+errors, flag/boolean corruption, protocol injection, and data flow problems.
 
-MEMORY SAFETY: buffer overflows, integer overflows, use-after-free, double-free, \
-null pointer dereferences, out-of-bounds reads/writes, size truncation on cast
+Write the complete analysis to .context/full-context.md
 
-STATE MACHINE LOGIC: state transitions that skip validation, variables set in one \
-state but consumed in a different state with wrong assumptions, non-blocking re-entry \
-bugs where decisions from a previous call become invalid
+Then create .context/issues.md listing ALL security issues you find, with:
+- issue title
+- severity (critical/high/medium/low)
+- category (buffer overflow, use-after-free, logic error, etc.)
+- affected file:line
+- description of the bug
+- evidence (the specific code pattern)
 
-FLAG/BOOLEAN TRACING: for every flag that controls behavior, trace where it is set, \
-where it is consumed, and whether any code path between those points can change it \
-unexpectedly. If a flag controls local-vs-remote resolution, protocol variant, or \
-buffer sizing, analyze what happens if it has the wrong value.
-
-PROTOCOL LOGIC: trace data from external/network inputs through all transformations \
-to sinks. Check all length/size validations for completeness.
-
-Write your findings to .context/issues.md with this format for each issue:
-### ISSUE-N: <title>
-- **severity:** critical|high|medium|low
-- **category:** <bug type>
-- **file:** <path>:<line range>
-- **description:** <what the bug is and why it's exploitable>
-- **evidence:** <the specific code pattern that's wrong>
-
-Be thorough. Do not skip functions. Do not assume code is safe."
+Be thorough. Do not skip any function. Analyze every buffer operation, every length \
+check, every pointer operation, every state transition."
 
     log "  Analyzing $cve_id ($category)..."
     local start_time=$(date +%s)
 
     (cd "$cve_dir" && claude -p "$prompt" \
-        --allowedTools "Read Grep Glob Write Bash" \
-        --max-turns 40 \
+        --bare \
+        --plugin-dir "$REPO_ROOT/plugins/edc" \
+        --allowedTools "Read Grep Glob Write Bash Skill" \
+        --max-turns 50 \
         --output-format text \
         --dangerously-skip-permissions) \
         > "$output_dir/claude-output.txt" 2>&1 || true
@@ -350,6 +341,7 @@ Make the change now. Edit the appropriate file in the plugins/edc/ directory."
 
     log "  Applying experiment: $exp_name"
     (cd "$REPO_ROOT" && claude -p "$prompt" \
+        --bare \
         --allowedTools "Read Edit Grep Glob" \
         --max-turns 10 \
         --output-format text \

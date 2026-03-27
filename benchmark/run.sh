@@ -65,33 +65,33 @@ run_single_cve() {
         file_list="$file_list $f"
     done
 
-    local prompt="You are performing a security-focused code analysis. \
-Analyze the following files in this C project for security vulnerabilities: $file_list
+    local prompt="Run the edc:edc-context skill on ONLY these files: $file_list
 
-For each file:
-1. Read it completely
-2. Analyze every function for: buffer overflows, integer overflows, use-after-free, \
-double-free, null pointer dereferences, injection, logic errors, race conditions, \
-credential leaks, missing validation, unbounded operations
-3. Trace data flow from external inputs through transformations to sinks
+This is a security-focused analysis. Perform ultra-granular line-by-line analysis \
+looking for all vulnerabilities including memory safety issues, state machine logic \
+errors, flag/boolean corruption, protocol injection, and data flow problems.
 
-Write your findings to .context/issues.md with this format for each issue:
-### ISSUE-N: <title>
-- **severity:** critical|high|medium|low
-- **category:** <bug type>
-- **file:** <path>:<line range>
-- **description:** <what the bug is and why it's exploitable>
-- **evidence:** <the specific code pattern that's wrong>
+Write the complete analysis to .context/full-context.md
 
-Be thorough. Do not skip functions. Do not assume code is safe."
+Then create .context/issues.md listing ALL security issues you find, with:
+- issue title
+- severity (critical/high/medium/low)
+- category (buffer overflow, use-after-free, logic error, etc.)
+- affected file:line
+- description of the bug
+- evidence (the specific code pattern)
 
-    # Run claude in headless mode
+Be thorough. Do not skip any function."
+
+    # Run claude in headless mode with edc plugin loaded (clean slate)
     echo "    Running EDC analysis..."
     local start_time=$(date +%s)
 
     (cd "$cve_dir" && claude -p "$prompt" \
-        --allowedTools "Read Grep Glob Write Bash" \
-        --max-turns 40 \
+        --bare \
+        --plugin-dir "$SCRIPT_DIR/../plugins/edc" \
+        --allowedTools "Read Grep Glob Write Bash Skill" \
+        --max-turns 50 \
         --output-format text \
         --dangerously-skip-permissions) \
         > "$output_dir/claude-output.txt" 2>&1 || true

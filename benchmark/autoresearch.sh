@@ -49,7 +49,7 @@ ALL_CVES=(
 
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
-    echo "$msg"
+    echo "$msg" >&2
     echo "$msg" >> "$LOGFILE"
 }
 
@@ -279,7 +279,7 @@ check, every pointer operation, every state transition."
         --severity "$severity" \
         --affected-files "$affected_files" \
         --description "$description" \
-        --duration "$duration"
+        --duration "$duration" >&2
 }
 
 calc_score() {

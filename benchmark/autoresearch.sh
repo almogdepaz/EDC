@@ -200,102 +200,111 @@ run_benchmark() {
     echo "$score" > "$SCRIPT_DIR/.score-${label}.tmp"
 }
 
+# ── Branch helpers ───────────────────────────────────────────────────────────
+
+return_to_research() {
+    # Restore any skill-file changes, then switch back to research
+    git -C "$REPO_ROOT" checkout -- "${SKILL_FILES[@]}" 2>/dev/null || true
+    git -C "$REPO_ROOT" checkout research --quiet 2>/dev/null || true
+}
+
 # ── Agent modification ────────────────────────────────────────────────────────
 
 apply_change() {
     local iteration="$1"
+    local prompt_file
+    prompt_file=$(mktemp /tmp/edc-prompt-XXXXX.txt)
 
-    # Build context: current skill files
-    local skill_content=""
-    for f in "${SKILL_FILES[@]}"; do
-        skill_content+="=== $REPO_ROOT/$f ===
-$(cat "$REPO_ROOT/$f")
+    # Build context
+    local history="(none yet)"
+    [ -f "$HASHES_FILE" ] && history=$(tail -15 "$HASHES_FILE" | awk -F'\t' 'NR>1{printf "score=%s delta=%s | %s\n", $2, $3, $4}')
 
-"
-    done
-
-    # Recent history from hash log
-    local history=""
-    if [ -f "$HASHES_FILE" ]; then
-        history=$(tail -15 "$HASHES_FILE" | awk -F'\t' '{printf "score=%s delta=%s | %s\n", $2, $3, $4}')
-    fi
-
-    # Last CVE breakdown
-    local last_breakdown=""
+    local last_breakdown="(none yet)"
     local last_results
     last_results=$(ls -t "$SCRIPT_DIR"/results-iter*.tsv 2>/dev/null | head -1 || true)
     [ -n "$last_results" ] && last_breakdown=$(cat "$last_results")
 
-    # All tried hashes (to avoid repeating)
-    local tried=""
-    [ -f "$HASHES_FILE" ] && tried=$(awk -F'\t' '{print $1}' "$HASHES_FILE" | tr '\n' ' ')
+    local tried="(none)"
+    [ -f "$HASHES_FILE" ] && tried=$(awk -F'\t' 'NR>1{print $1}' "$HASHES_FILE" | tr '\n' ' ')
 
-    local prompt="You are iteratively improving LLM security analysis skills through experimentation.
+    local baseline_score
+    baseline_score=$(cat "$BASELINE_FILE" 2>/dev/null || echo "not computed")
 
-CURRENT SKILL FILES:
-$skill_content
+    # Write prompt to temp file to avoid bash special-char issues
+    cat > "$prompt_file" << 'PROMPT_EOF'
+You are iteratively improving LLM security analysis skills through experimentation.
 
-BASELINE SCORE: $(cat "$BASELINE_FILE" 2>/dev/null || echo "not computed") / 1.0
-(scoring: exact match = 1.0pt, partial = 0.5pt, missed = 0pt, averaged across ${#ALL_CVES[@]} CVEs)
+Read the current skill files to understand what they contain:
+PROMPT_EOF
 
-RECENT EXPERIMENT HISTORY:
+    for f in "${SKILL_FILES[@]}"; do
+        echo "  - $REPO_ROOT/$f" >> "$prompt_file"
+    done
+
+    cat >> "$prompt_file" << PROMPT_EOF
+
+BASELINE SCORE: $baseline_score / 1.0
+(exact=1.0pt, partial=0.5pt, missed=0pt, averaged across ${#ALL_CVES[@]} CVEs)
+
+RECENT EXPERIMENT HISTORY (what was tried, what score it got):
 $history
 
 LAST CVE BREAKDOWN:
 $last_breakdown
 
-ALREADY TRIED HASHES (do NOT reproduce these file states):
+ALREADY TRIED — do NOT reproduce a file state whose sha256 hash is in this list:
 $tried
 
-YOUR TASK:
-Make ONE focused change to improve security vulnerability detection.
-
-Angles to consider (pick the ONE most promising given the history):
+YOUR TASK: Make ONE focused change to improve security vulnerability detection.
+Read the skill files first, then edit them. You can:
 
 ADDITIONS — new analysis techniques:
-- Integer arithmetic: underflow/overflow/wrap in size calculations, especially when result feeds memcpy/malloc
-- Cross-function data flow: trace a value from where it's assigned to every place it's consumed
-- Error path analysis: what happens when a sub-call fails — is cleanup correct? dangling state?
-- Allocation/free pairing: every malloc must have exactly one free on every code path
-- Pointer arithmetic correctness: offset + length vs buffer bounds
-- Time-of-check vs time-of-use: value read at check, used at different state
-- Null pointer propagation: what if an allocation or lookup returns null?
-- Protocol state confusion: does the code handle out-of-order or repeated messages?
-- Signedness mismatch: signed/unsigned comparison, signed integer used as array index or size
-- String handling: off-by-one in null terminator, unbounded copies, format strings
-- Re-entrancy: function called again before previous call completed — what state is shared?
+- Integer arithmetic: underflow/overflow/wrap in size calcs that feed memcpy/malloc
+- Cross-function data flow: trace a value from assignment to every consumer
+- Error path analysis: when a sub-call fails, is cleanup correct? dangling state?
+- Allocation/free pairing: every malloc has exactly one free on every code path
+- Pointer arithmetic: offset + length vs buffer bounds
+- Time-of-check vs time-of-use: value valid at check, stale at use
+- Null pointer propagation: what if allocation or lookup returns null?
+- Protocol state confusion: out-of-order or repeated protocol messages
+- Signedness mismatch: signed/unsigned comparison, signed used as size/index
+- String handling: off-by-one in null terminator, unbounded copy, format strings
+- Re-entrancy: function called again before previous call completes — shared state?
 
 SUBTRACTIONS — things that may waste tokens without helping:
 - Generic frameworks (5-Whys, rationale tables) that don't guide line-by-line analysis
-- Vague instructions like "be thorough" that don't specify what to look for
+- Vague instructions ("be thorough") that don't specify what to look for
 - Output format requirements that constrain rather than guide
 - Redundant reminders repeated across sections
 
-REWORDING — make instructions more concrete:
-- Replace abstract guidance with specific patterns to grep for
-- Add concrete examples of what a vulnerability looks like in code
+REWORDING:
+- Replace abstract guidance with specific code patterns to look for
+- Add concrete examples of what the vulnerability looks like in code
 - Specify exact questions to ask at each function boundary
 
-RESTRUCTURING — change emphasis or ordering:
-- Move highest-signal checks to the top so they run first
-- Group checks by how they manifest in code vs by vulnerability class
+RESTRUCTURING:
+- Move highest-signal checks to top
+- Group by how bugs manifest in code vs by vulnerability class
 - Collapse multiple weak heuristics into one strong one
 
-Edit the skill files directly. After editing, output exactly one line:
+After making your change, output exactly one line:
 HEURISTIC: <one sentence: what you changed and why you think it will help>
 
-Only edit files in: ${SKILL_FILES[*]}"
+Only edit files in: ${SKILL_FILES[*]}
+PROMPT_EOF
 
     local agent_out
-    agent_out=$(cd "$REPO_ROOT" && claude -p "$prompt" \
+    agent_out=$(cd "$REPO_ROOT" && claude -p "$(cat "$prompt_file")" \
         --allowedTools "Read Edit Write Grep Glob" \
         --max-turns 15 \
         --output-format text \
         --dangerously-skip-permissions 2>/dev/null || echo "")
 
+    rm -f "$prompt_file"
+
     local heuristic
     heuristic=$(echo "$agent_out" | grep "^HEURISTIC:" | head -1 | sed 's/^HEURISTIC: //')
-    [ -z "$heuristic" ] && heuristic="iteration $iteration — no description"
+    [ -z "$heuristic" ] && heuristic="iter-$iteration no description"
 
     echo "$heuristic"
 }
@@ -395,7 +404,7 @@ main() {
         # Check if agent made any changes
         if git -C "$REPO_ROOT" diff --quiet; then
             log "No changes made — skipping"
-            git -C "$REPO_ROOT" checkout research --quiet
+            return_to_research
             git -C "$REPO_ROOT" branch -D "$branch" --quiet 2>/dev/null || true
             continue
         fi
@@ -405,7 +414,7 @@ main() {
         new_hash=$(compute_hash)
         if hash_tried "$new_hash"; then
             log "Hash already tried — skipping"
-            git -C "$REPO_ROOT" checkout research --quiet
+            return_to_research
             git -C "$REPO_ROOT" branch -D "$branch" --quiet 2>/dev/null || true
             continue
         fi
@@ -426,13 +435,13 @@ main() {
         if python3 -c "exit(0 if $new_score > $baseline else 1)"; then
             status="keep"
             log "IMPROVED: $baseline → $new_score ($delta) — $heuristic"
-            git -C "$REPO_ROOT" checkout research --quiet
+            return_to_research
             git -C "$REPO_ROOT" merge "$branch" --no-edit --quiet
             baseline="$new_score"
             echo "$baseline" > "$BASELINE_FILE"
         else
             log "No improvement: $baseline → $new_score ($delta)"
-            git -C "$REPO_ROOT" checkout research --quiet
+            return_to_research
         fi
 
         git -C "$REPO_ROOT" branch -D "$branch" --quiet 2>/dev/null || true

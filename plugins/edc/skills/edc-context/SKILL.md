@@ -111,6 +111,27 @@ For each function:
    - **5 Whys**
    - **5 Hows**
 
+5. **State Machine Analysis** (when function is part of a state machine or non-blocking protocol)
+   - Map every state and transition. What causes each transition?
+   - For non-blocking re-entry: when the function returns early (EAGAIN, WOULDBLOCK, partial completion) and is called again later, are all decisions from the previous call still valid?
+   - What variables are set in one state but consumed in a different state? Can anything between those states invalidate the assumption?
+   - What happens when a multi-step operation takes many calls to complete — do intermediate failures corrupt later logic?
+
+6. **Flag/Boolean Variable Tracing** (for every flag or boolean that controls behavior)
+   - **Where set:** which function, which state, under what conditions
+   - **Where consumed:** which function, which state, how many transitions later
+   - **Corruption window:** can ANY code path between set and use change it unexpectedly? Can a slow/interrupted operation cause the flag to be set in a state where it shouldn't be?
+   - **Impact if wrong:** if the flag has the opposite value at point of use, what breaks? (e.g., wrong buffer size, skipped validation, wrong protocol path)
+   - Pay special attention to flags that control: local vs remote resolution, protocol variant selection, buffer size decisions, security-relevant behavior
+
+7. **Integer Arithmetic & Size Calculation Analysis** (for every expression that produces a value used as a size, offset, index, or length)
+   - **Identify the arithmetic**: find every `+`, `-`, `*`, `/`, `<<` whose result feeds `malloc`/`calloc`/`realloc`, `memcpy`/`memmove`/`memset`, array subscript, pointer arithmetic, or a length-checked comparison
+   - **Overflow/underflow path**: can the expression wrap? For `size_t` the wrap is at `SIZE_MAX`; for `int` it is undefined behavior AND wraps in practice. Ask: if both operands are attacker-controlled, what value makes `a + b < a` (overflow) or `a - b > a` (underflow)?
+   - **Signedness mismatch**: is a signed value implicitly converted to an unsigned type (negative → huge positive) or vice versa (large unsigned → negative)? Note every implicit cast at call boundaries.
+   - **Truncation**: is a 64-bit result narrowed to 32-bit or 16-bit before use? What input makes the top bits non-zero so the truncated value is wrong?
+   - **Multiplication**: `count * element_size` is the canonical overflow vector. Check: is `calloc(count, size)` used (safe) or manual `malloc(count * size)` (unsafe without prior check)?
+   - **Impact trace**: follow the arithmetic result to the first memory operation — if the value is wrong (too small), what buffer is allocated or indexed, and what write immediately follows? Document the full path: `attacker input → arithmetic → allocation/index → write target`.
+
 ---
 
 ### 5.2 Cross-Function & External Flow Analysis

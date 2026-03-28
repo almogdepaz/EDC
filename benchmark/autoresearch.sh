@@ -143,7 +143,8 @@ Be thorough. Analyze every buffer operation, every length check, every pointer o
     local t0
     t0=$(date +%s)
 
-    (cd "$cve_dir" && claude -p "$prompt" \
+    # 30min hard timeout per CVE — kills stuck claude processes
+    (cd "$cve_dir" && timeout 1800 claude -p "$prompt" \
         --plugin-dir "$REPO_ROOT/plugins/edc" \
         --allowedTools "Read Grep Glob Write Bash Skill" \
         --max-turns 50 \

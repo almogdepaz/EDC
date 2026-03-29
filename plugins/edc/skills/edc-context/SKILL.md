@@ -132,6 +132,13 @@ For each function:
    - **Multiplication**: `count * element_size` is the canonical overflow vector. Check: is `calloc(count, size)` used (safe) or manual `malloc(count * size)` (unsafe without prior check)?
    - **Impact trace**: follow the arithmetic result to the first memory operation — if the value is wrong (too small), what buffer is allocated or indexed, and what write immediately follows? Document the full path: `attacker input → arithmetic → allocation/index → write target`.
 
+8. **Recursive Call Analysis** (for every function that calls itself directly or transitively)
+   - **Enumerate ALL recursive call sites independently**: walk every branch of the function and list each site where recursion occurs. A function parsing tokens may recurse on `*`, on `[`, on `(`, and on nested calls — each is a separate entry. Do NOT stop after finding the first recursive path.
+   - **Per-path depth guard**: does each recursive call site have its OWN depth check before recursing? A depth limit at function entry is bypassed by any branch that recurses without re-entering through that limit. Check: can a crafted input reach a recursive call site while the guard variable is stale or skipped?
+   - **Stack frame size**: estimate local variable + buffer space per frame; multiply by reachable depth to check for stack exhaustion.
+   - **Worst-case input per path**: for each recursive call site, identify the exact input character/value/pattern that drives that branch — e.g., `[` triggers bracket-expression recursion, `*` triggers wildcard recursion, `(` triggers group recursion. Name them explicitly.
+   - **Impact**: unbounded recursion → stack overflow (crash, potential control-flow hijack on systems without stack cookies/canaries).
+
 ---
 
 ### 5.2 Cross-Function & External Flow Analysis

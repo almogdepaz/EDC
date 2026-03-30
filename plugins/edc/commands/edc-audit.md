@@ -16,6 +16,8 @@ allowed-tools:
 
 Analyze the codebase for overengineering, bloat, and duplication using the `.context/` files as a baseline for what the code SHOULD look like.
 
+**Clean Slate Rule:** When spawning subagents for analysis, they MUST be fresh agents with NO access to the current conversation context. This prevents bias from user discussion influencing findings. See edc-build.md for rationale.
+
 ## Prerequisites
 
 `.context/` must exist with module files. If not, tell the user to run `/edc:edc-build` first.

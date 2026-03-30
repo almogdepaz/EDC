@@ -41,7 +41,9 @@ Map each changed file to its module using the `modules` mapping in `.meta.json`.
 
 ### Step 3 — Re-analyze affected modules
 
-For each affected module, invoke the `edc:edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+For each affected module, spawn a **clean subagent** (using the Agent tool) to invoke the `edc:edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. The subagent MUST be fresh with NO access to the current conversation context. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+
+**Clean Slate Rule:** Analysis subagents must NOT inherit the parent conversation to prevent bias. See edc-build.md for rationale.
 
 ### Step 4 — Update .context/{module}.md files
 

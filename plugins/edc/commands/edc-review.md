@@ -49,6 +49,13 @@ If the PR claims to fix a pattern (e.g., injection, validation, error handling),
 
 ## Step 4 — Review
 
-Invoke the `edc-review` skill with the target and baseline arguments for the full workflow. The skill already integrates with `.context/` files for invariant checking and blast radius — the context from step 2 is additional input.
+Spawn a **clean subagent** (using the Agent tool) to invoke the `edc:edc-review` skill with the target and baseline arguments. The subagent MUST be a fresh agent with NO access to the current conversation context — this prevents bias from the user's discussion influencing the review findings. Pass the subagent:
+- The target (PR URL, commit SHA, or diff)
+- The baseline reference
+- The path to `.context/` files so it can load them independently
+
+The subagent should have access to: Read, Write, Grep, Glob, Bash, Skill tools.
 
 The report MUST include a "Context Inputs & Compliance" section listing context files consulted, invariants checked (with pass/fail), and search scope.
+
+**CRITICAL — Clean Slate Rule:** The review subagent must NOT inherit the parent conversation. If the user said "I think function X has a bug," the reviewer must not know that — it should find (or not find) the bug independently based on code analysis alone. This is essential for unbiased security review.

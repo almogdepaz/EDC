@@ -1,0 +1,2 @@
+hash	score	delta	heuristic
+1bb068cbf4d1cd12e2d46786b4156f1343c6645792204cd828e2ebba8d56183e	0.000	-0.643	Added explicit buffer-capacity-vs-write-size pairing analysis that requires enumerating every buffer's declared size alongside every write into it and verifying the write-size is bounded on all paths — directly targeting heap/stack buffer overflow CVEs (CVE-2023-38545, CVE-2019-3822, CVE-2018-0500) where a fixed-size destination receives a peer-controlled write size without a pre-write guard.

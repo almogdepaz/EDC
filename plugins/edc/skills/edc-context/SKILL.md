@@ -132,6 +132,15 @@ For each function:
    - **Multiplication**: `count * element_size` is the canonical overflow vector. Check: is `calloc(count, size)` used (safe) or manual `malloc(count * size)` (unsafe without prior check)?
    - **Impact trace**: follow the arithmetic result to the first memory operation — if the value is wrong (too small), what buffer is allocated or indexed, and what write immediately follows? Document the full path: `attacker input → arithmetic → allocation/index → write target`.
 
+9. **Error-Path Memory Safety** (for every function that allocates memory or holds a pointer)
+   - **Enumerate all exit points**: list every `return`, `goto`, `break`, or exception path. For each, verify that every allocation made BEFORE that exit is freed exactly once on that path.
+   - **Use-after-free pattern**: does any code after a `free(p)` / `curl_free(p)` / `Curl_safefree(p)` dereference `p`? Check: error handlers, retry loops, fallback branches that run after cleanup.
+   - **Double-free pattern**: can two code paths both reach `free(p)` for the same pointer? Common in cleanup functions that call sub-cleaners which also free shared state.
+   - **Dangling reference on reallocate**: `realloc(p, n)` may move the buffer — are there other pointers (cached offsets, substring pointers, iterator cursors) that still point into the OLD location?
+   - **Cleanup ordering**: if function X frees A then B, and B's destructor references A, is A freed too early? Reverse-dependency order matters.
+   - **NULL after free check**: after freeing, is the pointer zeroed? If not, a later NULL-check guard (`if (p)`) will pass on the dangling value and proceed unsafely.
+   - **Impact trace**: document the exact path from `free(p)` to the next dereference of `p`, naming the variable, the line of free, and the line of use.
+
 8. **Recursive Call Analysis** (for every function that calls itself directly or transitively)
    - **Enumerate ALL recursive call sites independently**: walk every branch of the function and list each site where recursion occurs. A function parsing tokens may recurse on `*`, on `[`, on `(`, and on nested calls — each is a separate entry. Do NOT stop after finding the first recursive path.
    - **Per-path depth guard**: does each recursive call site have its OWN depth check before recursing? A depth limit at function entry is bypassed by any branch that recurses without re-entering through that limit. Check: can a crafted input reach a recursive call site while the guard variable is stale or skipped?

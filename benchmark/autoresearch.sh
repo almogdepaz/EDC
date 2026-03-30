@@ -157,14 +157,21 @@ Be thorough. Analyze every buffer operation, every length check, every pointer o
     local t0
     t0=$(date +%s)
 
-    (cd "$cve_dir" && timeout 1800 claude -p "$prompt" \
+    # 10min watchdog (macOS has no `timeout`)
+    (cd "$cve_dir" && claude -p "$prompt" \
         --plugin-dir "$REPO_ROOT/plugins/edc" \
         --allowedTools "Read Grep Glob Write Bash Skill" \
         --max-turns 50 \
         --model "$MODEL" \
         --output-format text \
         --dangerously-skip-permissions) \
-        > "$out_dir/claude-output.txt" 2>&1 || true
+        > "$out_dir/claude-output.txt" 2>&1 &
+    local claude_pid=$!
+    ( sleep 600 && kill "$claude_pid" 2>/dev/null ) &
+    local watchdog=$!
+    wait "$claude_pid" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
 
     local dur=$(( $(date +%s) - t0 ))
 
@@ -185,9 +192,9 @@ Be thorough. Analyze every buffer operation, every length check, every pointer o
 
 calc_score() {
     local results_file="$1"
-    python3 -c "
-import sys
-lines = open('$results_file').read().strip().split('\n')
+    EDC_SCORE_FILE="$results_file" python3 -c "
+import os, sys
+lines = open(os.environ['EDC_SCORE_FILE']).read().strip().split('\n')
 if len(lines) <= 1: print('0.000'); sys.exit()
 total = len(lines) - 1
 exact  = sum(1 for l in lines[1:] if '\texact\t'   in l)
@@ -327,7 +334,7 @@ PROMPT_BODY
 
     local agent_out
     agent_out=$(cd "$REPO_ROOT" && claude -p "$(cat "$prompt_file")" \
-        --allowedTools "Read Edit Write Grep Glob" \
+        --allowedTools "Read(plugins/edc/skills/*) Edit(plugins/edc/skills/*)" \
         --max-turns 15 \
         --model "$MODEL" \
         --output-format text \

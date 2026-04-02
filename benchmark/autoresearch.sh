@@ -105,8 +105,9 @@ log_hash() {
 # ── CVE analysis ─────────────────────────────────────────────────────────────
 
 ensure_curl_repo() {
-    if [ ! -d "$CURL_REPO/.git" ]; then
-        log "Cloning shared curl repo..."
+    if ! git -C "$CURL_REPO" rev-parse HEAD >/dev/null 2>&1; then
+        log "Curl repo missing or corrupted — cloning..."
+        rm -rf "$CURL_REPO"
         git clone --quiet https://github.com/curl/curl.git "$CURL_REPO"
     fi
 }
@@ -125,13 +126,18 @@ run_cve() {
     local cve_dir="$WORK_DIR/$cve_id"
     local out_dir="$cve_dir/.context"
 
-    mkdir -p "$(dirname "$cve_dir")"
-    [ ! -d "$cve_dir/.git" ] && git clone --quiet "$CURL_REPO" "$cve_dir"
-
-    git -C "$cve_dir" checkout --quiet "${fix_commit}~1" 2>/dev/null || {
-        log "  SKIP: cannot checkout ${fix_commit}~1"
-        return 1
-    }
+    # git worktree: instant, no copy, shares objects with curl-shared
+    if [ ! -d "$cve_dir" ]; then
+        git -C "$CURL_REPO" worktree add --quiet --detach "$cve_dir" "${fix_commit}~1" 2>/dev/null || {
+            log "  SKIP: cannot create worktree for ${fix_commit}~1"
+            return 1
+        }
+    else
+        git -C "$cve_dir" checkout --quiet --detach "${fix_commit}~1" 2>/dev/null || {
+            log "  SKIP: cannot checkout ${fix_commit}~1"
+            return 1
+        }
+    fi
 
     rm -rf "$out_dir" && mkdir -p "$out_dir"
 
@@ -214,7 +220,13 @@ run_benchmark() {
     echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$results_file"
 
     local bench_dir="$WORK_DIR/bench-${label}"
-    rm -rf "$bench_dir"
+    # Clean up worktrees before removing dir
+    if [ -d "$bench_dir" ]; then
+        for wt in "$bench_dir"/CVE-*; do
+            [ -d "$wt" ] && git -C "$CURL_REPO" worktree remove --force "$wt" 2>/dev/null || true
+        done
+        rm -rf "$bench_dir"
+    fi
     mkdir -p "$bench_dir"
 
     log "Benchmarking [$label] — ${#cves[@]} CVEs in parallel..."

@@ -102,7 +102,9 @@ log_hash() {
     printf '%s\t%s\t%s\t%s\n' "$h" "$score" "$delta" "$heuristic" >> "$HASHES_FILE"
 }
 
-# ── CVE analysis ─────────────────────────────────────────────────────────────
+# ── CVE source cache + analysis ──────────────────────────────────────────────
+
+CVE_CACHE="$WORK_DIR/cve-cache"
 
 ensure_curl_repo() {
     if ! git -C "$CURL_REPO" rev-parse HEAD >/dev/null 2>&1; then
@@ -116,6 +118,55 @@ get_cve_info() {
     python3 "$SCRIPT_DIR/parse_gt.py" "$SCRIPT_DIR/curl/ground-truth.md" | grep "^$1|"
 }
 
+# Build source cache once — checkout vulnerable commit, cat affected files
+cache_cve_sources() {
+    mkdir -p "$CVE_CACHE"
+    local tmp_worktree="$WORK_DIR/_cache_worktree"
+
+    for cve in "${ALL_CVES[@]}"; do
+        local cache_file="$CVE_CACHE/${cve}.txt"
+        [ -s "$cache_file" ] && continue
+
+        local cve_info
+        cve_info=$(get_cve_info "$cve") || continue
+        IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
+
+        # Worktree for checkout, reuse across CVEs
+        if [ ! -d "$tmp_worktree" ]; then
+            git -C "$CURL_REPO" worktree add --quiet --detach "$tmp_worktree" "${fix_commit}~1" 2>/dev/null || continue
+        else
+            git -C "$tmp_worktree" checkout --quiet --detach "${fix_commit}~1" 2>/dev/null || continue
+        fi
+
+        # Cat affected files into cache
+        {
+            echo "# CVE: $cve_id"
+            echo "# Category: $category | Severity: $severity"
+            echo "# Affected files: $affected_files"
+            echo ""
+            IFS=',' read -ra files <<< "$affected_files"
+            for f in "${files[@]}"; do
+                f="$(echo "$f" | xargs)"
+                local fpath="$tmp_worktree/$f"
+                if [ -f "$fpath" ]; then
+                    echo "=== FILE: $f ==="
+                    cat "$fpath"
+                    echo ""
+                    echo "=== END: $f ==="
+                    echo ""
+                fi
+            done
+        } > "$cache_file"
+
+        log "  Cached $cve_id ($(wc -l < "$cache_file") lines)"
+    done
+
+    # Cleanup worktree
+    if [ -d "$tmp_worktree" ]; then
+        git -C "$CURL_REPO" worktree remove --force "$tmp_worktree" 2>/dev/null || true
+    fi
+}
+
 run_cve() {
     local cve="$1"
     local cve_info
@@ -123,33 +174,35 @@ run_cve() {
 
     IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
 
-    local cve_dir="$WORK_DIR/$cve_id"
-    local out_dir="$cve_dir/.context"
+    local cache_file="$CVE_CACHE/${cve_id}.txt"
+    [ ! -s "$cache_file" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
 
-    # git worktree: instant, no copy, shares objects with curl-shared
-    if [ ! -d "$cve_dir" ]; then
-        git -C "$CURL_REPO" worktree add --quiet --detach "$cve_dir" "${fix_commit}~1" 2>/dev/null || {
-            log "  SKIP: cannot create worktree for ${fix_commit}~1"
-            return 1
-        }
-    else
-        git -C "$cve_dir" checkout --quiet --detach "${fix_commit}~1" 2>/dev/null || {
-            log "  SKIP: cannot checkout ${fix_commit}~1"
-            return 1
-        }
-    fi
-
+    local out_dir="$WORK_DIR/bench-out/$cve_id"
     rm -rf "$out_dir" && mkdir -p "$out_dir"
 
-    local file_list=""
-    IFS=',' read -ra files <<< "$affected_files"
-    for f in "${files[@]}"; do file_list+=" $(echo "$f" | xargs)"; done
+    # Read current skill methodology
+    local skill_content=""
+    for sf in "${SKILL_FILES[@]}"; do
+        skill_content+="$(cat "$REPO_ROOT/$sf" 2>/dev/null)"
+        skill_content+=$'\n\n'
+    done
 
-    local prompt="Run the edc:edc-context skill on ONLY these files:$file_list
+    # Build prompt: skill methodology + source code inline (no file I/O needed)
+    local prompt_file
+    prompt_file=$(mktemp /tmp/edc-bench-XXXXXXXX)
+    cat > "$prompt_file" << PROMPT_EOF
+You are a security vulnerability analyst. Apply the following analysis methodology
+to the source code below and find ALL security vulnerabilities.
 
-Security-focused analysis. Write the complete analysis to .context/full-context.md
+=== ANALYSIS METHODOLOGY ===
+$skill_content
+=== END METHODOLOGY ===
 
-Then create .context/issues.md listing ALL security issues found, with:
+=== SOURCE CODE TO ANALYZE ===
+$(cat "$cache_file")
+=== END SOURCE CODE ===
+
+Write your findings to .context/issues.md with this format for each issue:
 - issue title
 - severity (critical/high/medium/low)
 - category (buffer overflow, use-after-free, logic error, etc.)
@@ -157,36 +210,45 @@ Then create .context/issues.md listing ALL security issues found, with:
 - description of the bug
 - evidence (the specific code pattern)
 
-Be thorough. Analyze every buffer operation, every length check, every pointer operation, every state transition."
+Apply the methodology rigorously. Check every buffer operation, length calculation,
+pointer lifecycle, state transition, and error path in the code above.
+PROMPT_EOF
 
     log "  [$cve_id] analyzing ($category)..."
     local t0
     t0=$(date +%s)
 
-    # 10min watchdog (macOS has no `timeout`)
-    (cd "$cve_dir" && claude -p "$prompt" \
-        --plugin-dir "$REPO_ROOT/plugins/edc" \
-        --allowedTools "Read Grep Glob Write Bash Skill" \
-        --max-turns 50 \
+    # 5min watchdog — code is already in prompt, no file I/O needed
+    (cd "$out_dir" && claude -p "$(cat "$prompt_file")" \
+        --allowedTools "Write" \
+        --max-turns 5 \
         --model "$MODEL" \
         --output-format text \
         --dangerously-skip-permissions) \
         > "$out_dir/claude-output.txt" 2>&1 &
     local claude_pid=$!
-    ( sleep 600 && kill "$claude_pid" 2>/dev/null ) &
+    ( sleep 300 && kill "$claude_pid" 2>/dev/null ) &
     local watchdog=$!
     wait "$claude_pid" 2>/dev/null || true
     kill "$watchdog" 2>/dev/null || true
     wait "$watchdog" 2>/dev/null || true
 
+    rm -f "$prompt_file"
+
     local dur=$(( $(date +%s) - t0 ))
 
-    [ ! -f "$out_dir/issues.md" ] && cp "$out_dir/claude-output.txt" "$out_dir/issues.md"
+    [ ! -f "$out_dir/.context/issues.md" ] && {
+        mkdir -p "$out_dir/.context"
+        cp "$out_dir/claude-output.txt" "$out_dir/.context/issues.md" 2>/dev/null || true
+    }
+
+    local issues_file="$out_dir/.context/issues.md"
+    [ ! -f "$issues_file" ] && issues_file="$out_dir/claude-output.txt"
 
     log "  [$cve_id] done in ${dur}s"
 
     python3 "$SCRIPT_DIR/score.py" \
-        --issues "$out_dir/issues.md" \
+        --issues "$issues_file" \
         --cve "$cve_id" \
         --bug-pattern "$bug_pattern" \
         --category "$category" \
@@ -220,13 +282,7 @@ run_benchmark() {
     echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$results_file"
 
     local bench_dir="$WORK_DIR/bench-${label}"
-    # Clean up worktrees before removing dir
-    if [ -d "$bench_dir" ]; then
-        for wt in "$bench_dir"/CVE-*; do
-            [ -d "$wt" ] && git -C "$CURL_REPO" worktree remove --force "$wt" 2>/dev/null || true
-        done
-        rm -rf "$bench_dir"
-    fi
+    rm -rf "$bench_dir"
     mkdir -p "$bench_dir"
 
     log "Benchmarking [$label] — ${#cves[@]} CVEs in parallel..."
@@ -409,6 +465,9 @@ main() {
 
     mkdir -p "$WORK_DIR"
     ensure_curl_repo
+
+    log "Caching CVE source code..."
+    cache_cve_sources
 
     [ ! -f "$HASHES_FILE" ] && printf 'hash\tscore\tdelta\theuristic\n' > "$HASHES_FILE"
     [ ! -f "$RESULTS_LOG" ] && printf 'timestamp\titeration\tscore\tdelta\tstatus\theuristic\n' > "$RESULTS_LOG"

@@ -81,6 +81,42 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 
 ---
 
+## Phase 0.5: C Memory Safety Fast-Path (run BEFORE deep analysis)
+
+For C/C++ codebases, run these targeted grep scans immediately. Flag any match as a candidate finding — do NOT wait for deep context. Each scan takes seconds and catches the majority of critical memory safety bugs.
+
+**Scan 1 — Fixed destination + peer-controlled write size (heap/stack buffer overflow):**
+```bash
+grep -n "memcpy\|memmove\|memset\|strcpy\|strncpy\|sprintf\|snprintf" <file>
+```
+For every hit: is the *destination* a fixed-size stack array (`char buf[N]`) or a heap allocation of known size? Is the *length* argument (third arg to memcpy, format-string expansion to sprintf) bounded to that size on ALL paths, including when the peer sends a maximum-size value? If not → REPORT as buffer overflow.
+
+**Scan 2 — Recursive functions without per-call-site depth guard (stack overflow):**
+```bash
+grep -n "recurse\|keyword_filter\|glob\|match\|parse" <file>  # adjust to function names
+```
+For each recursive function: enumerate EVERY call site inside the function body (there may be multiple — one for `*`, one for `[`, one for `(`, etc.). Check that EACH call site has its own depth check immediately before the recursive call, not just a single check at function entry. A single entry-point guard is bypassed if any branch recurses without re-entering through it. If any call site lacks a per-site guard → REPORT as unbounded recursion / stack overflow.
+
+**Scan 3 — Use-after-free and double-free:**
+```bash
+grep -n "free\|curl_free\|Curl_safefree\|safefree" <file>
+```
+For each `free(p)`: scan the next 30 lines for any read/write through `p` (dereference, pass to function, arithmetic). Also check: is `p` NULLed after free? If not, does any later `if (p)` guard pass on the dangling value? Check cleanup/error-handler paths for double-free: if two paths both call `free(p)` for the same pointer → REPORT.
+
+**Scan 4 — Peer-controlled allocation size (integer overflow into malloc):**
+```bash
+grep -n "malloc\|realloc\|calloc\|alloc" <file>
+```
+For each allocation: is the size argument computed from peer-supplied data (e.g., `Content-Length`, protocol field, user input)? Is there an overflow/underflow check on the arithmetic BEFORE the allocation? `malloc(a + b)` where both are attacker-controlled wraps to a small value → tiny allocation → overflow on write → REPORT.
+
+**Scan 5 — Signed-to-unsigned conversion used as size (signedness confusion):**
+```bash
+grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|int.*len\|int.*size\|int.*count\|short.*len" <file>
+```
+For each `int` or `short` variable whose value comes from peer data and whose value feeds into `malloc`/`memcpy`/array subscript: is there an `if (n < 0)` or `if (n <= 0)` guard BEFORE the size use? A negative `int len` passed to `malloc(len)` silently converts to `SIZE_MAX - |len| + 1` → huge allocation that appears to succeed → subsequent write of real data overflows committed memory. Pattern: `int n = ntohs(hdr->len); ... malloc(n)` with no negativity check → REPORT as signedness confusion.
+
+---
+
 ## Phase 1: Changed Code Analysis
 
 For each changed file:

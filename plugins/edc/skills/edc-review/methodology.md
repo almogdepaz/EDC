@@ -111,9 +111,9 @@ For each allocation: is the size argument computed from peer-supplied data (e.g.
 
 **Scan 5 — Signed-to-unsigned conversion used as size (signedness confusion):**
 ```bash
-grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|int.*len\|int.*size\|int.*count\|short.*len" <file>
+grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
 ```
-For each `int` or `short` variable whose value comes from peer data and whose value feeds into `malloc`/`memcpy`/array subscript: is there an `if (n < 0)` or `if (n <= 0)` guard BEFORE the size use? A negative `int len` passed to `malloc(len)` silently converts to `SIZE_MAX - |len| + 1` → huge allocation that appears to succeed → subsequent write of real data overflows committed memory. Pattern: `int n = ntohs(hdr->len); ... malloc(n)` with no negativity check → REPORT as signedness confusion.
+For each variable assigned from these functions: (1) is the variable declared `int` or `short` (signed)? (2) is it used as a size/length argument to `malloc`/`memcpy`/array subscript without an `if (n <= 0)` guard immediately before that use? A negative `int` passed as `malloc(n)` silently widens to a huge `size_t` → REPORT as signedness confusion. Pattern to confirm: `int n = ntohs(hdr->len); malloc(n)` with no negativity check between assignment and use.
 
 ---
 

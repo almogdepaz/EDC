@@ -218,7 +218,7 @@ PROMPT_EOF
     local t0
     t0=$(date +%s)
 
-    # 5min watchdog — code is already in prompt, no file I/O needed
+    # 12min watchdog — thinking time dominates, no file I/O
     (cd "$out_dir" && claude -p "$(cat "$prompt_file")" \
         --allowedTools "Write" \
         --max-turns 5 \
@@ -227,7 +227,7 @@ PROMPT_EOF
         --dangerously-skip-permissions) \
         > "$out_dir/claude-output.txt" 2>&1 &
     local claude_pid=$!
-    ( sleep 300 && kill "$claude_pid" 2>/dev/null ) &
+    ( sleep 720 && kill "$claude_pid" 2>/dev/null ) &
     local watchdog=$!
     wait "$claude_pid" 2>/dev/null || true
     kill "$watchdog" 2>/dev/null || true

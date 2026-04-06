@@ -98,5 +98,5 @@ The `fix_commit` is the commit that fixed the vulnerability. The vulnerable code
 - **severity:** medium
 - **description:** FTP wildcard stack overflow. Due to a flaw in the FTP wildcard matching function, a pattern containing `[` could cause unbounded recursion, leading to a stack overflow and potential crash.
 - **fix_commit:** `cb5accab9e`
-- **affected_file:** lib/ftp-wildcard.c
+- **affected_file:** lib/curl_fnmatch.c
 - **bug_pattern:** unbounded recursion in bracket pattern matching without depth limit

@@ -384,8 +384,9 @@ apply_change() {
 
     cat > "$prompt_file" << 'PROMPT_HEADER'
 You are iteratively improving LLM security analysis skills through experimentation.
+The goal: improve recall on C security CVEs (buffer overflows, use-after-free, integer underflow, protocol injection, OOB reads).
 
-Read the current skill files to understand what they contain:
+First, read the current skill files to understand what they already contain:
 PROMPT_HEADER
 
     for f in "${SKILL_FILES[@]}"; do
@@ -395,50 +396,71 @@ PROMPT_HEADER
     cat >> "$prompt_file" << PROMPT_BODY
 
 BASELINE SCORE: $baseline_score / 1.0
-(exact=1.0pt, partial=0.5pt, missed=0pt, averaged across CVEs)
+(exact=1.0pt, partial=0.5pt, missed=0pt — measured on the hard CVEs we currently miss)
 
 RECENT EXPERIMENT HISTORY (what was tried, what score it got):
 $history
 
-LAST CVE BREAKDOWN:
+LAST CVE BREAKDOWN (what was found vs missed):
 $last_breakdown
 
 ALREADY-TRIED HASHES — do NOT produce a file state matching any of these:
 $tried
 
-YOUR TASK: Make ONE focused change to improve security vulnerability detection.
-Read the skill files first, then edit them. You can:
+─────────────────────────────────────────────────────────────────────
+PLANNED EXPERIMENTS — pick ONE not yet tried and implement it exactly.
+These are prioritized — try them in order if none have been tried yet.
+─────────────────────────────────────────────────────────────────────
 
-ADDITIONS — new analysis techniques:
-- Integer arithmetic: underflow/overflow/wrap in size calcs that feed memcpy/malloc
-- Cross-function data flow: trace a value from assignment to every consumer
-- Error path analysis: when a sub-call fails, is cleanup correct? dangling state?
-- Allocation/free pairing: every malloc has exactly one free on every code path
-- Pointer arithmetic: offset + length vs buffer bounds
-- Time-of-check vs time-of-use: value valid at check, stale at use
-- Null pointer propagation: what if allocation or lookup returns null?
-- Protocol state confusion: out-of-order or repeated protocol messages
-- Signedness mismatch: signed/unsigned comparison, signed used as size/index
-- String handling: off-by-one in null terminator, unbounded copy, format strings
+EXPERIMENT A — Sharp-Edges C Checklist (add to patterns.md)
+Enumerate dangerous C APIs and require per-call-site audit:
+- memcpy/memmove: is `n` bounded by dest size on ALL paths?
+- strcpy/strcat/sprintf: flag unconditionally as dangerous
+- realloc: is return value checked before freeing old pointer?
+- malloc(a * b): is overflow in `a * b` possible?
+- int/short used as length/index fed by peer-controlled data: negativity check present?
 
-SUBTRACTIONS — things that may waste tokens without helping:
-- Generic frameworks (5-Whys, rationale tables) that don't guide line-by-line analysis
-- Vague instructions ("be thorough") that don't specify what to look for
-- Output format requirements that constrain rather than guide
-- Redundant reminders repeated across sections
+EXPERIMENT B — Integer Type Tracking (add to patterns.md)
+For every size/length/count variable: track declared type, source (peer-controlled vs local),
+and every arithmetic op before it reaches malloc/memcpy/array index. Flag:
+- signed used where unsigned expected
+- narrowing casts (long → int → short)
+- subtraction that could underflow (unsigned a - b where b > a)
+- multiplication that could overflow before reaching malloc
 
-REWORDING:
-- Replace abstract guidance with specific code patterns to look for
-- Add concrete examples of what the vulnerability looks like in code
-- Specify exact questions to ask at each function boundary
+EXPERIMENT C — Subagent for Complex Functions (add to SKILL.md or methodology.md)
+For functions >100 LOC or containing: state machines, multi-entry switch/case, recursive
+patterns, or protocol parsing — instruct the reviewer to perform a dedicated focused pass
+on that function alone BEFORE continuing with the rest of the file. This prevents timeout
+on complex targets where the agent runs out of context before reaching the output step.
 
-RESTRUCTURING:
-- Move highest-signal checks to top
-- Group by how bugs manifest in code vs by vulnerability class
-- Collapse multiple weak heuristics into one strong one
+EXPERIMENT D — Variant Analysis Pass (add to methodology.md)
+After finding ANY vulnerability: grep the file for the same pattern class.
+One unchecked memcpy → search all memcpy calls with peer-controlled n.
+One unsigned underflow → find all arithmetic feeding malloc/memcpy.
+Explicitly document whether variants exist or are ruled out.
 
-After making your change, output exactly one line:
-HEURISTIC: <one sentence: what you changed and why you think it will help>
+EXPERIMENT E — Explicit Trust Boundary + Taint Trace (add to methodology.md)
+For each function receiving network/peer/user input: label it a taint source.
+Trace every tainted value to every sink (alloc size, copy length, array index, branch).
+Document where sanitization occurs or is absent. Flag unsanitized paths.
+
+EXPERIMENT F — Fault Injection Thinking (add to methodology.md)
+For each function: ask — what if a sub-call fails/hangs/returns garbage? what if input
+is malicious/empty/huge? what if two concurrent callers hit this? Flag missing cleanup
+on error paths, dangling state after partial failure, missing NULL checks after alloc.
+
+EXPERIMENT G — TRAIL Threat Modeling (add to adversarial.md)
+For each entrypoint: identify trust assumptions (what must be true about inputs).
+Ask "what if wrong?" for each. Trace cascading impact of each violated assumption.
+
+─────────────────────────────────────────────────────────────────────
+
+YOUR TASK:
+1. Read the skill files listed above.
+2. Pick the first experiment from A–G not already reflected in the skill files.
+3. Implement it — make ONE focused, concrete addition. Do not combine multiple experiments.
+4. Output exactly one line: HEURISTIC: <what you added and which experiment it was>
 
 Only edit files in: ${SKILL_FILES[*]}
 PROMPT_BODY

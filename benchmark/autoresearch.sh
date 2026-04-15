@@ -480,7 +480,7 @@ print_status() {
 
 main() {
     local recompute_baseline=false
-    local max_iterations=0
+    local max_iterations=-1   # -1 = unlimited, 0 = baseline only, N = run N iters
 
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -530,7 +530,16 @@ main() {
         log_hash "$(compute_hash)" "$baseline" "+0.000" "baseline"
     fi
 
+    # -n 0 means baseline only — exit after setup
+    if [ "$max_iterations" -eq 0 ]; then
+        log "Baseline ready: $baseline. Exiting (use -n N to run N experiment iterations)."
+        rm -f "$PIDFILE"
+        exit 0
+    fi
+
     local iteration=0
+    local consecutive_nochange=0
+    local max_consecutive_nochange=5
     [ "$max_iterations" -gt 0 ] && log "Max iterations: $max_iterations" || log "Running until stopped"
 
     while ! should_stop; do
@@ -548,11 +557,17 @@ main() {
         heuristic=$(apply_change "$iteration")
         log "Heuristic: $heuristic"
 
-        # No changes → skip
+        # No changes → skip, but bail if stuck
         if git -C "$REPO_ROOT" diff --quiet -- "${SKILL_FILES[@]}"; then
-            log "No changes — skipping"
+            consecutive_nochange=$(( consecutive_nochange + 1 ))
+            log "No changes — skipping ($consecutive_nochange/$max_consecutive_nochange)"
+            if [ "$consecutive_nochange" -ge "$max_consecutive_nochange" ]; then
+                log "Too many consecutive no-ops — stopping. Agent is stuck."
+                break
+            fi
             continue
         fi
+        consecutive_nochange=0
 
         # Hash dedup
         local new_hash

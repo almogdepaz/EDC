@@ -34,6 +34,7 @@ WORK_DIR="${EDC_BENCH_WORKDIR:-/private/tmp/edc-bench}"
 CURL_REPO="$WORK_DIR/curl-shared"
 
 BASELINE_FILE="$SCRIPT_DIR/baseline-score.txt"
+REGRESSION_FLOOR_FILE="$SCRIPT_DIR/regression-floor.txt"
 HASHES_FILE="$SCRIPT_DIR/tried-hashes.tsv"
 RESULTS_LOG="$SCRIPT_DIR/autoresearch-log.tsv"
 LOGFILE="$SCRIPT_DIR/autoresearch-output.log"
@@ -47,20 +48,23 @@ SKILL_FILES=(
     "plugins/edc/skills/edc-review/adversarial.md"
 )
 
-# 5 CVEs for fast iteration (~15min wall time in parallel)
+# Hard CVEs — missed or partial in baseline. Experiments target these.
 FAST_CVES=(
-    "CVE-2023-38545"   # heap-buffer-overflow / state machine
-    "CVE-2020-8285"    # stack-overflow / recursion
-    "CVE-2019-3822"    # stack-buffer-overflow / integer underflow
-    "CVE-2021-22945"   # use-after-free / double-free
-    "CVE-2018-0500"    # heap-overflow / wrong malloc size
+    "CVE-2023-38545"    # heap-buffer-overflow / SOCKS5 state machine (times out)
+    "CVE-2021-22947"    # protocol-injection (times out)
+    "CVE-2018-1000301"  # out-of-bounds-read / RTSP (wrong finding)
+    "CVE-2020-8285"     # stack-overflow / recursion (partial — wrong trigger)
+    "CVE-2020-8177"     # local-file-overwrite (partial — wrong root cause)
 )
 
-# All 11 CVEs for full validation
-ALL_CVES=(
-    "CVE-2023-38545" "CVE-2016-8617" "CVE-2021-22945" "CVE-2019-3822"
-    "CVE-2018-0500" "CVE-2020-8177" "CVE-2021-22947" "CVE-2018-16890"
-    "CVE-2020-8285" "CVE-2022-27776" "CVE-2018-1000301"
+# Easy CVEs — already found exactly. Run only for regression check after fast improves.
+REGRESSION_CVES=(
+    "CVE-2016-8617"   # out-of-bounds-write / integer overflow
+    "CVE-2021-22945"  # use-after-free / double-free
+    "CVE-2019-3822"   # stack-buffer-overflow / integer underflow
+    "CVE-2018-0500"   # heap-buffer-overflow / wrong malloc size
+    "CVE-2018-16890"  # out-of-bounds-read / NTLM
+    "CVE-2022-27776"  # credential-leak
 )
 
 MODEL="sonnet"
@@ -517,16 +521,23 @@ main() {
     [ ! -f "$RESULTS_LOG" ] && printf 'timestamp\titeration\tscore\tdelta\tstatus\theuristic\n' > "$RESULTS_LOG"
 
     # Baseline
-    local baseline
-    if [ -f "$BASELINE_FILE" ] && ! $recompute_baseline; then
+    local baseline regression_floor
+    if [ -f "$BASELINE_FILE" ] && [ -f "$REGRESSION_FLOOR_FILE" ] && ! $recompute_baseline; then
         baseline=$(cat "$BASELINE_FILE")
-        log "Loaded baseline: $baseline"
+        regression_floor=$(cat "$REGRESSION_FLOOR_FILE")
+        log "Loaded baseline: $baseline  regression floor: $regression_floor"
     else
-        log "Computing baseline on ${#FAST_CVES[@]} fast CVEs..."
+        log "Computing baseline on ${#FAST_CVES[@]} hard CVEs..."
         run_benchmark "baseline" "${FAST_CVES[@]}"
         baseline=$(cat "$SCRIPT_DIR/.score-baseline.tmp")
         echo "$baseline" > "$BASELINE_FILE"
-        log "Baseline: $baseline"
+
+        log "Computing regression floor on ${#REGRESSION_CVES[@]} easy CVEs..."
+        run_benchmark "baseline-regression" "${REGRESSION_CVES[@]}"
+        regression_floor=$(cat "$SCRIPT_DIR/.score-baseline-regression.tmp")
+        echo "$regression_floor" > "$REGRESSION_FLOOR_FILE"
+
+        log "Baseline: $baseline  Regression floor: $regression_floor"
         log_hash "$(compute_hash)" "$baseline" "+0.000" "baseline"
     fi
 
@@ -548,7 +559,7 @@ main() {
 
         log ""
         log "══════════════════════════════════════"
-        log "Iteration $iteration  (baseline=$baseline)"
+        log "Iteration $iteration  (fast_baseline=$baseline  reg_floor=$regression_floor)"
         log "══════════════════════════════════════"
 
         # Agent proposes a change
@@ -596,23 +607,21 @@ main() {
         new_score="$fast_score"
 
         if python3 -c "exit(0 if $fast_score > $old_baseline else 1)"; then
-            # Phase 2: full validation (all 11 CVEs in parallel)
-            log "Fast improved → full validation on ${#ALL_CVES[@]} CVEs..."
-            run_benchmark "iter-${iteration}-full" "${ALL_CVES[@]}"
-            local full_score
-            full_score=$(cat "$SCRIPT_DIR/.score-iter-${iteration}-full.tmp")
-            local full_delta
-            full_delta=$(python3 -c "print(f'{$full_score - $old_baseline:+.3f}')")
-            log "Full: $full_score ($full_delta)"
-            new_score="$full_score"
+            # Phase 2: regression check — only the easy CVEs we already find
+            log "Fast improved → regression check on ${#REGRESSION_CVES[@]} easy CVEs..."
+            run_benchmark "iter-${iteration}-regression" "${REGRESSION_CVES[@]}"
+            local reg_score
+            reg_score=$(cat "$SCRIPT_DIR/.score-iter-${iteration}-regression.tmp")
+            log "Regression: $reg_score (floor=$regression_floor)"
+            new_score="$fast_score"
 
-            if python3 -c "exit(0 if $full_score > $old_baseline else 1)"; then
+            if python3 -c "exit(0 if $reg_score >= $regression_floor else 1)"; then
                 status="keep"
-                baseline="$full_score"
+                baseline="$fast_score"
                 echo "$baseline" > "$BASELINE_FILE"
                 log "KEEP — $old_baseline → $baseline — $heuristic"
             else
-                log "Full validation failed — discarding"
+                log "Regression detected ($reg_score < $regression_floor) — discarding"
                 git -C "$REPO_ROOT" checkout HEAD~1 -- "${SKILL_FILES[@]}"
                 git -C "$REPO_ROOT" reset --soft HEAD~1 --quiet
             fi

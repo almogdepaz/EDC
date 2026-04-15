@@ -29,10 +29,13 @@ Run these in order on any codebase:
 
 ### Hooks (Claude Code only)
 
-The plugin installs two hooks that run automatically:
+The plugin installs two hooks that run automatically, designed to keep context overhead minimal:
 
-- **SessionStart** — on every new session, surfaces any existing `.context/` files so the agent starts context-aware
-- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, injects relevant module context so the agent never edits blind
+- **SessionStart** — loads `context.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
+
+- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/.meta.json`, then injects only that module's `.context/{module}.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
+
+The result: the agent always has the architecture overview, gets deep module context exactly when it needs it, and never loads the full project context.
 
 ## Install
 

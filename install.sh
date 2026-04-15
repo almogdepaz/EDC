@@ -58,7 +58,8 @@ case "$AGENT" in
     done
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"
+    download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
+    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/"
     ;;
 
   codex)

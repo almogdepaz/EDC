@@ -32,69 +32,107 @@
 
 ---
 
-## Planned Improvements (from research)
+## Planned Improvements
 
-### 1. Fault Injection Thinking
-**Add to:** edc-review methodology.md, Phase 1 step 5
+> **Scope note:** benchmark tunes `edc-review` only. Context is built once via `edc-context` and frozen.
+> Ideas marked **[DEFERRED]** target `edc-context` or `edc-audit` — skip for benchmark, revisit later.
 
-Systematic "what if" failure prompts for each changed function:
-- What if this external dependency fails/hangs/returns garbage?
-- What if this input is malicious/malformed/empty/huge?
-- What if two concurrent callers hit this simultaneously?
-- What if the filesystem is full/readonly/slow?
-- What if the network drops mid-operation?
-- What if this runs on a different platform/timezone/locale?
+### edc-review experiments (benchmark targets)
 
-**Status:** [ ] not started
+#### 1. Fault Injection Thinking
+**Add to:** edc-review methodology.md
 
-### 2. ATAM Trade-Off Analysis
-**Add to:** edc-context SKILL.md, Phase 3 new section 5
-
-For each major design decision: what does it optimize, what does it sacrifice, where does the trade-off become painful, what triggers revisiting it.
+Systematic "what if" prompts per function: external dep fails, input is malicious/empty/huge, two concurrent callers, filesystem full, network drops mid-op.
 
 **Status:** [ ] not started
 
-### 3. Unenforced Invariant Detection
-**Add to:** edc-context SKILL.md, Phase 2 section 5.1
+#### 5. Security Checklist as Structured Prompts
+**Add to:** edc-review patterns.md
 
-Find invariants CLAIMED in comments/docstrings/names but NOT enforced by code. "Comment says thread-safe but no locking."
-
-**Status:** [ ] not started
-
-### 4. Cognitive Complexity Flagging
-**Add to:** edc-audit.md, new Step 9
-
-Beyond LOC: nesting depth >3, >5 control flow branches, multiple responsibilities, boolean params, long param lists, god objects.
+Mandatory pass/fail checklist for C: bounds on every memcpy/strcpy, return value checked on every alloc, no signed integer used as size/index, every free'd pointer NULLed, every realloc return checked.
 
 **Status:** [ ] not started
 
-### 5. Security Checklist as Structured Prompts
-**Add to:** edc-review patterns.md, new section
+#### 7. TRAIL Threat Modeling
+**Add to:** edc-review adversarial.md
 
-Mandatory pass/fail checklist: no hardcoded secrets, input validation, return value checks, auth on endpoints, no injection paths, no sensitive data in logs, path validation, constant-time crypto, timeouts, rate limiting.
-
-**Status:** [ ] not started
-
-### 6. Manual Taint Tracing
-**Add to:** edc-context SKILL.md, Phase 2 section 5.2
-
-Trace untrusted input source → transformations → sink. Note where sanitization happens or doesn't.
+Structured threat boundary tracing: identify trust assumptions per entrypoint, ask "what if wrong?", trace cascading impact of violated assumptions.
 
 **Status:** [ ] not started
 
-### 7. TRAIL Threat Modeling
-**Add to:** edc-review adversarial.md, new section
+#### 8. Sharp-Edges C Checklist (inspired by TOB `sharp-edges`)
+**Add to:** edc-review patterns.md
 
-Structured threat boundary tracing: identify trust assumptions, ask "what if wrong?", trace cascading impact of violated assumptions.
+Enumerate dangerous C APIs and require per-call-site audit:
+- `memcpy`/`memmove`: is `n` bounded by dest size on ALL paths?
+- `strcpy`/`strcat`/`sprintf`: banned — flag unconditionally
+- `realloc`: is return value checked before freeing old pointer?
+- `malloc(a * b)`: is overflow in `a * b` possible?
+- `int`/`short` used as length/index fed by peer-controlled data: negativity check present?
 
 **Status:** [ ] not started
 
-## Priority
+#### 9. Subagent for Complex Functions (inspired by TOB `audit-context-building`)
+**Add to:** edc-review SKILL.md / methodology.md
 
-**Phase 0** (prerequisite): Benchmark framework — without measurement, skill improvements are vibes
-**Phase 1** (easy, high impact): 1, 5, 4
-**Phase 2** (moderate effort): 3, 6, 2
-**Phase 3** (needs design): 7
+For functions >100 LOC or containing: state machines, multi-entry switch/case, recursive patterns, or protocol parsing — spawn a dedicated sub-analysis pass with a focused prompt on that function alone before continuing. Prevents timeout on complex targets (e.g. SOCKS5 state machine in CVE-2023-38545).
+
+**Status:** [ ] not started
+
+#### 10. Variant Analysis Pass (inspired by TOB `variant-analysis`)
+**Add to:** edc-review methodology.md
+
+After finding any vulnerability: grep the codebase for the same pattern. One unchecked `memcpy` → search for all `memcpy` calls with peer-controlled `n`. One unsigned underflow → find all arithmetic feeding `malloc`/`memcpy`. Document whether variants are present or explicitly ruled out.
+
+**Status:** [ ] not started
+
+#### 11. Dimensional Analysis — Integer Type Tracking (inspired by TOB `dimensional-analysis`)
+**Add to:** edc-review patterns.md
+
+For every size/length/count variable: track its declared type, its source (peer-controlled vs local), and every arithmetic operation applied before it reaches `malloc`/`memcpy`/array index. Flag: signed used where unsigned expected, narrowing casts, subtraction that could underflow, multiplication that could overflow.
+
+**Status:** [ ] not started
+
+#### 12. Explicit Trust Boundary + Taint Trace per Entrypoint
+**Add to:** edc-review methodology.md
+
+For each function that receives network/peer/user input: explicitly label it as a taint source. Trace every tainted value to every sink (alloc size, copy length, array index, branch condition). Document where sanitization occurs or is absent.
+
+**Status:** [ ] not started
+
+---
+
+### Deferred (edc-context / edc-audit — not relevant while context is frozen)
+
+#### 2. ATAM Trade-Off Analysis [DEFERRED]
+**Add to:** edc-context SKILL.md — skip for benchmark
+
+#### 3. Unenforced Invariant Detection [DEFERRED]
+**Add to:** edc-context SKILL.md — skip for benchmark
+
+#### 4. Cognitive Complexity Flagging [DEFERRED]
+**Add to:** edc-audit.md — skip for benchmark
+
+#### 6. Manual Taint Tracing [DEFERRED]
+**Add to:** edc-context SKILL.md — skip for benchmark (taint trace now in #12 for review phase)
+
+---
+
+## Experiment Priority
+
+**Next batch (highest signal for C CVEs):**
+- 8 — sharp-edges C checklist (direct hit on buffer overflow class)
+- 11 — integer type tracking (signedness/underflow CVEs)
+- 9 — subagent for complex functions (fixes CVE-2023-38545 timeout)
+
+**Second batch:**
+- 10 — variant analysis (multiplier effect once any CVE found)
+- 12 — taint trace per entrypoint (protocol parsing CVEs)
+- 5 — security checklist (broad coverage)
+
+**Third batch:**
+- 1 — fault injection thinking
+- 7 — TRAIL threat modeling
 
 ---
 

@@ -41,8 +41,10 @@ PIDFILE="$SCRIPT_DIR/.autoresearch.pid"
 STOPFILE="$SCRIPT_DIR/.autoresearch.stop"
 
 SKILL_FILES=(
-    "plugins/edc/skills/edc-context/SKILL.md"
+    "plugins/edc/skills/edc-review/SKILL.md"
     "plugins/edc/skills/edc-review/methodology.md"
+    "plugins/edc/skills/edc-review/patterns.md"
+    "plugins/edc/skills/edc-review/adversarial.md"
 )
 
 # 5 CVEs for fast iteration (~15min wall time in parallel)
@@ -153,6 +155,67 @@ cache_cve_sources() {
     [ -d "$tmp_worktree" ] && git -C "$CURL_REPO" worktree remove --force "$tmp_worktree" 2>/dev/null || true
 }
 
+# Build and cache architectural context for one CVE (run once, frozen across iterations)
+build_context_for_cve() {
+    local cve="$1"
+    local cve_info
+    cve_info=$(get_cve_info "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
+    IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
+
+    local ctx_file="$CVE_CACHE/$cve_id/.context/full-context.md"
+    if [ -f "$ctx_file" ] && [ -s "$ctx_file" ]; then
+        log "  [$cve_id] context already cached"
+        return 0
+    fi
+
+    local src_dir="$CVE_CACHE/$cve_id"
+    [ ! -d "$src_dir" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
+
+    local run_dir="$WORK_DIR/ctx-build/$cve_id"
+    rm -rf "$run_dir"
+    cp -r "$src_dir" "$run_dir"
+    mkdir -p "$run_dir/.context"
+
+    local file_list=""
+    IFS=',' read -ra files <<< "$affected_files"
+    for f in "${files[@]}"; do file_list+=" $(basename "$(echo "$f" | xargs)")"; done
+
+    local prompt="Run the edc:edc-context skill on these files:$file_list
+
+Build complete architectural context. Write the full analysis to .context/full-context.md.
+This step is pure architectural context building only — do NOT identify security vulnerabilities."
+
+    log "  [$cve_id] building context..."
+    local t0
+    t0=$(date +%s)
+
+    (cd "$run_dir" && claude -p "$prompt" \
+        --plugin-dir "$REPO_ROOT/plugins/edc" \
+        --allowedTools "Read Glob Grep Write Skill" \
+        --max-turns 30 \
+        --model "$MODEL" \
+        --output-format text \
+        --dangerously-skip-permissions) \
+        > "$run_dir/ctx-output.txt" 2>&1 &
+    local claude_pid=$!
+    ( sleep 900 && kill "$claude_pid" 2>/dev/null ) &
+    local watchdog=$!
+    wait "$claude_pid" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+
+    local dur=$(( $(date +%s) - t0 ))
+
+    if [ -f "$run_dir/.context/full-context.md" ] && [ -s "$run_dir/.context/full-context.md" ]; then
+        mkdir -p "$CVE_CACHE/$cve_id/.context"
+        cp "$run_dir/.context/full-context.md" "$ctx_file"
+        log "  [$cve_id] context cached (${dur}s)"
+    else
+        log "  [$cve_id] WARN: context build failed (${dur}s) — review will run without context"
+    fi
+}
+
+# Run security review for one CVE using pre-built context (called each iteration)
 run_cve() {
     local cve="$1"
     local cve_info
@@ -163,19 +226,30 @@ run_cve() {
     local src_dir="$CVE_CACHE/$cve_id"
     [ ! -d "$src_dir" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
 
-    # Copy cached source to working dir so claude can write alongside
+    # Copy cached source + pre-built context to a clean working dir
     local run_dir="$WORK_DIR/bench-out/$cve_id"
     rm -rf "$run_dir"
     cp -r "$src_dir" "$run_dir"
     mkdir -p "$run_dir/.context"
 
+    local ctx_cached="$CVE_CACHE/$cve_id/.context/full-context.md"
+    [ -f "$ctx_cached" ] && cp "$ctx_cached" "$run_dir/.context/full-context.md"
+
     local file_list=""
     IFS=',' read -ra files <<< "$affected_files"
     for f in "${files[@]}"; do file_list+=" $(basename "$(echo "$f" | xargs)")"; done
 
-    local prompt="Run the edc:edc-context skill on ONLY these files:$file_list
+    local ctx_note="Pre-built architectural context is in .context/full-context.md — read it first."
+    [ ! -f "$run_dir/.context/full-context.md" ] && ctx_note="No pre-built context available — analyze from source only."
 
-Security-focused analysis. Write .context/issues.md listing ALL security issues found, with:
+    local prompt="$ctx_note
+
+Perform a full security review of these source files:$file_list
+
+Use the edc:edc-review skill. This is a FULL-FILE review — analyze the entire source for vulnerabilities.
+Ignore any diff/PR-specific instructions in the skill.
+
+Write ALL findings to .context/issues.md with:
 - issue title
 - severity (critical/high/medium/low)
 - category (buffer overflow, use-after-free, logic error, etc.)
@@ -183,11 +257,10 @@ Security-focused analysis. Write .context/issues.md listing ALL security issues 
 - description of the bug
 - evidence (the specific code pattern)"
 
-    log "  [$cve_id] analyzing ($category)..."
+    log "  [$cve_id] reviewing ($category)..."
     local t0
     t0=$(date +%s)
 
-    # 5min watchdog — files are local, no git overhead
     (cd "$run_dir" && claude -p "$prompt" \
         --plugin-dir "$REPO_ROOT/plugins/edc" \
         --allowedTools "Read Glob Grep Write Skill" \
@@ -433,6 +506,11 @@ main() {
     log "Caching CVE source code..."
     cache_cve_sources
 
+    log "Building architectural context for all CVEs (one-time, cached)..."
+    for cve in "${ALL_CVES[@]}"; do
+        build_context_for_cve "$cve"
+    done
+
     [ ! -f "$HASHES_FILE" ] && printf 'hash\tscore\tdelta\theuristic\n' > "$HASHES_FILE"
     [ ! -f "$RESULTS_LOG" ] && printf 'timestamp\titeration\tscore\tdelta\tstatus\theuristic\n' > "$RESULTS_LOG"
 
@@ -523,7 +601,8 @@ main() {
             fi
         else
             log "No fast improvement — discarding"
-            git -C "$REPO_ROOT" reset --hard HEAD~1 --quiet
+            git -C "$REPO_ROOT" checkout HEAD~1 -- "${SKILL_FILES[@]}"
+            git -C "$REPO_ROOT" reset --soft HEAD~1 --quiet
         fi
 
         local delta

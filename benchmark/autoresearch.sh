@@ -172,6 +172,7 @@ build_context_for_cve() {
     [ ! -d "$src_dir" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
 
     local run_dir="$WORK_DIR/ctx-build/$cve_id"
+    mkdir -p "$(dirname "$run_dir")"
     rm -rf "$run_dir"
     cp -r "$src_dir" "$run_dir"
     mkdir -p "$run_dir/.context"
@@ -228,6 +229,7 @@ run_cve() {
 
     # Copy cached source + pre-built context to a clean working dir
     local run_dir="$WORK_DIR/bench-out/$cve_id"
+    mkdir -p "$(dirname "$run_dir")"
     rm -rf "$run_dir"
     cp -r "$src_dir" "$run_dir"
     mkdir -p "$run_dir/.context"

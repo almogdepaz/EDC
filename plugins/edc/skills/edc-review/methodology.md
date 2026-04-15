@@ -83,37 +83,51 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 
 ## Phase 0.5: C Memory Safety Fast-Path (run BEFORE deep analysis)
 
-For C/C++ codebases, run these targeted grep scans immediately. Flag any match as a candidate finding — do NOT wait for deep context. Each scan takes seconds and catches the majority of critical memory safety bugs.
+**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
+
+```bash
+# Create output file immediately
+mkdir -p .context 2>/dev/null || true
+OUTPUT_FILE=".context/issues.md"
+cat > "$OUTPUT_FILE" << 'EOF'
+# Security Review Findings
+<!-- findings appended below as discovered -->
+EOF
+```
+
+For C/C++ codebases, run these targeted grep scans immediately. Flag any match as a candidate finding — do NOT wait for deep context. Each scan takes seconds and catches the majority of critical memory safety bugs. **Append each finding to the output file right away — do not buffer findings in memory.**
 
 **Scan 1 — Fixed destination + peer-controlled write size (heap/stack buffer overflow):**
 ```bash
 grep -n "memcpy\|memmove\|memset\|strcpy\|strncpy\|sprintf\|snprintf" <file>
 ```
-For every hit: is the *destination* a fixed-size stack array (`char buf[N]`) or a heap allocation of known size? Is the *length* argument (third arg to memcpy, format-string expansion to sprintf) bounded to that size on ALL paths, including when the peer sends a maximum-size value? If not → REPORT as buffer overflow.
+For every hit: is the *destination* a fixed-size stack array (`char buf[N]`) or a heap allocation of known size? Is the *length* argument (third arg to memcpy, format-string expansion to sprintf) bounded to that size on ALL paths, including when the peer sends a maximum-size value? If not → REPORT as buffer overflow. **Append to output file immediately.**
 
 **Scan 2 — Recursive functions without per-call-site depth guard (stack overflow):**
 ```bash
 grep -n "recurse\|keyword_filter\|glob\|match\|parse" <file>  # adjust to function names
 ```
-For each recursive function: enumerate EVERY call site inside the function body (there may be multiple — one for `*`, one for `[`, one for `(`, etc.). Check that EACH call site has its own depth check immediately before the recursive call, not just a single check at function entry. A single entry-point guard is bypassed if any branch recurses without re-entering through it. If any call site lacks a per-site guard → REPORT as unbounded recursion / stack overflow.
+For each recursive function: enumerate EVERY call site inside the function body (there may be multiple — one for `*`, one for `[`, one for `(`, etc.). Check that EACH call site has its own depth check immediately before the recursive call, not just a single check at function entry. A single entry-point guard is bypassed if any branch recurses without re-entering through it. If any call site lacks a per-site guard → REPORT as unbounded recursion / stack overflow. **Append to output file immediately.**
 
 **Scan 3 — Use-after-free and double-free:**
 ```bash
 grep -n "free\|curl_free\|Curl_safefree\|safefree" <file>
 ```
-For each `free(p)`: scan the next 30 lines for any read/write through `p` (dereference, pass to function, arithmetic). Also check: is `p` NULLed after free? If not, does any later `if (p)` guard pass on the dangling value? Check cleanup/error-handler paths for double-free: if two paths both call `free(p)` for the same pointer → REPORT.
+For each `free(p)`: scan the next 30 lines for any read/write through `p` (dereference, pass to function, arithmetic). Also check: is `p` NULLed after free? If not, does any later `if (p)` guard pass on the dangling value? Check cleanup/error-handler paths for double-free: if two paths both call `free(p)` for the same pointer → REPORT. **Append to output file immediately.**
 
 **Scan 4 — Peer-controlled allocation size (integer overflow into malloc):**
 ```bash
 grep -n "malloc\|realloc\|calloc\|alloc" <file>
 ```
-For each allocation: is the size argument computed from peer-supplied data (e.g., `Content-Length`, protocol field, user input)? Is there an overflow/underflow check on the arithmetic BEFORE the allocation? `malloc(a + b)` where both are attacker-controlled wraps to a small value → tiny allocation → overflow on write → REPORT.
+For each allocation: is the size argument computed from peer-supplied data (e.g., `Content-Length`, protocol field, user input)? Is there an overflow/underflow check on the arithmetic BEFORE the allocation? `malloc(a + b)` where both are attacker-controlled wraps to a small value → tiny allocation → overflow on write → REPORT. **Append to output file immediately.**
 
 **Scan 5 — Signed-to-unsigned conversion used as size (signedness confusion):**
 ```bash
 grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
 ```
-For each variable assigned from these functions: (1) is the variable declared `int` or `short` (signed)? (2) is it used as a size/length argument to `malloc`/`memcpy`/array subscript without an `if (n <= 0)` guard immediately before that use? A negative `int` passed as `malloc(n)` silently widens to a huge `size_t` → REPORT as signedness confusion. Pattern to confirm: `int n = ntohs(hdr->len); malloc(n)` with no negativity check between assignment and use.
+For each variable assigned from these functions: (1) is the variable declared `int` or `short` (signed)? (2) is it used as a size/length argument to `malloc`/`memcpy`/array subscript without an `if (n <= 0)` guard immediately before that use? A negative `int` passed as `malloc(n)` silently widens to a huge `size_t` → REPORT as signedness confusion. Pattern to confirm: `int n = ntohs(hdr->len); malloc(n)` with no negativity check between assignment and use. **Append to output file immediately.**
+
+**After all 5 scans complete:** Finalize the output file. Even if no findings were produced by the grep scans, write a "No issues found" summary to the output file so the file exists and is non-empty. The output file MUST exist after Phase 0.5 regardless of findings.
 
 ---
 

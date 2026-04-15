@@ -19,11 +19,11 @@ Code review for PRs, commits, and diffs.
 
 ## Core Principles
 
-1. **Risk-First**: Focus on auth, validation, state mutation, external calls, data flow
-2. **Evidence-Based**: Every finding backed by git history, line numbers, attack scenarios
-3. **Adaptive**: Scale to codebase size (SMALL/MEDIUM/LARGE)
-4. **Honest**: Explicitly state coverage limits and confidence level
-5. **Output-Driven**: Always generate comprehensive markdown report file
+1. **Output-First**: Create the output file (`issues.md` or `.context/issues.md`) BEFORE any analysis begins. Append findings as discovered. Never batch to end.
+2. **Risk-First**: Focus on auth, validation, state mutation, external calls, data flow
+3. **Evidence-Based**: Every finding backed by git history, line numbers, attack scenarios
+4. **Adaptive**: Scale to codebase size (SMALL/MEDIUM/LARGE)
+5. **Honest**: Explicitly state coverage limits and confidence level
 
 ---
 
@@ -102,12 +102,13 @@ Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Pha
 
 Before delivering:
 
+- [ ] **Output file created at start** (before any analysis — `issues.md` or `.context/issues.md`)
 - [ ] All changed files analyzed
 - [ ] Git blame on removed security code
 - [ ] Blast radius calculated for HIGH risk
 - [ ] Attack scenarios are concrete (not generic)
 - [ ] Findings reference specific line numbers + commits
-- [ ] Report file generated
+- [ ] Report file finalized (append summary if no findings)
 - [ ] User notified with summary
 
 ---

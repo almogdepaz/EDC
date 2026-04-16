@@ -15,10 +15,11 @@ sessions for context build/update, per-module review, and consolidation. Your on
 is to invoke it and surface its output. You have no other tools.
 
 ```bash
+set -- $ARGUMENTS
 if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh --auto $ARGUMENTS
+  bash .edc/scripts/edc-review.sh --auto "$@"
 elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" --auto $ARGUMENTS
+  bash "$HOME/.edc/scripts/edc-review.sh" --auto "$@"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1

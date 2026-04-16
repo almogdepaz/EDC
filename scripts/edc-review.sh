@@ -93,6 +93,42 @@ assert_context_fresh() {
     echo "ERROR: context stale (built at: $last_commit, HEAD: $head)" >&2
     return 1
   fi
+  # content validation: context.md must be non-trivial (≥500 bytes, has ## heading)
+  local ctx=".context/context.md"
+  if [ ! -f "$ctx" ]; then
+    echo "ERROR: context file missing ($ctx)" >&2
+    return 1
+  fi
+  local ctx_size
+  ctx_size=$(wc -c < "$ctx")
+  if [ "$ctx_size" -lt 500 ]; then
+    echo "ERROR: $ctx is too small ($ctx_size bytes < 500) — likely a stub" >&2
+    return 1
+  fi
+  if ! grep -q '^##' "$ctx"; then
+    echo "ERROR: $ctx has no ## headings — likely a stub" >&2
+    return 1
+  fi
+}
+
+# assert_report_valid <module>: require report ≥200 bytes with at least one ## heading
+assert_report_valid() {
+  local module="$1"
+  local report="review-tasks/report-${module}.md"
+  if [ ! -f "$report" ]; then
+    echo "ERROR: missing $report" >&2
+    return 1
+  fi
+  local size
+  size=$(wc -c < "$report")
+  if [ "$size" -lt 200 ]; then
+    echo "ERROR: $report is too small ($size bytes < 200) — likely a stub (module: $module)" >&2
+    return 1
+  fi
+  if ! grep -q '^##' "$report"; then
+    echo "ERROR: $report has no ## headings — likely a stub (module: $module)" >&2
+    return 1
+  fi
 }
 
 # ── check-context mode ───────────────────────────────────────────────────────
@@ -120,13 +156,10 @@ consolidate_mode() {
     exit 1
   fi
 
-  # verify every expected report exists before writing final file
+  # verify every expected report is present and non-trivial before writing final file
   while IFS= read -r module; do
     [ -z "$module" ] && continue
-    if [ ! -f "review-tasks/report-${module}.md" ]; then
-      echo "ERROR: missing review-tasks/report-${module}.md" >&2
-      missing=1
-    fi
+    assert_report_valid "$module" || missing=1
   done <<< "$modules"
 
   if [ "$missing" -ne 0 ]; then
@@ -265,10 +298,8 @@ auto_mode() {
       "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
-    if [ ! -f "review-tasks/report-${module}.md" ]; then
-      echo "ERROR: missing review-tasks/report-${module}.md after skill invocation" >&2
-      exit 1
-    fi
+    assert_report_valid "$module" \
+      || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
   done <<< "$tasks"
 
   # Consolidate + verify

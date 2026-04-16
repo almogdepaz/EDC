@@ -49,12 +49,11 @@ SKILL_FILES=(
 )
 
 # Hard CVEs — missed or partial in baseline. Experiments target these.
+# Excluded: CVE-2021-22947 (4 files ~300KB), CVE-2018-1000301 (http.c 125KB) — too large to analyze reliably
 FAST_CVES=(
-    "CVE-2023-38545"    # heap-buffer-overflow / SOCKS5 state machine (times out)
-    "CVE-2021-22947"    # protocol-injection (times out)
-    "CVE-2018-1000301"  # out-of-bounds-read / RTSP (wrong finding)
-    "CVE-2020-8285"     # stack-overflow / recursion (partial — wrong trigger)
-    "CVE-2020-8177"     # local-file-overwrite (partial — wrong root cause)
+    "CVE-2023-38545"    # heap-buffer-overflow / SOCKS5 state machine (socks.c 38KB)
+    "CVE-2020-8285"     # stack-overflow / recursion (curl_fnmatch.c 418 lines)
+    "CVE-2020-8177"     # local-file-overwrite (tool_getparam.c 2324 lines)
 )
 
 # Easy CVEs — already found exactly. Run only for regression check after fast improves.

@@ -64,6 +64,22 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
 ```
 
+## Gitignore
+
+EDC writes scratch state into your repo. Add these to your target repo's `.gitignore`:
+
+```
+.context/
+review-tasks/
+review-*.md
+```
+
+- `.context/` — per-module deep context written by `edc-build`/`edc-update`
+- `review-tasks/` — per-module task files and reports from `edc-review`
+- `review-*.md` — consolidated review output
+
+If these get committed, `edc-review` filters them out of diffs automatically so the tool doesn't review its own output, but you'll still want them ignored to keep your git history clean.
+
 ## Commands
 
 | Command | Description |
@@ -73,6 +89,30 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+
+### `/edc:edc-review` invocation examples
+
+```bash
+# review a GitHub PR by URL
+/edc:edc-review https://github.com/owner/repo/pull/42
+
+# review current branch against main (full branch diff)
+/edc:edc-review HEAD --baseline main
+
+# review a specific branch against main
+/edc:edc-review feature/auth --baseline main
+
+# review a single commit (defaults to its parent as baseline)
+/edc:edc-review abc1234
+
+# review a range of commits
+/edc:edc-review HEAD --baseline HEAD~5
+
+# review a pre-generated diff file
+/edc:edc-review path/to/changes.patch
+```
+
+Without `--baseline`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--baseline main`.
 
 ## Repo Structure
 

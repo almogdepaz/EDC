@@ -46,7 +46,12 @@ elif command -v gtimeout > /dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
 else
   TIMEOUT_BIN=""
-  echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+  # Only print the warning from the top-level invocation (auto mode) — avoid
+  # noise from nested `bash "$0"` calls inside auto_mode that capture stdout/stderr.
+  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ] && [ "${1:-}" = "--auto" ]; then
+    echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+    export EDC_TIMEOUT_WARNED=1
+  fi
 fi
 
 # run_with_timeout <secs> <phase-label> <cmd> [args...]
@@ -299,14 +304,20 @@ auto_mode() {
   local extra_args=("$@")
 
   # Attempt 1: try to build review tasks
-  local out
+  local out recovery=""
   out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
-  local first_line
-  first_line=$(echo "$out" | head -1)
+
+  # Detect context-state markers anywhere in output (robust against any
+  # startup noise like warnings, tracing, etc.)
+  if echo "$out" | grep -q '^CONTEXT_MISSING$'; then
+    recovery="build"
+  elif echo "$out" | grep -q '^CONTEXT_STALE$'; then
+    recovery="update"
+  fi
 
   # Recover from missing/stale context (one shot)
-  case "$first_line" in
-    CONTEXT_MISSING)
+  case "$recovery" in
+    build)
       echo "→ context missing, spawning claude -p for edc-build..."
       run_with_timeout 1200 "edc-build" \
         claude -p --output-format stream-json --verbose \
@@ -315,7 +326,7 @@ auto_mode() {
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
-    CONTEXT_STALE)
+    update)
       echo "→ context stale, spawning claude -p for edc-update..."
       run_with_timeout 600 "edc-update" \
         claude -p --output-format stream-json --verbose \
@@ -326,7 +337,7 @@ auto_mode() {
       ;;
   esac
 
-  if [ "$first_line" = "CONTEXT_MISSING" ] || [ "$first_line" = "CONTEXT_STALE" ]; then
+  if [ -n "$recovery" ]; then
     bash "$0" --check-context > /dev/null \
       || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
     # Attempt 2: build tasks now that context is ready
@@ -416,6 +427,17 @@ build_mode() {
 
   if [ -z "$files" ]; then
     echo "ERROR: no changed files found for target: $target" >&2
+    exit 2
+  fi
+
+  # Filter out tool-internal paths. These are edc scratch state — reviewing
+  # them would make the tool eat its own tail (review .context/, review-tasks/,
+  # or prior review-*.md files as if they were source).
+  files=$(echo "$files" | grep -Ev '^(\.context/|review-tasks/|review-[^/]+\.md$)' || true)
+
+  if [ -z "$files" ]; then
+    echo "ERROR: no reviewable files after filtering tool output (.context/, review-tasks/, review-*.md)" >&2
+    echo "HINT: target contains only edc scratch files — gitignore .context/ and review-tasks/ in this repo." >&2
     exit 2
   fi
 

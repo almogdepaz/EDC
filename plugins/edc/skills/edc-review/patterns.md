@@ -53,6 +53,32 @@ git diff <range> | grep "^-" | grep -E "require|assert|validate|check|guard|thro
 
 ---
 
+## Sharp-Edges C API Checklist
+
+For every call site of the following APIs, answer the mandatory question. A "NO" answer is a candidate finding — do not rationalize past it.
+
+| API | Mandatory per-call-site question | Flag if |
+|-----|----------------------------------|---------|
+| `memcpy(dst, src, n)` | Is `n` bounded by `sizeof(dst)` / allocation size of `dst` on **ALL** paths, including when the peer sends a maximum-size value? | `n` is peer-controlled or computed from peer data without a guard `n <= sizeof(dst)` immediately before the call |
+| `memmove(dst, src, n)` | Same as memcpy | Same |
+| `memset(dst, c, n)` | Is `n` bounded by the allocation size of `dst`? | `n` is derived from peer data |
+| `strcpy(dst, src)` / `strcat(dst, src)` | FLAG UNCONDITIONALLY — these have no length argument | Always report; check if `strlen(src) < sizeof(dst)` guard precedes the call |
+| `sprintf(buf, fmt, ...)` | Is the result bounded by `sizeof(buf)`? | Use of `%s` with peer-controlled string, or format string not a string literal |
+| `snprintf(buf, n, ...)` | Is `n == sizeof(buf)`? Is the return value checked for truncation when the result is used as a length? | `n` != `sizeof(buf)`, or return value ignored when the written bytes are later used as a size |
+| `realloc(ptr, new_size)` | Is the return value checked for NULL **before** `ptr` is overwritten? Pattern `ptr = realloc(ptr, n)` leaks the old allocation on failure | Return value stored back into the same variable (`p = realloc(p, ...)`) without NULL check |
+| `malloc(a * b)` / `calloc(a, b)` | Can `a * b` overflow `size_t`? Is there a `if (b && a > SIZE_MAX / b)` guard before the call? | Either `a` or `b` is peer-controlled with no overflow pre-check |
+| `malloc(a + b)` | Can `a + b` wrap around? Is there a `if (a > SIZE_MAX - b)` guard? | Either operand is peer-controlled |
+| `int n` / `short n` used as size | Is `n` guarded with `if (n <= 0)` before being passed to `malloc`/`memcpy`/array index? Signed→`size_t` implicit conversion makes a negative value huge | Signed variable from peer data (`ntohs`, `atoi`, etc.) used as size without negativity check |
+
+**Audit workflow for C files:**
+1. `grep -n "memcpy\|memmove\|memset\|strcpy\|strcat\|sprintf\|snprintf\|realloc\|malloc\|calloc" <file>`
+2. For each hit, answer the checklist question above
+3. Trace the size argument backward to its source — is it peer-controlled?
+4. If peer-controlled: check for a guard in the 10 lines before the call
+5. No guard → append finding immediately to output file
+
+---
+
 ## Integer Overflow/Underflow
 
 **Pattern:** Arithmetic without bounds checking

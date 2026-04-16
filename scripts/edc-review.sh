@@ -21,9 +21,41 @@
 
 set -euo pipefail
 
+# ── dependency check ─────────────────────────────────────────────────────────
+
+if ! command -v jq > /dev/null 2>&1; then
+  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
+  exit 2
+fi
+
 META=".context/.meta.json"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+# stream_filter: read NDJSON from claude -p --output-format stream-json --verbose
+# and print human-readable progress lines.
+stream_filter() {
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    # type=assistant with text content
+    text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
+    if [ -n "$text" ]; then
+      printf '%s\n' "$text"
+      continue
+    fi
+    # type=tool_use — show tool name + first arg truncated
+    tool_info=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "tool_use") | "→ \(.name)(\((.input | to_entries | first | .value // "") | tostring | .[0:80]))") | .[] else empty end' 2>/dev/null)
+    if [ -n "$tool_info" ]; then
+      printf '%s\n' "$tool_info"
+      continue
+    fi
+    # type=result with is_error=true
+    err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
+    if [ -n "$err" ]; then
+      printf '%s\n' "$err" >&2
+    fi
+  done
+}
 
 final_review_filename() {
   # derive consolidated review filename from a target string
@@ -185,14 +217,18 @@ auto_mode() {
   case "$first_line" in
     CONTEXT_MISSING)
       echo "→ context missing, spawning claude -p for edc-build..."
-      claude -p --allowed-tools "Skill,Bash" \
+      claude -p --output-format stream-json --verbose \
+        --allowed-tools "Skill,Bash" \
         "Invoke the edc:edc-build skill. Do not perform any other task." \
+        | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
     CONTEXT_STALE)
       echo "→ context stale, spawning claude -p for edc-update..."
-      claude -p --allowed-tools "Skill,Bash" \
+      claude -p --output-format stream-json --verbose \
+        --allowed-tools "Skill,Bash" \
         "Invoke the edc:edc-update skill. Do not perform any other task." \
+        | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
   esac
@@ -224,8 +260,10 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    claude -p --allowed-tools "Skill,Bash" \
+    claude -p --output-format stream-json --verbose \
+      --allowed-tools "Skill,Bash" \
       "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+      | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     if [ ! -f "review-tasks/report-${module}.md" ]; then
       echo "ERROR: missing review-tasks/report-${module}.md after skill invocation" >&2

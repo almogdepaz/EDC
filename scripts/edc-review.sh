@@ -185,12 +185,14 @@ auto_mode() {
   case "$first_line" in
     CONTEXT_MISSING)
       echo "→ context missing, spawning claude -p for edc-build..."
-      claude -p "Invoke the edc:edc-build skill. Do not perform any other task." \
+      claude -p --allowed-tools "Skill,Bash" \
+        "Invoke the edc:edc-build skill. Do not perform any other task." \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
     CONTEXT_STALE)
       echo "→ context stale, spawning claude -p for edc-update..."
-      claude -p "Invoke the edc:edc-update skill. Do not perform any other task." \
+      claude -p --allowed-tools "Skill,Bash" \
+        "Invoke the edc:edc-update skill. Do not perform any other task." \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
   esac
@@ -222,7 +224,8 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    claude -p "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+    claude -p --allowed-tools "Skill,Bash" \
+      "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     if [ ! -f "review-tasks/report-${module}.md" ]; then
       echo "ERROR: missing review-tasks/report-${module}.md after skill invocation" >&2

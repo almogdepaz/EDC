@@ -3,10 +3,11 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--baseline <ref>]   build mode (default)
-#   edc-review.sh --check-context               assert .context/.meta.json fresh (no diff, no task gen)
-#   edc-review.sh --consolidate                 merge per-module reports into final review file
-#   edc-review.sh --verify                      assert context fresh + reports + final file exist
+#   edc-review.sh <target> [--baseline <ref>]         build mode (default — emit TASK lines)
+#   edc-review.sh --auto <target> [--baseline <ref>]  self-driving mode (claude code only — spawns claude -p)
+#   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
+#   edc-review.sh --consolidate                       merge per-module reports into final review file
+#   edc-review.sh --verify                            assert context fresh + reports + final file exist
 #
 # Build mode exit codes:
 #   0 — review-tasks/ written, TASK lines on stdout, proceed with skill
@@ -159,6 +160,81 @@ verify_mode() {
   echo "Verified: $final"
 }
 
+# ── auto mode (claude code only) ─────────────────────────────────────────────
+#
+# Self-driving pipeline: detect context state, spawn `claude -p` for each phase,
+# verify outputs, consolidate, verify. The orchestrator script owns every decision;
+# the spawned agents have one job each. Requires `claude` on PATH.
+
+auto_mode() {
+  if ! command -v claude > /dev/null 2>&1; then
+    echo "ERROR: --auto mode requires 'claude' CLI on PATH" >&2
+    exit 2
+  fi
+
+  local target="$1"; shift
+  local extra_args=("$@")
+
+  # Attempt 1: try to build review tasks
+  local out
+  out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+  local first_line
+  first_line=$(echo "$out" | head -1)
+
+  # Recover from missing/stale context (one shot)
+  case "$first_line" in
+    CONTEXT_MISSING)
+      echo "→ context missing, spawning claude -p for edc-build..."
+      claude -p "Invoke the edc:edc-build skill. Do not perform any other task." \
+        || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+      ;;
+    CONTEXT_STALE)
+      echo "→ context stale, spawning claude -p for edc-update..."
+      claude -p "Invoke the edc:edc-update skill. Do not perform any other task." \
+        || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+      ;;
+  esac
+
+  if [ "$first_line" = "CONTEXT_MISSING" ] || [ "$first_line" = "CONTEXT_STALE" ]; then
+    bash "$0" --check-context > /dev/null \
+      || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
+    # Attempt 2: build tasks now that context is ready
+    out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+  fi
+
+  if ! echo "$out" | grep -q "^Review tasks ready"; then
+    echo "ERROR: script did not produce review tasks. Output:" >&2
+    echo "$out" >&2
+    exit 1
+  fi
+
+  # Parse TASK lines
+  local tasks
+  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //')
+  if [ -z "$tasks" ]; then
+    echo "ERROR: no TASK lines in script output" >&2
+    exit 1
+  fi
+
+  # Spawn one claude -p per module
+  while IFS= read -r task_path; do
+    [ -z "$task_path" ] && continue
+    local module
+    module=$(basename "$task_path" .md)
+    echo "→ reviewing module: $module"
+    claude -p "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+    if [ ! -f "review-tasks/report-${module}.md" ]; then
+      echo "ERROR: missing review-tasks/report-${module}.md after skill invocation" >&2
+      exit 1
+    fi
+  done <<< "$tasks"
+
+  # Consolidate + verify
+  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
+  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+}
+
 # ── build mode ───────────────────────────────────────────────────────────────
 
 build_mode() {
@@ -291,6 +367,14 @@ TASK
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
+  --auto)
+    shift
+    if [ -z "${1:-}" ]; then
+      echo "ERROR: --auto requires a target" >&2
+      exit 2
+    fi
+    auto_mode "$@"
+    ;;
   --check-context)
     check_context_mode
     ;;
@@ -303,6 +387,7 @@ case "${1:-}" in
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
     echo "Usage: edc-review.sh <target> [--baseline <ref>]" >&2
+    echo "       edc-review.sh --auto <target> [--baseline <ref>]" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

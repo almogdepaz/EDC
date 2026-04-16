@@ -6,6 +6,31 @@ This PR locks down the **claude code** flow only. cursor/codex/gemini wrappers d
 have a `Skill` tool and need a different orchestration model — handled in follow-up PRs,
 one per agent. wrapper files in `agents/` are out of scope here.
 
+## Architecture (final)
+
+The script is the orchestrator. The user's claude session is a thin shell that just
+runs bash. Each phase (build, update, per-module review) runs in a fresh `claude -p`
+subprocess spawned by the script.
+
+```
+user types /edc:edc-review <target>
+  └─ command (allowed-tools: [Bash])
+     └─ bash edc-review.sh --auto <target>
+        ├─ try build mode → if CONTEXT_MISSING/STALE:
+        │    └─ claude -p "Invoke edc:edc-build skill"  (or edc-update)
+        │       └─ check-context → fail-fast if not ready
+        │    └─ retry build mode
+        ├─ for each TASK line:
+        │    └─ claude -p "Invoke edc:edc-review skill --task-file X"
+        │       └─ verify report-{module}.md exists or HARD FAIL
+        ├─ --consolidate → merge reports → write final review file
+        └─ --verify → assert context fresh + reports + final file
+```
+
+The user's session never invokes a skill itself. Each spawned `claude -p` gets a fresh
+context with a single instruction. Maximum determinism, zero possibility of orchestrator
+freelancing.
+
 ## Problem (observed in session 3fea410b)
 
 When `/edc:edc-review` runs today:
@@ -102,6 +127,10 @@ fall back to inline analysis when skills fail. Removing that option removes the 
 ## Changes Required
 
 ### `scripts/edc-review.sh`
+- [x] Add `--auto <target>` mode: self-driving pipeline. Spawns `claude -p` for
+      edc-build/edc-update, then per-module reviews, then `--consolidate` and
+      `--verify`. Requires `claude` on PATH. Bounded recovery (one shot at context
+      fix). Each spawned session is a fresh context with one instruction.
 - [x] Add `--check-context` mode: thin assertion that `.context/.meta.json` exists and
       `lastCommit` matches HEAD. Used by the command to verify edc-build/edc-update
       actually worked before re-entering build mode.
@@ -120,18 +149,10 @@ fall back to inline analysis when skills fail. Removing that option removes the 
       so the freshness check isn't surprising.
 
 ### `plugins/edc/commands/edc-review.md`
-- [x] Strip allowed-tools to `Bash` + `Skill` only (no Read/Write/Grep/Glob)
-- [x] Rewrite flow:
-  - run script → parse first stdout line
-  - `CONTEXT_MISSING` → invoke `edc:edc-build` skill → script `--check-context` → if non-zero HARD FAIL → re-run script → if not "Review tasks ready" → HARD FAIL
-  - `CONTEXT_STALE` → invoke `edc:edc-update` skill → script `--check-context` → if non-zero HARD FAIL → re-run script → if not "Review tasks ready" → HARD FAIL
-  - `Review tasks ready` → parse TASK lines from script stdout
-  - for each TASK line: invoke `edc:edc-review` skill with args `--task-file <path>`
-  - after each skill call: `bash [ -f review-tasks/report-{module}.md ]` → if missing → HARD FAIL
-    (existence check only; not a content validity check — that's the skill's job)
-  - run script `--consolidate` → if non-zero → HARD FAIL
-  - run script `--verify` → if non-zero → HARD FAIL
-  - print final review file path to user
+- [x] Strip allowed-tools to `Bash` only (no Skill, no Read/Write/Grep/Glob)
+- [x] Replace 7-step state machine with single `bash "$SCRIPT" --auto $ARGUMENTS`
+      invocation. The script does ALL orchestration including spawning `claude -p`
+      sub-sessions for each phase. The user's claude session is a passive shell.
 
 ### `plugins/edc/skills/edc-review/SKILL.md`
 - [x] Add `Skill` to allowed-tools (so the skill can invoke `edc:edc-context` for Phase 4

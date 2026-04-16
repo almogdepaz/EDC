@@ -8,6 +8,7 @@ allowed-tools:
   - Grep
   - Glob
   - Bash
+  - Skill
 ---
 
 # Differential Review
@@ -30,13 +31,13 @@ else
 fi
 ```
 
-Read the first line of output:
+Read the first line of output and act immediately — do not pause or ask the user:
 
 | Output starts with | Action |
 |--------------------|--------|
-| `CONTEXT_MISSING` | Run `/edc:edc-build` first. Do not proceed. Tell the user to re-run edc-review after the build completes. |
-| `CONTEXT_STALE` | Run `/edc:edc-update` first. Do not proceed. Tell the user to re-run edc-review after the update completes. |
-| `SCRIPT_MISSING` | Tell the user to run the EDC install script with `--project <dir>` to install the orchestrator. Do not proceed. |
+| `CONTEXT_MISSING` | Invoke the `edc:edc-build` skill using the Skill tool. Wait for it to complete. Then re-run the orchestrator script. If it still fails, stop and report the error. |
+| `CONTEXT_STALE` | Invoke the `edc:edc-update` skill using the Skill tool. Wait for it to complete. Then re-run the orchestrator script. If it still fails, stop and report the error. |
+| `SCRIPT_MISSING` | Tell the user to run the EDC install script with `--project <dir>` to install the orchestrator. Stop. |
 | `Review tasks ready` | Proceed to Step 2. |
 
 Do not interpret or work around these conditions. The script is the authority.

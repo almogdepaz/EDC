@@ -323,6 +323,7 @@ auto_mode() {
         claude -p --output-format stream-json --verbose \
           --allowed-tools "Skill,Bash" \
           "Invoke the edc:edc-build skill. Do not perform any other task." \
+          < /dev/null \
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
@@ -332,6 +333,7 @@ auto_mode() {
         claude -p --output-format stream-json --verbose \
           --allowed-tools "Skill,Bash" \
           "Invoke the edc:edc-update skill. Do not perform any other task." \
+          < /dev/null \
         | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
@@ -359,6 +361,11 @@ auto_mode() {
   fi
 
   # Spawn one claude -p per module
+  #
+  # CRITICAL: `claude -p <prompt>` reads stdin as additional prompt input; a
+  # `while read ... <<< "$tasks"` loop makes $tasks the body's stdin, which
+  # `claude -p` would then slurp — clobbering the argv prompt and draining the
+  # queue so only the first iteration runs. `< /dev/null` detaches stdin.
   while IFS= read -r task_path; do
     [ -z "$task_path" ] && continue
     local module
@@ -368,6 +375,7 @@ auto_mode() {
       claude -p --output-format stream-json --verbose \
         --allowed-tools "Skill,Bash" \
         "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+        < /dev/null \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \

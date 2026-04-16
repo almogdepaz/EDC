@@ -7,16 +7,24 @@ SCRIPT="scripts/edc-review.sh"
 
 echo "=== T1: Subprocess tool lockdown ==="
 
-# Count actual claude -p invocations (not comments/echo lines)
-total=$(grep -E '^\s+claude -p' "$SCRIPT" | grep -v '^#' | wc -l | tr -d ' ')
-locked=$(grep -E '^\s+claude -p' "$SCRIPT" | grep -v '^#' | grep -c -- '--allowed-tools "Skill,Bash"')
+# Count actual claude -p invocations (continuation lines — in pipelines after run_with_timeout)
+total=$(grep -E '^\s+claude -p' "$SCRIPT" | wc -l | tr -d ' ')
+
+# Count --allowed-tools "Skill,Bash" lines in non-comment context
+# Each claude -p invocation must have exactly one --allowed-tools line nearby
+locked=$(grep -v '^#' "$SCRIPT" | grep -c -- '--allowed-tools "Skill,Bash"')
 
 echo "claude -p actual invocations in script: $total"
-echo "claude -p invocations with --allowed-tools \"Skill,Bash\": $locked"
+echo "--allowed-tools \"Skill,Bash\" occurrences (non-comment): $locked"
 
-if [ "$total" -ne "$locked" ]; then
-  echo "FAIL: $((total - locked)) claude -p invocation(s) missing --allowed-tools lockdown"
+if [ "$total" -ne 3 ]; then
+  echo "FAIL: expected 3 claude -p invocations, found $total"
   exit 1
 fi
 
-echo "PASS: all $locked claude -p invocation(s) are locked to Skill,Bash"
+if [ "$locked" -ne 3 ]; then
+  echo "FAIL: expected 3 --allowed-tools lockdowns, found $locked"
+  exit 1
+fi
+
+echo "PASS: all 3 claude -p invocations have --allowed-tools \"Skill,Bash\" lockdown"

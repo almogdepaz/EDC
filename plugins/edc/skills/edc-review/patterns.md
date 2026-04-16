@@ -65,6 +65,48 @@ git diff <range> | grep "^-" | grep -E "require|assert|validate|check|guard|thro
 
 ---
 
+## Integer Type Tracking (C/C++)
+
+**Pattern:** Peer-controlled integer flows into allocation size, copy length, or array index through unsafe arithmetic or implicit conversions.
+
+**For every size/length/count variable, record:**
+1. **Declared type** — `int`, `unsigned int`, `size_t`, `short`, `uint16_t`, etc.
+2. **Source** — peer-controlled (network/user input) vs. locally computed
+3. **All arithmetic ops** between assignment and the sink (malloc/memcpy/array index)
+4. **Cast chain** — does it narrow anywhere on the path?
+
+**Flag immediately if any of the following are true:**
+
+| Condition | Why dangerous |
+|-----------|--------------|
+| `signed` variable used as `malloc(n)` argument with no `n > 0` guard | negative `int` silently promoted to huge `size_t` |
+| `long` or `size_t` narrowed to `int` or `short` before use as length | high bits silently truncated |
+| `unsigned a - b` where `b` is peer-controlled and could exceed `a` | wraps to UINT_MAX → enormous allocation or OOB |
+| `a * b` passed to malloc where both are peer-controlled | product overflows before reaching allocator |
+| value read via `ntohs`/`ntohl` stored in `int`/`short` and used without sign check | protocol-supplied value controls allocation |
+
+**Detection grep (C files):**
+```bash
+# find narrowing assignments: long/size_t stored into int/short
+grep -n "int\s\+\w\+\s*=\s*.*\(ntohl\|ntohs\|atoi\|strtol\|strlen\)" <file>
+
+# find signed variables flowing into memcpy/malloc length argument
+grep -n "memcpy\|malloc\|realloc\|alloca" <file>
+# then for each hit: walk back to find size variable type declaration
+```
+
+**Triage procedure:**
+1. Identify the sink (malloc/memcpy call with suspicious size arg).
+2. Name the variable holding the size.
+3. Find its declaration — signed or unsigned?
+4. Trace every assignment and arithmetic op back to the source.
+5. Check every narrowing cast on the path.
+6. If source is peer-controlled AND any step is unguarded → REPORT.
+
+**Common false-positive:** `strlen()` returns `size_t` (unsigned) — narrowing to `int` is the bug, not `strlen` itself.
+
+---
+
 ## Re-entrant / Recursive Invocation
 
 **Pattern:** External call or callback before state update completes

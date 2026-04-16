@@ -10,18 +10,23 @@ SKILL_SRC="$REPO_ROOT/plugins/edc/skills"
 
 if [ "$1" = "--global" ]; then
   TARGET="$HOME/.gemini/skills"
+  SCRIPTS_TARGET="$HOME/.edc/scripts"
   echo "Installing EDC skills globally for Gemini at ~/.gemini/skills/..."
 else
   PROJECT="${1:-.}"
   TARGET="$PROJECT/.gemini/skills"
+  SCRIPTS_TARGET="$PROJECT/.edc/scripts"
   echo "Installing EDC skills into $PROJECT for Gemini..."
 fi
 
 mkdir -p "$TARGET/edc-context/resources"
 mkdir -p "$TARGET/edc-review"
+mkdir -p "$SCRIPTS_TARGET"
 
 cp "$SKILL_SRC/edc-context/SKILL.md" "$TARGET/edc-context/"
 cp "$SKILL_SRC/edc-context/resources/"* "$TARGET/edc-context/resources/"
 cp "$SKILL_SRC/edc-review/"* "$TARGET/edc-review/"
+cp "$REPO_ROOT/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+chmod +x "$SCRIPTS_TARGET/edc-review.sh"
 
-echo "Done. Skills installed at $TARGET/"
+echo "Done. Skills at $TARGET/, orchestrator at $SCRIPTS_TARGET/"

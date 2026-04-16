@@ -8,109 +8,61 @@ allowed-tools:
   - Grep
   - Glob
   - Bash
-  - Agent
 ---
 
 # Differential Review
 
 **Arguments:** $ARGUMENTS
 
-Parse arguments:
-1. **Target** (required): PR URL, commit SHA, or diff path
-2. **Baseline** (optional): `--baseline <ref>` for comparison reference
-
 ---
 
-## Step 1 — Context gate (hard conditional, no exceptions)
+## Step 1 — Run the orchestrator
 
-Run: `git rev-parse HEAD` → store as CURRENT_COMMIT.
+Locate and run the orchestrator script:
 
-Read `.context/.meta.json`. Apply exactly one branch:
-
-| Condition | Action | Rule |
-|-----------|--------|------|
-| `.context/.meta.json` does not exist | Use Skill tool to invoke `edc:edc-build`. Wait for completion. | Do NOT proceed until context is built. |
-| `lastCommit` in `.meta.json` != CURRENT_COMMIT | Use Skill tool to invoke `edc:edc-update`. Wait for completion. | Do NOT proceed until update completes. |
-| `lastCommit` == CURRENT_COMMIT | Context is fresh. Proceed immediately. | Do NOT run any build or update. |
-
-You MUST use the Skill tool for edc-build and edc-update — do not paraphrase or inline their logic.
-
----
-
-## Step 2 — Load top-level context
-
-Read these files (they exist after Step 1):
-- `.context/context.md` — module map, invariants, coupling, trust boundaries
-- `.context/issues.md` — known problems (read if exists)
-
-Extract the **module map** from `context.md`: the table or section that maps directories/files to named modules.
-
-Store the full text of `.context/context.md` — you will pass it verbatim to reviewing subagents.
-
----
-
-## Step 3 — Identify changed files and group by module
-
-Get the diff for the target:
-- PR URL → `gh pr diff <url> --name-only`
-- Commit SHA → `git diff <sha>^..<sha> --name-only`
-- Diff path → read the file, extract changed file paths
-
-Map each changed file to its module using the module map from Step 2.
-
-Group files by module. Each group becomes one reviewing subagent in Step 4.
-
-If a file does not map to any named module, group it as module `"root"`.
-
----
-
-## Step 4 — Spawn reviewing subagents (one per module)
-
-For each module group, spawn one subagent using the Agent tool.
-
-Pass the following prompt VERBATIM — fill in the placeholders marked with `{}`, do not paraphrase, summarize, or add your own review logic:
-
----
-
-```
-You are a differential code reviewer. Your ONLY job is to invoke the edc-review skill using the Skill tool.
-
-DO NOT write your own review.
-DO NOT summarize what the review would find.
-DO NOT reproduce the skill's methodology inline.
-USE THE SKILL TOOL to invoke `edc:edc-review`.
-
-Inputs to pass to the skill:
-- Target: {TARGET}
-- Baseline: {BASELINE}  ← omit this line entirely if no baseline was provided
-- Module under review: {MODULE_NAME}
-- Files to review: {COMMA_SEPARATED_FILE_LIST}
-
-Context to pass to the skill:
-
-<top-level-context>
-{FULL_TEXT_OF_CONTEXT_MD}
-</top-level-context>
-
-<issues>
-{FULL_TEXT_OF_ISSUES_MD_OR_"No issues.md found"}
-</issues>
-
-Before invoking the skill, also read `.context/{MODULE_NAME}.md` yourself and include its full text
-as additional context when calling the skill. If that file does not exist, note that and proceed.
-
-After the skill completes, return its full report output — do not truncate or summarize it.
+```bash
+if [ -f ".edc/scripts/edc-review.sh" ]; then
+  bash .edc/scripts/edc-review.sh $ARGUMENTS
+elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
+  bash "$HOME/.edc/scripts/edc-review.sh" $ARGUMENTS
+else
+  echo "SCRIPT_MISSING"
+fi
 ```
 
+Read the first line of output:
+
+| Output starts with | Action |
+|--------------------|--------|
+| `CONTEXT_MISSING` | Run `/edc:edc-build` first. Do not proceed. Tell the user to re-run edc-review after the build completes. |
+| `CONTEXT_STALE` | Run `/edc:edc-update` first. Do not proceed. Tell the user to re-run edc-review after the update completes. |
+| `SCRIPT_MISSING` | Tell the user to run the EDC install script with `--project <dir>` to install the orchestrator. Do not proceed. |
+| `Review tasks ready` | Proceed to Step 2. |
+
+Do not interpret or work around these conditions. The script is the authority.
+
 ---
 
-## Step 5 — Consolidate reports
+## Step 2 — Read the manifest
 
-After all subagents complete, write a single file: `review-{TARGET_SHORT}.md`
+Read `review-tasks/manifest.json`. It contains the list of modules and their changed files.
 
-Structure:
-1. Header: target, baseline, date, modules reviewed
-2. One section per module, containing that subagent's full report
-3. Summary section: cross-module findings, invariant violations that span modules, overall risk rating
+---
 
-Do not editorialize or re-summarize individual findings — include them in full.
+## Step 3 — Process each module task sequentially
+
+For each module in the manifest:
+
+1. Read `review-tasks/{module}.md`
+2. Follow the instructions in that file exactly — do not paraphrase or skip steps
+3. Do not begin the next module until `review-tasks/report-{module}.md` is written
+
+---
+
+## Step 4 — Consolidate
+
+Write a single file named `review-{TARGET_SHORT}.md`:
+
+1. Header: target, baseline, date, list of modules reviewed
+2. One section per module — full contents of each `review-tasks/report-{module}.md`, unedited
+3. Summary: cross-module findings, invariant violations spanning modules, overall risk rating

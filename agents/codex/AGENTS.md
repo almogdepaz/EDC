@@ -10,10 +10,31 @@ This project uses EDC for deep codebase context and code review.
 ## Workflow
 
 ### Build context (first time)
-Run `$edc-context` on the codebase. Write output to `.context/full-context.md`. Then split into `context.md` (overview) + `.context/{module}.md` (per-module) + `.context/issues.md` (problems).
+Run `$edc-context` on the codebase. Write output to `.context/full-context.md`. Then split into `context.md` (overview) + `.context/{module}.md` (per-module) + `.context/issues.md` (problems) + `.context/.meta.json`.
 
 ### Update context (on changes)
-If `.context/.meta.json` exists, only re-analyze modules with changed files (based on `git diff`).
+If `.context/.meta.json` exists, only re-analyze modules with changed files (based on `git diff`). Update `.meta.json` to the new HEAD commit.
 
 ### Review a PR
-Ensure context is fresh (build or update), then run `$edc-review` on the diff.
+
+**Step 1 — Run the orchestrator:**
+```bash
+bash .edc/scripts/edc-review.sh <target> [--baseline <ref>]
+```
+
+Read the first line of output:
+- `CONTEXT_MISSING` → run edc-context (full build) first, then re-run
+- `CONTEXT_STALE` → run edc-context (incremental update) first, then re-run
+- `Review tasks ready` → proceed
+
+**Step 2 — Read the manifest:**
+Read `review-tasks/manifest.json` for the list of modules and files.
+
+**Step 3 — Process each module task sequentially:**
+For each module in the manifest:
+1. Read `review-tasks/{module}.md`
+2. Follow its instructions exactly — do not paraphrase or skip steps
+3. Do not move to the next module until `review-tasks/report-{module}.md` is written
+
+**Step 4 — Consolidate:**
+Write `review-{TARGET_SHORT}.md` with: header, full per-module reports (unedited), cross-module summary.

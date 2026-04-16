@@ -30,6 +30,53 @@ fi
 
 META=".context/.meta.json"
 
+# ── timeout detection ────────────────────────────────────────────────────────
+#
+# Prefer GNU timeout (Linux) or gtimeout (macOS via coreutils). Fall back to a
+# background watchdog implemented in run_with_timeout().
+
+if command -v timeout > /dev/null 2>&1; then
+  TIMEOUT_BIN="timeout"
+elif command -v gtimeout > /dev/null 2>&1; then
+  TIMEOUT_BIN="gtimeout"
+else
+  TIMEOUT_BIN=""
+  echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+fi
+
+# run_with_timeout <secs> <phase-label> <cmd> [args...]
+# Run cmd with a timeout. Uses $TIMEOUT_BIN if available, otherwise a
+# background watchdog: spawns cmd, starts a sleep watchdog; if watchdog
+# fires first it kills cmd and exits non-zero.
+run_with_timeout() {
+  local secs="$1" label="$2"; shift 2
+  if [ -n "$TIMEOUT_BIN" ]; then
+    "$TIMEOUT_BIN" "$secs" "$@"
+    local rc=$?
+    if [ $rc -eq 124 ]; then
+      echo "ERROR: phase '$label' timed out after ${secs}s" >&2
+      exit 1
+    fi
+    return $rc
+  fi
+  # watchdog fallback
+  "$@" &
+  local cmd_pid=$!
+  (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
+    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) &
+  local watchdog_pid=$!
+  wait "$cmd_pid"
+  local rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  if [ $rc -ne 0 ] && kill -0 "$cmd_pid" 2>/dev/null; then
+    # process was killed by watchdog
+    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2
+    exit 1
+  fi
+  return $rc
+}
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 # stream_filter: read NDJSON from claude -p --output-format stream-json --verbose
@@ -64,21 +111,39 @@ final_review_filename() {
 }
 
 read_meta_last_commit() {
-  grep -o '"lastCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$META" \
+  local val
+  val=$(grep -o '"lastCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$META" \
     | head -1 \
-    | sed 's/.*"lastCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+    | sed 's/.*"lastCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  if [ -z "$val" ]; then
+    echo "ERROR: could not read lastCommit from $META" >&2
+    return 1
+  fi
+  echo "$val"
 }
 
 manifest_target() {
-  grep -o '"target"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
+  local val
+  val=$(grep -o '"target"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
     | head -1 \
-    | sed 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+    | sed 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  if [ -z "$val" ]; then
+    echo "ERROR: could not read target from review-tasks/manifest.json" >&2
+    return 1
+  fi
+  echo "$val"
 }
 
 manifest_modules() {
   # one module name per line
-  grep -o '"module"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | sed 's/.*"module"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/'
+  local val
+  val=$(grep -o '"module"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
+    | sed 's/.*"module"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  if [ -z "$val" ]; then
+    echo "ERROR: could not read modules from review-tasks/manifest.json" >&2
+    return 1
+  fi
+  echo "$val"
 }
 
 assert_context_fresh() {
@@ -250,17 +315,19 @@ auto_mode() {
   case "$first_line" in
     CONTEXT_MISSING)
       echo "→ context missing, spawning claude -p for edc-build..."
-      claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash" \
-        "Invoke the edc:edc-build skill. Do not perform any other task." \
+      run_with_timeout 1200 "edc-build" \
+        claude -p --output-format stream-json --verbose \
+          --allowed-tools "Skill,Bash" \
+          "Invoke the edc:edc-build skill. Do not perform any other task." \
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
     CONTEXT_STALE)
       echo "→ context stale, spawning claude -p for edc-update..."
-      claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash" \
-        "Invoke the edc:edc-update skill. Do not perform any other task." \
+      run_with_timeout 600 "edc-update" \
+        claude -p --output-format stream-json --verbose \
+          --allowed-tools "Skill,Bash" \
+          "Invoke the edc:edc-update skill. Do not perform any other task." \
         | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
@@ -293,9 +360,10 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    claude -p --output-format stream-json --verbose \
-      --allowed-tools "Skill,Bash" \
-      "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+    run_with_timeout 900 "edc-review/$module" \
+      claude -p --output-format stream-json --verbose \
+        --allowed-tools "Skill,Bash" \
+        "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \
@@ -343,7 +411,11 @@ build_mode() {
   if [[ "$target" == https://* ]]; then
     files=$(gh pr diff "$target" --name-only 2>/dev/null)
   elif [ -f "$target" ]; then
-    files=$(grep '^+++ b/' "$target" | sed 's|^+++ b/||')
+    files=$(grep '^+++ b/' "$target" | sed 's|^+++ b/||' || true)
+    if [ -z "$files" ]; then
+      echo "ERROR: no '+++ b/' lines found in diff file: $target" >&2
+      exit 2
+    fi
   else
     local base="${baseline:-${target}^}"
     files=$(git diff "${base}..${target}" --name-only)

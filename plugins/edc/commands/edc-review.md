@@ -3,10 +3,6 @@ name: edc:edc-review
 description: Performs differential review of code changes using codebase context
 argument-hint: "<pr-url|commit-sha|diff-path> [--baseline <ref>]"
 allowed-tools:
-  - Read
-  - Write
-  - Grep
-  - Glob
   - Bash
   - Skill
 ---
@@ -15,55 +11,141 @@ allowed-tools:
 
 **Arguments:** $ARGUMENTS
 
+You are an orchestrator. You have **only Bash and Skill** — no Read, Write, Grep, or Glob.
+You **cannot** perform code review yourself. Your only job is to follow the script's
+output and invoke skills. Every decision below comes from the script. Do not improvise.
+
+If a step says HARD FAIL, stop immediately, report the script's error message verbatim,
+and do not attempt the work inline. There is no fallback path.
+
 ---
 
-## Step 1 — Run the orchestrator
-
-Locate and run the orchestrator script:
+## Step 1 — Locate and run the orchestrator script
 
 ```bash
 if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh $ARGUMENTS
+  SCRIPT=".edc/scripts/edc-review.sh"
 elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" $ARGUMENTS
+  SCRIPT="$HOME/.edc/scripts/edc-review.sh"
 else
-  echo "SCRIPT_MISSING"
+  echo "SCRIPT_MISSING"; exit 1
 fi
+bash "$SCRIPT" $ARGUMENTS
 ```
 
-Read the first line of output and act immediately — do not pause or ask the user:
+If the output is `SCRIPT_MISSING`: tell the user to run the EDC install script with
+`--project <dir>`. Stop.
 
-| Output starts with | Action |
-|--------------------|--------|
-| `CONTEXT_MISSING` | Invoke the `edc:edc-build` skill using the Skill tool. Wait for it to complete. Then re-run the orchestrator script. If it still fails, stop and report the error. |
-| `CONTEXT_STALE` | Invoke the `edc:edc-update` skill using the Skill tool. Wait for it to complete. Then re-run the orchestrator script. If it still fails, stop and report the error. |
-| `SCRIPT_MISSING` | Tell the user to run the EDC install script with `--project <dir>` to install the orchestrator. Stop. |
-| `Review tasks ready` | Proceed to Step 2. |
+Otherwise, read the **first line** of the script's stdout and act:
 
-Do not interpret or work around these conditions. The script is the authority.
-
----
-
-## Step 2 — Read the manifest
-
-Read `review-tasks/manifest.json`. It contains the list of modules and their changed files.
+| First line | Action |
+|------------|--------|
+| `CONTEXT_MISSING` | Go to Step 2a |
+| `CONTEXT_STALE`   | Go to Step 2b |
+| `Review tasks ready.` | Go to Step 3 |
+| anything else | HARD FAIL |
 
 ---
 
-## Step 3 — Process each module task sequentially
+## Step 2a — Recover from CONTEXT_MISSING
 
-For each module in the manifest:
+1. Invoke the `edc:edc-build` skill via the Skill tool. Wait for it to complete.
+2. Verify the skill actually built context: `bash "$SCRIPT" --check-context`
+3. If exit code is non-zero → HARD FAIL with the script's error message.
+4. Re-run the script: `bash "$SCRIPT" $ARGUMENTS`
+5. If the first line is **not** `Review tasks ready.` → HARD FAIL.
+6. Otherwise continue to Step 3.
 
-1. Read `review-tasks/{module}.md`
-2. Follow the instructions in that file exactly — do not paraphrase or skip steps
-3. Do not begin the next module until `review-tasks/report-{module}.md` is written
+Do not retry edc-build on failure. Do not attempt to build context inline.
+
+## Step 2b — Recover from CONTEXT_STALE
+
+1. Invoke the `edc:edc-update` skill via the Skill tool. Wait for it to complete.
+2. Verify the skill actually updated context: `bash "$SCRIPT" --check-context`
+3. If exit code is non-zero → HARD FAIL with the script's error message.
+4. Re-run the script: `bash "$SCRIPT" $ARGUMENTS`
+5. If the first line is **not** `Review tasks ready.` → HARD FAIL.
+6. Otherwise continue to Step 3.
+
+Do not retry edc-update on failure. Do not attempt to update context inline.
 
 ---
 
-## Step 4 — Consolidate
+## Step 3 — Parse TASK lines
 
-Write a single file named `review-{TARGET_SHORT}.md`:
+The script's stdout contains one `TASK <path>` line per module, e.g.:
 
-1. Header: target, baseline, date, list of modules reviewed
-2. One section per module — full contents of each `review-tasks/report-{module}.md`, unedited
-3. Summary: cross-module findings, invariant violations spanning modules, overall risk rating
+```
+TASK review-tasks/src.md
+TASK review-tasks/lib.md
+TASK review-tasks/root.md
+```
+
+Collect every line that starts with `TASK ` from the most recent script run. The path
+after `TASK ` is the task file for one module. These lines are your work queue.
+
+You **cannot** read `manifest.json` or any other file. The TASK lines are the only
+authoritative module list.
+
+---
+
+## Step 4 — Process each TASK sequentially
+
+For each `TASK <path>` line, in order:
+
+1. Derive `{module}` from the path: strip `review-tasks/` prefix and `.md` suffix.
+2. Invoke the `edc:edc-review` skill via the Skill tool with arguments:
+   `--task-file <path>`
+3. Wait for the skill to complete.
+4. Verify the report exists:
+   ```bash
+   [ -f "review-tasks/report-${module}.md" ] || { echo "MISSING REPORT: ${module}"; exit 1; }
+   ```
+5. If the bash check fails → HARD FAIL. Do not write the report yourself. Do not retry
+   the skill. Surface the missing-report error.
+
+Process tasks one at a time. Do not skip ahead. Do not parallelize.
+
+---
+
+## Step 5 — Consolidate
+
+Run:
+
+```bash
+bash "$SCRIPT" --consolidate
+```
+
+If the exit code is non-zero → HARD FAIL with the script's error message.
+
+The script writes the merged review file and prints `Consolidated: <path>`.
+
+---
+
+## Step 6 — Verify
+
+Run:
+
+```bash
+bash "$SCRIPT" --verify
+```
+
+If the exit code is non-zero → HARD FAIL with the script's error message.
+
+The script confirms context freshness, all expected reports, and the final file exist.
+
+---
+
+## Step 7 — Report
+
+Tell the user the path printed by `--consolidate`. Done.
+
+---
+
+## Hard rules (do not violate)
+
+- You have no Read/Write/Grep/Glob. You **physically cannot** review code or write reports.
+- The script is the only router. Every branch decision comes from its output or exit code.
+- If a skill fails, stop. Do not work around it. Do not try the task inline.
+- Do not edit, parse, or replace `manifest.json`, task files, or report files yourself.
+- Do not paraphrase the script's error messages — surface them verbatim.

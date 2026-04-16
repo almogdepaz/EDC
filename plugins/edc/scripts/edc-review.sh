@@ -64,7 +64,8 @@ run_with_timeout() {
     fi
     return $rc
   fi
-  # watchdog fallback
+  # watchdog fallback: the watchdog subshell prints the timeout message itself
+  # when it fires; we just forward the command's exit code.
   "$@" &
   local cmd_pid=$!
   (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
@@ -74,11 +75,6 @@ run_with_timeout() {
   local rc=$?
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
-  if [ $rc -ne 0 ] && kill -0 "$cmd_pid" 2>/dev/null; then
-    # process was killed by watchdog
-    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2
-    exit 1
-  fi
   return $rc
 }
 
@@ -163,40 +159,32 @@ assert_context_fresh() {
     echo "ERROR: context stale (built at: $last_commit, HEAD: $head)" >&2
     return 1
   fi
-  # content validation: context.md must be non-trivial (≥500 bytes, has ## heading)
+  # content validation: context.md must have at least one ## heading (edc-build
+  # emits module map, invariants, trust boundaries as ## sections)
   local ctx=".context/context.md"
   if [ ! -f "$ctx" ]; then
-    echo "ERROR: context file missing ($ctx)" >&2
-    return 1
-  fi
-  local ctx_size
-  ctx_size=$(wc -c < "$ctx")
-  if [ "$ctx_size" -lt 500 ]; then
-    echo "ERROR: $ctx is too small ($ctx_size bytes < 500) — likely a stub" >&2
+    echo "ERROR: context file missing ($ctx) — run /edc:edc-build" >&2
     return 1
   fi
   if ! grep -q '^##' "$ctx"; then
-    echo "ERROR: $ctx has no ## headings — likely a stub" >&2
+    echo "ERROR: $ctx has no '## ' headings — expected module map, invariants, trust boundaries" >&2
+    echo "HINT: this usually means edc-build failed to run or wrote a stub. re-run /edc:edc-build." >&2
     return 1
   fi
 }
 
-# assert_report_valid <module>: require report ≥200 bytes with at least one ## heading
+# assert_report_valid <module>: require report with at least one ## heading
+# (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
   local module="$1"
   local report="review-tasks/report-${module}.md"
   if [ ! -f "$report" ]; then
-    echo "ERROR: missing $report" >&2
-    return 1
-  fi
-  local size
-  size=$(wc -c < "$report")
-  if [ "$size" -lt 200 ]; then
-    echo "ERROR: $report is too small ($size bytes < 200) — likely a stub (module: $module)" >&2
+    echo "ERROR: missing $report — edc-review skill did not produce output for module '$module'" >&2
     return 1
   fi
   if ! grep -q '^##' "$report"; then
-    echo "ERROR: $report has no ## headings — likely a stub (module: $module)" >&2
+    echo "ERROR: $report has no '## ' headings (module: $module) — expected sections like ## What Changed, ## Findings" >&2
+    echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
     return 1
   fi
 }

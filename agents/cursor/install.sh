@@ -21,13 +21,13 @@ else
 fi
 
 mkdir -p "$TARGET/skills/edc-context/resources"
-mkdir -p "$TARGET/skills/edc-review"
+mkdir -p "$TARGET/skills/edc-review-impl"
 mkdir -p "$TARGET/commands"
 mkdir -p "$SCRIPTS_TARGET"
 
 cp "$SKILL_SRC/edc-context/SKILL.md" "$TARGET/skills/edc-context/"
 cp "$SKILL_SRC/edc-context/resources/"* "$TARGET/skills/edc-context/resources/"
-cp "$SKILL_SRC/edc-review/"* "$TARGET/skills/edc-review/"
+cp "$SKILL_SRC/edc-review-impl/"* "$TARGET/skills/edc-review-impl/"
 cp "$SCRIPT_DIR/.cursor/commands/"* "$TARGET/commands/"
 cp "$REPO_ROOT/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
 chmod +x "$SCRIPTS_TARGET/edc-review.sh"

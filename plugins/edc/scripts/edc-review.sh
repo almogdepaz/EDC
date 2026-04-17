@@ -374,7 +374,7 @@ auto_mode() {
     run_with_timeout 900 "edc-review/$module" \
       claude -p --output-format stream-json --verbose \
         --allowed-tools "Skill,Bash" \
-      <<< "Invoke the edc:edc-review skill with arguments: --task-file $task_path. Do not perform any other task." \
+      <<< "Invoke the edc:edc-review-impl skill with arguments: --task-file $task_path. Do not perform any other task." \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \

@@ -1,5 +1,5 @@
 ---
-name: edc-review
+name: edc-review-impl
 description: >
   Performs differential review of code changes (PRs, commits, diffs).
   Adapts analysis depth to codebase size, uses git history for context, calculates

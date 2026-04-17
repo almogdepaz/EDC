@@ -321,7 +321,7 @@ auto_mode() {
       echo "→ context missing, spawning claude -p for edc-build..."
       run_with_timeout 1200 "edc-build" \
         claude -p --output-format stream-json --verbose \
-          --allowed-tools "Skill,Bash" \
+          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
         <<< "Invoke the edc:edc-build skill. Do not perform any other task." \
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
@@ -330,7 +330,7 @@ auto_mode() {
       echo "→ context stale, spawning claude -p for edc-update..."
       run_with_timeout 600 "edc-update" \
         claude -p --output-format stream-json --verbose \
-          --allowed-tools "Skill,Bash" \
+          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
         <<< "Invoke the edc:edc-update skill. Do not perform any other task." \
         | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
@@ -373,7 +373,7 @@ auto_mode() {
     echo "→ reviewing module: $module"
     run_with_timeout 900 "edc-review/$module" \
       claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash" \
+        --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
       <<< "Invoke the edc:edc-review-impl skill with arguments: --task-file $task_path. Do not perform any other task." \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }

@@ -71,8 +71,12 @@ run_with_timeout() {
   fi
   # watchdog fallback: the watchdog subshell prints the timeout message itself
   # when it fires; we just forward the command's exit code.
-  "$@" &
+  # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
+  # non-interactive scripts, which swallows here-strings passed to the caller.
+  exec 3<&0
+  "$@" <&3 &
   local cmd_pid=$!
+  exec 3<&-
   # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
   # the pipe write-end. If it did, the sleep (reparented to init when the
   # subshell dies on kill) would keep the downstream `stream_filter` reader
@@ -323,19 +327,19 @@ auto_mode() {
   case "$recovery" in
     build)
       echo "→ context missing, spawning claude -p for edc-build..."
-      run_with_timeout 1200 "edc-build" \
+      run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
         claude -p --output-format stream-json --verbose \
           --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "Invoke the edc:edc-build skill. Do not perform any other task." \
+        <<< "/edc:edc-build" \
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
     update)
       echo "→ context stale, spawning claude -p for edc-update..."
-      run_with_timeout 600 "edc-update" \
+      run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
         claude -p --output-format stream-json --verbose \
           --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "Invoke the edc:edc-update skill. Do not perform any other task." \
+        <<< "/edc:edc-update" \
         | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
@@ -375,10 +379,10 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    run_with_timeout 900 "edc-review/$module" \
+    run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
       claude -p --output-format stream-json --verbose \
         --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-      <<< "Invoke the edc:edc-review-impl skill with arguments: --task-file $task_path. Do not perform any other task." \
+      <<< "/edc:edc-review-impl --task-file $task_path" \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \
@@ -388,6 +392,9 @@ auto_mode() {
   # Consolidate + verify
   bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
   bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  # Explicit exit so any late-arriving subprocess output (claude -p children,
+  # MCP servers, etc.) can't poison our exit code after the pipeline succeeded.
+  exit 0
 }
 
 # ── build mode ───────────────────────────────────────────────────────────────

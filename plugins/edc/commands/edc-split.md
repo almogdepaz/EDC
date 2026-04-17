@@ -12,7 +12,7 @@ allowed-tools:
 
 Read `.context/full-context.md` and split it into logical pieces. Do NOT discard content — reorganize it.
 
-## context.md (repo root)
+## .context/context.md
 
 Brief architecture overview extracted from the full analysis. An agent loading this file should immediately understand:
 - what the system is (2-3 sentences)

@@ -73,8 +73,12 @@ run_with_timeout() {
   # when it fires; we just forward the command's exit code.
   "$@" &
   local cmd_pid=$!
+  # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
+  # the pipe write-end. If it did, the sleep (reparented to init when the
+  # subshell dies on kill) would keep the downstream `stream_filter` reader
+  # blocked for the full watchdog duration after the real command already exited.
   (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
-    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) &
+    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
   local watchdog_pid=$!
   wait "$cmd_pid"
   local rc=$?

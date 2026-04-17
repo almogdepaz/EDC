@@ -111,7 +111,7 @@ From baseline analysis (see [methodology.md](methodology.md#pre-analysis-baselin
 
 If `.context/` exists:
 - Does the change violate invariants documented in `.context/{module}.md`?
-- Does the coupling map in `context.md` flag modules affected by this change?
+- Does the coupling map in `.context/context.md` flag modules affected by this change?
 - Is this issue already documented in `.context/issues.md`?
 
 ---

@@ -13,7 +13,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
 Run these in order on any codebase:
 
 1. `/edc:edc-build` — analyzes every function line-by-line using First Principles, 5 Whys, and 5 Hows. Produces:
-   - `context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
+   - `.context/context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
    - `.context/{module}.md` — deep per-module analysis
    - `.context/issues.md` — actionable list of all problems found
    - `.context/complexity.md` — bloat, duplication, overengineering audit
@@ -31,7 +31,7 @@ Run these in order on any codebase:
 
 The plugin installs two hooks that run automatically, designed to keep context overhead minimal:
 
-- **SessionStart** — loads `context.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
+- **SessionStart** — loads `.context/context.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
 
 - **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/.meta.json`, then injects only that module's `.context/{module}.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
 

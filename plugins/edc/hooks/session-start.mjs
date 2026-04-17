@@ -121,7 +121,7 @@ function main() {
 
   // ensure orchestrator script is installed in project
   installOrchestratorScript(projectRoot);
-  const contextPath = join(projectRoot, "context.md");
+  const contextPath = join(projectRoot, ".context", "context.md");
 
   const parts = [];
 

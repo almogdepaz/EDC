@@ -7,7 +7,7 @@ Detailed phase-by-phase workflow for code review.
 **FIRST ACTION — Check for existing context, then build baseline if needed:**
 
 If `.context/context.md` exists in the repository:
-1. Read `context.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+1. Read `.context/context.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
 2. This IS your baseline — skip the full context build
 3. Map changed files to modules using the Module Map table
 4. Load `.context/{module}.md` for affected modules
@@ -76,7 +76,7 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 
 **Context-aware triage (if `.context/` exists):**
 - Check `.context/issues.md` — does this PR touch files with known issues?
-- Check module coupling in `context.md` — does this change have cascade risk?
+- Check module coupling in `.context/context.md` — does this change have cascade risk?
 - Elevate risk for changes touching fragility clusters documented in `.context/{module}.md`
 
 ---
@@ -175,7 +175,7 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 - 50+ calls: CRITICAL
 
 **Context-aware blast radius (if `.context/` exists):**
-- Cross-module coupling section in `context.md` maps cascade paths
+- Cross-module coupling section in `.context/context.md` maps cascade paths
 - `.context/{module}.md` documents which modules depend on the changed module
 - Use these instead of grep when available — they capture non-obvious coupling
 

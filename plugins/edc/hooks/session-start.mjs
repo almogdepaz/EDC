@@ -1,5 +1,7 @@
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
+import { readFileSync, existsSync, copyFileSync, statSync, chmodSync } from "fs";
+import { mkdirSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
 
 // --- I/O helpers ---
@@ -68,6 +70,41 @@ function checkStaleness(projectRoot) {
   }
 }
 
+// --- script install ---
+// Copy edc-review.sh from plugin bundle into project's .edc/scripts/ if missing or stale.
+
+function installOrchestratorScript(projectRoot) {
+  const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  const pluginScript = join(pluginDir, "scripts", "edc-review.sh");
+  if (!existsSync(pluginScript)) return; // plugin bundle missing script — skip silently
+
+  const destDir = join(projectRoot, ".edc", "scripts");
+  const destScript = join(destDir, "edc-review.sh");
+
+  let shouldCopy = !existsSync(destScript);
+  if (!shouldCopy) {
+    try {
+      const srcMtime = statSync(pluginScript).mtimeMs;
+      const dstMtime = statSync(destScript).mtimeMs;
+      shouldCopy = srcMtime > dstMtime;
+    } catch {
+      shouldCopy = true;
+    }
+  }
+
+  if (shouldCopy) {
+    try {
+      mkdirSync(destDir, { recursive: true });
+      copyFileSync(pluginScript, destScript);
+      chmodSync(destScript, 0o755);
+    } catch (err) {
+      process.stderr.write(
+        `[edc] WARNING: could not install edc-review.sh: ${err.message}\n`,
+      );
+    }
+  }
+}
+
 // --- main ---
 
 function main() {
@@ -81,7 +118,10 @@ function main() {
   const input = parseInput(raw);
   const platform = detectPlatform(input);
   const projectRoot = resolveProjectRoot(input);
-  const contextPath = join(projectRoot, "context.md");
+
+  // ensure orchestrator script is installed in project
+  installOrchestratorScript(projectRoot);
+  const contextPath = join(projectRoot, ".context", "context.md");
 
   const parts = [];
 

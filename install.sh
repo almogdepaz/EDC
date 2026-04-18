@@ -24,11 +24,11 @@ SKILLS=(
   "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
   "plugins/edc/skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
   "plugins/edc/skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/skills/edc-review/SKILL.md"
-  "plugins/edc/skills/edc-review/methodology.md"
-  "plugins/edc/skills/edc-review/adversarial.md"
-  "plugins/edc/skills/edc-review/reporting.md"
-  "plugins/edc/skills/edc-review/patterns.md"
+  "plugins/edc/skills/edc-review-impl/SKILL.md"
+  "plugins/edc/skills/edc-review-impl/methodology.md"
+  "plugins/edc/skills/edc-review-impl/adversarial.md"
+  "plugins/edc/skills/edc-review-impl/reporting.md"
+  "plugins/edc/skills/edc-review-impl/patterns.md"
 )
 
 download() {

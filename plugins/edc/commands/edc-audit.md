@@ -77,7 +77,7 @@ List all source files by LOC. Flag:
 
 ### Step 7 — Indirection Depth
 
-For key entrypoints documented in `context.md`, trace the call chain from entrypoint to actual work. Count the number of function hops. Flag chains where:
+For key entrypoints documented in `.context/context.md`, trace the call chain from entrypoint to actual work. Count the number of function hops. Flag chains where:
 - Depth > 4 for simple operations
 - Any hop is a pure pass-through (wrapper)
 

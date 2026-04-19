@@ -24,11 +24,11 @@ SKILLS=(
   "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
   "plugins/edc/skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
   "plugins/edc/skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/skills/edc-review/SKILL.md"
-  "plugins/edc/skills/edc-review/methodology.md"
-  "plugins/edc/skills/edc-review/adversarial.md"
-  "plugins/edc/skills/edc-review/reporting.md"
-  "plugins/edc/skills/edc-review/patterns.md"
+  "plugins/edc/skills/edc-review-impl/SKILL.md"
+  "plugins/edc/skills/edc-review-impl/methodology.md"
+  "plugins/edc/skills/edc-review-impl/adversarial.md"
+  "plugins/edc/skills/edc-review-impl/reporting.md"
+  "plugins/edc/skills/edc-review-impl/patterns.md"
 )
 
 download() {
@@ -58,7 +58,8 @@ case "$AGENT" in
     done
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/"
+    download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
+    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/"
     ;;
 
   codex)

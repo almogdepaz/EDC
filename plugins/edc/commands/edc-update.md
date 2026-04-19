@@ -57,7 +57,7 @@ Re-read all `.context/{module}.md` files. Rebuild issues.md from scratch:
 - Add new issues found in the updated modules
 - Preserve issue numbering where possible for traceability
 
-### Step 6 — Update context.md if needed
+### Step 6 — Update .context/context.md if needed
 
 Re-read all `.context/{module}.md` files. Check if any of these changed:
 - module list (modules added or removed)
@@ -66,7 +66,7 @@ Re-read all `.context/{module}.md` files. Check if any of these changed:
 - cross-module coupling
 - key flows
 
-If any changed, rewrite `context.md`. If not, leave it alone.
+If any changed, rewrite `.context/context.md`. If not, leave it alone.
 
 ### Step 7 — Update full-context.md
 

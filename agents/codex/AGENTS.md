@@ -38,3 +38,7 @@ For each module in the manifest:
 
 **Step 4 — Consolidate:**
 Write `review-{TARGET_SHORT}.md` with: header, full per-module reports (unedited), cross-module summary.
+
+## Codebase Context (EDC)
+
+Deep architectural context is available in `.context/`. Read `.context/context.md` first for the module map, then `.context/{module}.md` for the module you're working in. Check `.context/issues.md` before making changes.

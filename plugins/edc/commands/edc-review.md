@@ -1,7 +1,7 @@
 ---
 name: edc:edc-review
 description: Performs differential review of code changes using codebase context
-argument-hint: "<pr-url|commit-sha|diff-path> [--baseline <ref>]"
+argument-hint: "[<pr-url|commit-sha|branch>] [--base <ref>]"
 allowed-tools:
   - Bash
 ---
@@ -14,12 +14,14 @@ The orchestrator script runs the full pipeline self-driven: it spawns fresh `cla
 sessions for context build/update, per-module review, and consolidation. Your only job
 is to invoke it and surface its output. You have no other tools.
 
+If no target is specified, it reviews the current branch against main.
+
 ```bash
 set -- $ARGUMENTS
 if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh --auto "$@"
+  bash .edc/scripts/edc-review.sh "$@"
 elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" --auto "$@"
+  bash "$HOME/.edc/scripts/edc-review.sh" "$@"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1

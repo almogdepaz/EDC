@@ -8,20 +8,18 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--baseline <ref>]         build mode (default — emit TASK lines)
-#   edc-review.sh --auto <target> [--baseline <ref>]  self-driving mode (claude code only — spawns claude -p)
-#   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
-#   edc-review.sh --consolidate                       merge per-module reports into final review file
-#   edc-review.sh --verify                            assert context fresh + reports + final file exist
+#   edc-review.sh [<target>] [--base <ref>]   run full review pipeline (default: current branch vs main)
+#   edc-review.sh --check-context             assert .context/.meta.json fresh
+#   edc-review.sh --consolidate               merge per-module reports into final review file
+#   edc-review.sh --verify                    assert context fresh + reports + final file exist
+#   edc-review.sh --build <target> [--base <ref>]  internal: emit TASK lines (called by pipeline)
 #
-# Build mode exit codes:
-#   0 — review/ written, TASK lines on stdout, proceed with skill
-#   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
-#   2 — bad arguments or environment error
+# If <target> is omitted, reviews current branch against main (or --base if given).
+# <target> can be: PR URL, commit SHA, diff file path, or branch name.
 #
-# Consolidate / verify exit codes:
-#   0 — all assertions pass
-#   1 — assertion failed (missing report, missing final file, stale context)
+# Exit codes:
+#   0 — success
+#   1 — context not ready or assertion failed
 #   2 — bad arguments or environment error
 
 set -euo pipefail
@@ -48,7 +46,7 @@ else
   TIMEOUT_BIN=""
   # Only print the warning from the top-level invocation (auto mode) — avoid
   # noise from nested `bash "$0"` calls inside auto_mode that capture stdout/stderr.
-  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ] && [ "${1:-}" = "--auto" ]; then
+  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ] && [[ "${1:-}" != --check-context && "${1:-}" != --consolidate && "${1:-}" != --verify && "${1:-}" != --build ]]; then
     echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
     export EDC_TIMEOUT_WARNED=1
   fi
@@ -296,24 +294,25 @@ verify_mode() {
   echo "Verified: $final"
 }
 
-# ── auto mode (claude code only) ─────────────────────────────────────────────
+# ── pipeline mode (default) ──────────────────────────────────────────────────
 #
 # Self-driving pipeline: detect context state, spawn `claude -p` for each phase,
 # verify outputs, consolidate, verify. The orchestrator script owns every decision;
 # the spawned agents have one job each. Requires `claude` on PATH.
 
-auto_mode() {
+pipeline_mode() {
   if ! command -v claude > /dev/null 2>&1; then
-    echo "ERROR: --auto mode requires 'claude' CLI on PATH" >&2
+    echo "ERROR: requires 'claude' CLI on PATH" >&2
     exit 2
   fi
 
-  local target="$1"; shift
+  # Default target: current branch (HEAD)
+  local target="${1:-HEAD}"; shift || true
   local extra_args=("$@")
 
   # Attempt 1: try to build review tasks
   local out recovery=""
-  out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   # Detect context-state markers anywhere in output (robust against any
   # startup noise like warnings, tracing, etc.)
@@ -349,7 +348,7 @@ auto_mode() {
     bash "$0" --check-context > /dev/null \
       || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
     # Attempt 2: build tasks now that context is ready
-    out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+    out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
   fi
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
@@ -405,7 +404,7 @@ build_mode() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --baseline) baseline="$2"; shift 2 ;;
+      --base|--baseline) baseline="$2"; shift 2 ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -438,6 +437,12 @@ build_mode() {
       echo "ERROR: no '+++ b/' lines found in diff file: $target" >&2
       exit 2
     fi
+  elif [ "$target" = "HEAD" ] && [ -z "$baseline" ]; then
+    # No target specified — diff current branch against main
+    local main_branch
+    main_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||') || main_branch="main"
+    files=$(git diff "${main_branch}..HEAD" --name-only 2>/dev/null)
+    baseline="$main_branch"
   else
     local base="${baseline:-${target}^}"
     files=$(git diff "${base}..${target}" --name-only)
@@ -544,14 +549,6 @@ TASK
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  --auto)
-    shift
-    if [ -z "${1:-}" ]; then
-      echo "ERROR: --auto requires a target" >&2
-      exit 2
-    fi
-    auto_mode "$@"
-    ;;
   --check-context)
     check_context_mode
     ;;
@@ -561,16 +558,17 @@ case "${1:-}" in
   --verify)
     verify_mode
     ;;
-  "")
-    echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--baseline <ref>]" >&2
-    echo "       edc-review.sh --auto <target> [--baseline <ref>]" >&2
-    echo "       edc-review.sh --check-context" >&2
-    echo "       edc-review.sh --consolidate" >&2
-    echo "       edc-review.sh --verify" >&2
-    exit 2
+  --build)
+    shift
+    build_mode "$@"
+    ;;
+  --auto)
+    # backwards compat — treat as pipeline_mode
+    shift
+    pipeline_mode "$@"
     ;;
   *)
-    build_mode "$@"
+    # Default: run full pipeline. No target = current branch vs main.
+    pipeline_mode "$@"
     ;;
 esac

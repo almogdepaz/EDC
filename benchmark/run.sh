@@ -146,12 +146,14 @@ main() {
         local gt_file="$repo_dir/ground-truth.md"
         [ ! -f "$gt_file" ] && continue
 
-        # Determine repo URL
+        # Read repo URL from repo.conf
         local repo_url=""
-        case "$repo_name" in
-            curl) repo_url="https://github.com/curl/curl.git" ;;
-            *) echo "Unknown repo: $repo_name"; continue ;;
-        esac
+        if [ -f "$repo_dir/repo.conf" ]; then
+            while IFS='=' read -r key val; do
+                [ "$key" = "repo_url" ] && repo_url="$val"
+            done < "$repo_dir/repo.conf"
+        fi
+        [ -z "$repo_url" ] && { echo "No repo_url in $repo_name/repo.conf"; continue; }
 
         echo "Processing $repo_name..."
         echo ""

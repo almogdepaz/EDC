@@ -15,7 +15,7 @@ subprocess spawned by the script.
 ```
 user types /edc:edc-review <target>
   └─ command (allowed-tools: [Bash])
-     └─ bash edc-review.sh --auto <target>
+     └─ bash edc-review.sh pipeline_mode <target>
         ├─ try build mode → if CONTEXT_MISSING/STALE:
         │    └─ claude -p "Invoke edc:edc-build skill"  (or edc-update)
         │       └─ check-context → fail-fast if not ready
@@ -127,7 +127,7 @@ fall back to inline analysis when skills fail. Removing that option removes the 
 ## Changes Required
 
 ### `scripts/edc-review.sh`
-- [x] Add `--auto <target>` mode: self-driving pipeline. Spawns `claude -p` for
+- [x] Add `pipeline_mode <target>` mode: self-driving pipeline. Spawns `claude -p` for
       edc-build/edc-update, then per-module reviews, then `--consolidate` and
       `--verify`. Requires `claude` on PATH. Bounded recovery (one shot at context
       fix). Each spawned session is a fresh context with one instruction.
@@ -150,7 +150,7 @@ fall back to inline analysis when skills fail. Removing that option removes the 
 
 ### `plugins/edc/commands/edc-review.md`
 - [x] Strip allowed-tools to `Bash` only (no Skill, no Read/Write/Grep/Glob)
-- [x] Replace 7-step state machine with single `bash "$SCRIPT" --auto $ARGUMENTS`
+- [x] Replace 7-step state machine with single `bash "$SCRIPT" pipeline_mode $ARGUMENTS`
       invocation. The script does ALL orchestration including spawning `claude -p`
       sub-sessions for each phase. The user's claude session is a passive shell.
 

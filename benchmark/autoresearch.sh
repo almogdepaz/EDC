@@ -9,73 +9,150 @@ set -euo pipefail
 #   1. LLM agent freely edits skill files (SKILL.md, methodology.md)
 #   2. SHA256 of file contents checked against tried-hashes.tsv → skip dupes
 #   3. Commit the change (flat commit on current branch)
-#   4. Benchmark: run 5 fast CVEs in parallel via `claude -p --model sonnet`
-#   5. If fast score > baseline → validate on all 11 CVEs in parallel
-#   6. If full score > baseline → keep commit, update baseline
+#   4. Benchmark: run fast CVEs in parallel via `claude -p --model sonnet`
+#   5. If fast score > baseline → validate on regression CVEs in parallel
+#   6. If regression holds → keep commit, update baseline
 #      Otherwise → restore skill files from HEAD~1 + soft reset (safe discard)
 #   7. Log hash + score + delta + heuristic description (all attempts)
 #   8. Repeat until -n limit or SIGTERM/SIGINT
 #
-# The agent reads experiment history each iteration to avoid repeating
-# failed approaches and to build on what worked.
+# Repos are auto-discovered from benchmark/{name}/ directories containing
+# ground-truth.md + repo.conf. Add a new repo by creating those two files.
+# Optionally add cve-lists.conf to control fast/regression CVE split.
 #
 # Usage:
-#   ./benchmark/autoresearch.sh                  # run until stopped
+#   ./benchmark/autoresearch.sh                  # run on all repos until stopped
+#   ./benchmark/autoresearch.sh --repo curl      # run on curl only
 #   ./benchmark/autoresearch.sh -n 5             # run 5 iterations
 #   ./benchmark/autoresearch.sh --status         # show progress
 #   ./benchmark/autoresearch.sh --stop           # graceful stop
 #   ./benchmark/autoresearch.sh --baseline       # recompute baseline
-#   ./benchmark/autoresearch.sh --baseline -n 5  # recompute then run 5
 # ─────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORK_DIR="${EDC_BENCH_WORKDIR:-/private/tmp/edc-bench}"
-CURL_REPO="$WORK_DIR/curl-shared"
-
-BASELINE_FILE="$SCRIPT_DIR/baseline-score.txt"
-REGRESSION_FLOOR_FILE="$SCRIPT_DIR/regression-floor.txt"
-HASHES_FILE="$SCRIPT_DIR/tried-hashes.tsv"
-RESULTS_LOG="$SCRIPT_DIR/autoresearch-log.tsv"
-LOGFILE="$SCRIPT_DIR/autoresearch-output.log"
-PIDFILE="$SCRIPT_DIR/.autoresearch.pid"
-STOPFILE="$SCRIPT_DIR/.autoresearch.stop"
+CVE_CACHE="$WORK_DIR/cve-cache"
 
 SKILL_FILES=(
-    "plugins/edc/skills/edc-review/SKILL.md"
-    "plugins/edc/skills/edc-review/methodology.md"
-    "plugins/edc/skills/edc-review/patterns.md"
-    "plugins/edc/skills/edc-review/adversarial.md"
-)
-
-# Hard CVEs — missed or partial in baseline. Experiments target these.
-# Excluded: CVE-2021-22947 (4 files ~300KB), CVE-2018-1000301 (http.c 125KB) — too large to analyze reliably
-FAST_CVES=(
-    "CVE-2023-38545"    # heap-buffer-overflow / SOCKS5 state machine (socks.c 38KB)
-    "CVE-2020-8285"     # stack-overflow / recursion (curl_fnmatch.c 418 lines)
-    "CVE-2020-8177"     # local-file-overwrite (tool_getparam.c 2324 lines)
-)
-
-# Easy CVEs — already found exactly. Run only for regression check after fast improves.
-REGRESSION_CVES=(
-    "CVE-2016-8617"   # out-of-bounds-write / integer overflow
-    "CVE-2021-22945"  # use-after-free / double-free
-    "CVE-2019-3822"   # stack-buffer-overflow / integer underflow
-    "CVE-2018-0500"   # heap-buffer-overflow / wrong malloc size
-    "CVE-2018-16890"  # out-of-bounds-read / NTLM
-    "CVE-2022-27776"  # credential-leak
+    "plugins/edc/skills/edc-review-impl/SKILL.md"
+    "plugins/edc/skills/edc-review-impl/methodology.md"
+    "plugins/edc/skills/edc-review-impl/patterns.md"
+    "plugins/edc/skills/edc-review-impl/adversarial.md"
 )
 
 MODEL="sonnet"
 
-# ── Logging ──────────────────────────────────────────────────────────────────
+# ── Repo discovery ──────────────────────────────────────────────────────────
+
+declare -a ACTIVE_REPOS=()
+declare -a ALL_FAST_CVES=()
+declare -a ALL_REGRESSION_CVES=()
+declare -a ALL_CVES=()
+declare -A CVE_REPO=()
+
+discover_repos() {
+    local filter="$1"
+    ACTIVE_REPOS=()
+
+    for repo_dir in "$SCRIPT_DIR"/*/; do
+        [ -f "$repo_dir/ground-truth.md" ] || continue
+        [ -f "$repo_dir/repo.conf" ] || continue
+        local name
+        name="$(basename "$repo_dir")"
+        [ -n "$filter" ] && [ "$name" != "$filter" ] && continue
+        ACTIVE_REPOS+=("$name")
+    done
+
+    if [ ${#ACTIVE_REPOS[@]} -eq 0 ]; then
+        echo "No repos found${filter:+ matching '$filter'}. Each repo needs ground-truth.md + repo.conf."
+        exit 1
+    fi
+}
+
+load_cve_lists() {
+    ALL_FAST_CVES=()
+    ALL_REGRESSION_CVES=()
+    ALL_CVES=()
+    CVE_REPO=()
+
+    for repo_name in "${ACTIVE_REPOS[@]}"; do
+        local repo_dir="$SCRIPT_DIR/$repo_name"
+        local fast=() regression=()
+
+        if [ -f "$repo_dir/cve-lists.conf" ]; then
+            # Source the conf to get FAST_CVES and REGRESSION_CVES arrays
+            local FAST_CVES=() REGRESSION_CVES=()
+            source "$repo_dir/cve-lists.conf"
+            fast=("${FAST_CVES[@]}")
+            regression=("${REGRESSION_CVES[@]}")
+        else
+            # No cve-lists.conf — use all CVEs from ground truth, split auto
+            local all_gt=()
+            while IFS='|' read -r cve_id _rest; do
+                all_gt+=("$cve_id")
+            done < <(python3 "$SCRIPT_DIR/parse_gt.py" "$repo_dir/ground-truth.md")
+
+            local split=$(( ${#all_gt[@]} / 2 ))
+            [ "$split" -lt 1 ] && split=1
+            fast=("${all_gt[@]:0:$split}")
+            regression=("${all_gt[@]:$split}")
+        fi
+
+        for cve in "${fast[@]}"; do
+            ALL_FAST_CVES+=("$cve")
+            CVE_REPO["$cve"]="$repo_name"
+        done
+        for cve in "${regression[@]}"; do
+            ALL_REGRESSION_CVES+=("$cve")
+            CVE_REPO["$cve"]="$repo_name"
+        done
+    done
+
+    ALL_CVES=("${ALL_FAST_CVES[@]}" "${ALL_REGRESSION_CVES[@]}")
+}
+
+get_repo_url() {
+    local repo_name="$1"
+    local url=""
+    while IFS='=' read -r key val; do
+        [ "$key" = "repo_url" ] && url="$val"
+    done < "$SCRIPT_DIR/$repo_name/repo.conf"
+    echo "$url"
+}
+
+# ── State file paths (scoped by active repos) ──────────────────────────────
+
+SCOPE_DIR=""
+BASELINE_FILE=""
+REGRESSION_FLOOR_FILE=""
+HASHES_FILE=""
+RESULTS_LOG=""
+LOGFILE=""
+PIDFILE="$SCRIPT_DIR/.autoresearch.pid"
+STOPFILE="$SCRIPT_DIR/.autoresearch.stop"
+
+setup_state_paths() {
+    if [ ${#ACTIVE_REPOS[@]} -eq 1 ]; then
+        SCOPE_DIR="$SCRIPT_DIR/${ACTIVE_REPOS[0]}"
+    else
+        SCOPE_DIR="$SCRIPT_DIR"
+    fi
+    BASELINE_FILE="$SCOPE_DIR/baseline-score.txt"
+    REGRESSION_FLOOR_FILE="$SCOPE_DIR/regression-floor.txt"
+    HASHES_FILE="$SCOPE_DIR/tried-hashes.tsv"
+    RESULTS_LOG="$SCOPE_DIR/autoresearch-log.tsv"
+    LOGFILE="$SCOPE_DIR/autoresearch-output.log"
+}
+
+# ── Logging ─────────────────────────────────────────────────────────────────
 
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
     echo "$msg" >> "$LOGFILE"
 }
 
-# ── Stop handling ────────────────────────────────────────────────────────────
+# ── Stop handling ───────────────────────────────────────────────────────────
 
 SHOULD_STOP=false
 handle_stop() { SHOULD_STOP=true; }
@@ -83,11 +160,11 @@ trap handle_stop SIGTERM SIGINT
 
 should_stop() { $SHOULD_STOP || [ -f "$STOPFILE" ]; }
 
-# ── PID ──────────────────────────────────────────────────────────────────────
+# ── PID ─────────────────────────────────────────────────────────────────────
 
 is_running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
-# ── Hash dedup ───────────────────────────────────────────────────────────────
+# ── Hash dedup ──────────────────────────────────────────────────────────────
 
 compute_hash() {
     local content=""
@@ -107,78 +184,85 @@ log_hash() {
     printf '%s\t%s\t%s\t%s\n' "$h" "$score" "$delta" "$heuristic" >> "$HASHES_FILE"
 }
 
-# ── CVE source cache + analysis ──────────────────────────────────────────────
+# ── Repo clone management ──────────────────────────────────────────────────
 
-CVE_CACHE="$WORK_DIR/cve-cache"
+ensure_repo() {
+    local repo_name="$1"
+    local shared_dir="$WORK_DIR/repos/$repo_name"
 
-ensure_curl_repo() {
-    if ! git -C "$CURL_REPO" rev-parse HEAD >/dev/null 2>&1; then
-        log "Curl repo missing or corrupted — cloning..."
-        rm -rf "$CURL_REPO"
-        git clone --quiet https://github.com/curl/curl.git "$CURL_REPO"
+    if ! git -C "$shared_dir" rev-parse HEAD >/dev/null 2>&1; then
+        local url
+        url=$(get_repo_url "$repo_name")
+        [ -z "$url" ] && { log "ERROR: no repo_url in $repo_name/repo.conf"; return 1; }
+        log "Cloning $repo_name from $url..."
+        rm -rf "$shared_dir"
+        mkdir -p "$(dirname "$shared_dir")"
+        git clone --quiet "$url" "$shared_dir"
     fi
 }
 
+# ── CVE source cache ───────────────────────────────────────────────────────
+
 get_cve_info() {
-    python3 "$SCRIPT_DIR/parse_gt.py" "$SCRIPT_DIR/curl/ground-truth.md" | grep "^$1|"
+    local repo_name="$1" cve_id="$2"
+    python3 "$SCRIPT_DIR/parse_gt.py" "$SCRIPT_DIR/$repo_name/ground-truth.md" | grep "^$cve_id|"
 }
 
-# Cache source files into per-CVE directories (run once, reused across iterations)
 cache_cve_sources() {
     mkdir -p "$CVE_CACHE"
-    local tmp_worktree="$WORK_DIR/_cache_worktree"
 
-    for cve in "${ALL_CVES[@]}"; do
-        local cve_dir="$CVE_CACHE/$cve"
-        [ -d "$cve_dir" ] && [ "$(ls "$cve_dir"/*.c "$cve_dir"/*.h 2>/dev/null | wc -l)" -gt 0 ] && continue
+    for repo_name in "${ACTIVE_REPOS[@]}"; do
+        local shared_dir="$WORK_DIR/repos/$repo_name"
+        local tmp_worktree="$WORK_DIR/_cache_worktree_$repo_name"
 
-        local cve_info
-        cve_info=$(get_cve_info "$cve") || continue
-        IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
+        for cve in "${ALL_CVES[@]}"; do
+            [ "${CVE_REPO[$cve]}" = "$repo_name" ] || continue
 
-        if [ ! -d "$tmp_worktree" ]; then
-            git -C "$CURL_REPO" worktree add --quiet --detach "$tmp_worktree" "${fix_commit}~1" 2>/dev/null || continue
-        else
-            git -C "$tmp_worktree" checkout --quiet --detach "${fix_commit}~1" 2>/dev/null || continue
-        fi
+            local cve_dir="$CVE_CACHE/$repo_name/$cve"
+            [ -d "$cve_dir" ] && [ "$(ls "$cve_dir"/*.c "$cve_dir"/*.h "$cve_dir"/*.lua 2>/dev/null | wc -l)" -gt 0 ] && continue
 
-        mkdir -p "$cve_dir"
-        local file_count=0
-        IFS=',' read -ra files <<< "$affected_files"
-        for f in "${files[@]}"; do
-            f="$(echo "$f" | xargs)"
-            [ -f "$tmp_worktree/$f" ] && { cp "$tmp_worktree/$f" "$cve_dir/"; file_count=$((file_count + 1)); } || log "  WARN: $cve_id file not found: $f"
+            local cve_info
+            cve_info=$(get_cve_info "$repo_name" "$cve") || continue
+            IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
+
+            if [ ! -d "$tmp_worktree" ]; then
+                git -C "$shared_dir" worktree add --quiet --detach "$tmp_worktree" "${fix_commit}~1" 2>/dev/null || continue
+            else
+                git -C "$tmp_worktree" checkout --quiet --detach "${fix_commit}~1" 2>/dev/null || continue
+            fi
+
+            mkdir -p "$cve_dir"
+            local file_count=0
+            IFS=',' read -ra files <<< "$affected_files"
+            for f in "${files[@]}"; do
+                f="$(echo "$f" | xargs)"
+                [ -f "$tmp_worktree/$f" ] && { cp "$tmp_worktree/$f" "$cve_dir/"; file_count=$((file_count + 1)); } || log "  WARN: $cve_id file not found: $f"
+            done
+
+            local total_lines=0
+            [ "$file_count" -gt 0 ] && total_lines=$(cat "$cve_dir"/* 2>/dev/null | wc -l | xargs)
+            log "  Cached $cve_id ($repo_name) — $file_count files, $total_lines lines"
         done
 
-        local total_lines=0
-        [ "$file_count" -gt 0 ] && total_lines=$(cat "$cve_dir"/* 2>/dev/null | wc -l | xargs)
-        log "  Cached $cve_id — $file_count files, $total_lines lines"
+        [ -d "$tmp_worktree" ] && git -C "$shared_dir" worktree remove --force "$tmp_worktree" 2>/dev/null || true
     done
-
-    [ -d "$tmp_worktree" ] && git -C "$CURL_REPO" worktree remove --force "$tmp_worktree" 2>/dev/null || true
 }
 
-# Build and cache architectural context for one CVE (run once, frozen across iterations)
 build_context_for_cve() {
     local cve="$1"
+    local repo_name="${CVE_REPO[$cve]}"
     local cve_info
-    cve_info=$(get_cve_info "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
+    cve_info=$(get_cve_info "$repo_name" "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
     IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
 
-    local ctx_file="$CVE_CACHE/$cve_id/.context/full-context.md"
+    local ctx_file="$CVE_CACHE/$repo_name/$cve_id/.context/full-context.md"
     if [ -f "$ctx_file" ] && [ -s "$ctx_file" ]; then
         log "  [$cve_id] context already cached"
         return 0
     fi
 
-    local src_dir="$CVE_CACHE/$cve_id"
+    local src_dir="$CVE_CACHE/$repo_name/$cve_id"
     [ ! -d "$src_dir" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
-
-    local run_dir="$WORK_DIR/ctx-build/$cve_id"
-    mkdir -p "$(dirname "$run_dir")"
-    rm -rf "$run_dir"
-    cp -r "$src_dir" "$run_dir"
-    mkdir -p "$run_dir/.context"
 
     local file_list=""
     IFS=',' read -ra files <<< "$affected_files"
@@ -189,55 +273,77 @@ build_context_for_cve() {
 Build complete architectural context. Write the full analysis to .context/full-context.md.
 This step is pure architectural context building only — do NOT identify security vulnerabilities."
 
-    log "  [$cve_id] building context..."
-    local t0
-    t0=$(date +%s)
+    local max_retries=3
+    local attempt=0
+    local timeout=600
 
-    (cd "$run_dir" && claude -p "$prompt" \
-        --plugin-dir "$REPO_ROOT/plugins/edc" \
-        --allowedTools "Read Glob Grep Write Skill" \
-        --max-turns 30 \
-        --model "$MODEL" \
-        --output-format text \
-        --dangerously-skip-permissions) \
-        > "$run_dir/ctx-output.txt" 2>&1 &
-    local claude_pid=$!
-    ( sleep 900 && kill "$claude_pid" 2>/dev/null ) &
-    local watchdog=$!
-    wait "$claude_pid" 2>/dev/null || true
-    kill "$watchdog" 2>/dev/null || true
-    wait "$watchdog" 2>/dev/null || true
+    while [ "$attempt" -lt "$max_retries" ]; do
+        attempt=$((attempt + 1))
+        log "  [$cve_id] building context (attempt $attempt/$max_retries)..."
 
-    local dur=$(( $(date +%s) - t0 ))
+        local run_dir="$WORK_DIR/ctx-build/$cve_id"
+        rm -rf "$run_dir"
+        cp -r "$src_dir" "$run_dir"
+        mkdir -p "$run_dir/.context"
 
-    if [ -f "$run_dir/.context/full-context.md" ] && [ -s "$run_dir/.context/full-context.md" ]; then
-        mkdir -p "$CVE_CACHE/$cve_id/.context"
-        cp "$run_dir/.context/full-context.md" "$ctx_file"
-        log "  [$cve_id] context cached (${dur}s)"
-    else
-        log "  [$cve_id] WARN: context build failed (${dur}s) — review will run without context"
-    fi
+        local t0
+        t0=$(date +%s)
+
+        (cd "$run_dir" && claude -p "$prompt" \
+            --plugin-dir "$REPO_ROOT/plugins/edc" \
+            --allowedTools "Read Glob Grep Write Skill" \
+            --max-turns 30 \
+            --model "$MODEL" \
+            --output-format text \
+            --dangerously-skip-permissions) \
+            < /dev/null \
+            > "$run_dir/ctx-output.txt" 2>&1 &
+        local claude_pid=$!
+        ( sleep "$timeout" && kill "$claude_pid" 2>/dev/null ) &
+        local watchdog=$!
+        wait "$claude_pid" 2>/dev/null || true
+        kill "$watchdog" 2>/dev/null || true
+        wait "$watchdog" 2>/dev/null || true
+
+        local dur=$(( $(date +%s) - t0 ))
+
+        if [ -f "$run_dir/.context/full-context.md" ] && [ -s "$run_dir/.context/full-context.md" ]; then
+            mkdir -p "$CVE_CACHE/$repo_name/$cve_id/.context"
+            cp "$run_dir/.context/full-context.md" "$ctx_file"
+            log "  [$cve_id] context cached (${dur}s, attempt $attempt)"
+            return 0
+        fi
+
+        local err=""
+        [ -f "$run_dir/ctx-output.txt" ] && err=$(grep -i "error\|timeout" "$run_dir/ctx-output.txt" | head -1) || true
+        log "  [$cve_id] attempt $attempt failed (${dur}s)${err:+ — $err}"
+
+        [ "$attempt" -lt "$max_retries" ] && sleep 10
+    done
+
+    log "  [$cve_id] WARN: context build failed after $max_retries attempts — review will run without context"
 }
 
-# Run security review for one CVE using pre-built context (called each iteration)
+# ── Run security review for one CVE ────────────────────────────────────────
+
 run_cve() {
     local cve="$1"
+    local repo_name="${CVE_REPO[$cve]}"
     local cve_info
-    cve_info=$(get_cve_info "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
+    cve_info=$(get_cve_info "$repo_name" "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
 
     IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
 
-    local src_dir="$CVE_CACHE/$cve_id"
+    local src_dir="$CVE_CACHE/$repo_name/$cve_id"
     [ ! -d "$src_dir" ] && { log "  SKIP: $cve_id no cached source"; return 1; }
 
-    # Copy cached source + pre-built context to a clean working dir
     local run_dir="$WORK_DIR/bench-out/$cve_id"
     mkdir -p "$(dirname "$run_dir")"
     rm -rf "$run_dir"
     cp -r "$src_dir" "$run_dir"
     mkdir -p "$run_dir/.context"
 
-    local ctx_cached="$CVE_CACHE/$cve_id/.context/full-context.md"
+    local ctx_cached="$CVE_CACHE/$repo_name/$cve_id/.context/full-context.md"
     [ -f "$ctx_cached" ] && cp "$ctx_cached" "$run_dir/.context/full-context.md"
 
     local file_list=""
@@ -273,6 +379,7 @@ Write ALL findings to .context/issues.md with:
         --model "$MODEL" \
         --output-format text \
         --dangerously-skip-permissions) \
+        < /dev/null \
         > "$run_dir/claude-output.txt" 2>&1 &
     local claude_pid=$!
     ( sleep 300 && kill "$claude_pid" 2>/dev/null ) &
@@ -313,14 +420,14 @@ print(f'{(exact + partial * 0.5) / total:.3f}')
 "
 }
 
-# ── Parallel benchmark ───────────────────────────────────────────────────────
+# ── Parallel benchmark ──────────────────────────────────────────────────────
 
 run_benchmark() {
     local label="$1"
     shift
     local cves=("$@")
 
-    local results_file="$SCRIPT_DIR/results-${label}.tsv"
+    local results_file="$SCOPE_DIR/results-${label}.tsv"
     echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$results_file"
 
     local bench_dir="$WORK_DIR/bench-${label}"
@@ -333,7 +440,7 @@ run_benchmark() {
     local tmp_files=()
     for cve in "${cves[@]}"; do
         local tmp
-        tmp=$(mktemp "$SCRIPT_DIR/.result-XXXXXXXX")
+        tmp=$(mktemp "$SCOPE_DIR/.result-XXXXXXXX")
         tmp_files+=("$tmp")
         (
             export EDC_RESULTS_FILE="$tmp"
@@ -347,7 +454,6 @@ run_benchmark() {
         wait "$pid" 2>/dev/null || true
     done
 
-    # Merge per-CVE results (skip headers)
     for tmp in "${tmp_files[@]}"; do
         [ -s "$tmp" ] && tail -n +2 "$tmp" >> "$results_file" 2>/dev/null || true
         rm -f "$tmp"
@@ -356,23 +462,22 @@ run_benchmark() {
     local score
     score=$(calc_score "$results_file")
     log "Score [$label]: $score"
-    echo "$score" > "$SCRIPT_DIR/.score-${label}.tmp"
+    echo "$score" > "$SCOPE_DIR/.score-${label}.tmp"
 }
 
-# ── Agent modification ───────────────────────────────────────────────────────
+# ── Agent modification ──────────────────────────────────────────────────────
 
 apply_change() {
     local iteration="$1"
     local prompt_file
     prompt_file=$(mktemp /tmp/edc-prompt-XXXXXXXX)
 
-    # Build context from experiment history
     local history="(none yet)"
     [ -f "$HASHES_FILE" ] && history=$(tail -15 "$HASHES_FILE" | awk -F'\t' 'NR>1{printf "score=%s delta=%s | %s\n", $2, $3, $4}') || true
 
     local last_breakdown="(none yet)"
     local last_results=""
-    last_results=$(ls -t "$SCRIPT_DIR"/results-iter*.tsv 2>/dev/null | head -1) || true
+    last_results=$(ls -t "$SCOPE_DIR"/results-iter*.tsv 2>/dev/null | head -1) || true
     [ -n "$last_results" ] && last_breakdown=$(cat "$last_results")
 
     local tried="(none)"
@@ -380,6 +485,8 @@ apply_change() {
 
     local baseline_score
     baseline_score=$(cat "$BASELINE_FILE" 2>/dev/null || echo "unknown")
+
+    local repos_list="${ACTIVE_REPOS[*]}"
 
     cat > "$prompt_file" << 'PROMPT_HEADER'
 You are iteratively improving LLM security analysis skills through experimentation.
@@ -392,8 +499,9 @@ PROMPT_HEADER
         echo "  - $REPO_ROOT/$f" >> "$prompt_file"
     done
 
-    cat >> "$prompt_file" << PROMPT_BODY
+    cat >> "$prompt_file" << PROMPT_DYNAMIC
 
+REPOS UNDER TEST: $repos_list
 BASELINE SCORE: $baseline_score / 1.0
 (exact=1.0pt, partial=0.5pt, missed=0pt — measured on the hard CVEs we currently miss)
 
@@ -406,6 +514,10 @@ $last_breakdown
 ALREADY-TRIED HASHES — do NOT produce a file state matching any of these:
 $tried
 
+Only edit files in: ${SKILL_FILES[*]}
+PROMPT_DYNAMIC
+
+    cat >> "$prompt_file" << 'PROMPT_STATIC'
 ─────────────────────────────────────────────────────────────────────
 PLANNED EXPERIMENTS — pick ONE not yet tried and implement it exactly.
 These are prioritized — try them in order if none have been tried yet.
@@ -460,9 +572,7 @@ YOUR TASK:
 2. Pick the first experiment from A–G not already reflected in the skill files.
 3. Implement it — make ONE focused, concrete addition. Do not combine multiple experiments.
 4. Output exactly one line: HEURISTIC: <what you added and which experiment it was>
-
-Only edit files in: ${SKILL_FILES[*]}
-PROMPT_BODY
+PROMPT_STATIC
 
     local agent_out
     agent_out=$(cd "$REPO_ROOT" && claude -p "$(cat "$prompt_file")" \
@@ -481,12 +591,14 @@ PROMPT_BODY
     echo "$heuristic"
 }
 
-# ── Status ───────────────────────────────────────────────────────────────────
+# ── Status ──────────────────────────────────────────────────────────────────
 
 print_status() {
     echo ""
     echo "=== Autoresearch Status ==="
     is_running && echo "State: RUNNING (PID $(cat "$PIDFILE"))" || echo "State: STOPPED"
+    echo "Repos: ${ACTIVE_REPOS[*]}"
+    echo "CVEs: ${#ALL_FAST_CVES[@]} fast + ${#ALL_REGRESSION_CVES[@]} regression = ${#ALL_CVES[@]} total"
     [ -f "$BASELINE_FILE" ] && echo "Baseline: $(cat "$BASELINE_FILE")" || echo "Baseline: not computed"
 
     if [ -f "$HASHES_FILE" ]; then
@@ -501,23 +613,34 @@ print_status() {
     echo ""
 }
 
-# ── Main loop ────────────────────────────────────────────────────────────────
+# ── Main loop ───────────────────────────────────────────────────────────────
 
 main() {
     local recompute_baseline=false
-    local max_iterations=-1   # -1 = unlimited, 0 = baseline only, N = run N iters
+    local max_iterations=-1
+    local repo_filter=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
             --stop)
                 is_running && { kill "$(cat "$PIDFILE")"; touch "$STOPFILE"; echo "Stop sent."; } || echo "Not running."
                 exit 0 ;;
-            --status) print_status; exit 0 ;;
+            --status)
+                discover_repos "$repo_filter"
+                load_cve_lists
+                setup_state_paths
+                print_status
+                exit 0 ;;
             --baseline) recompute_baseline=true; shift ;;
+            --repo) repo_filter="$2"; shift 2 ;;
             --iterations|--iters|-n) max_iterations="$2"; shift 2 ;;
             *) echo "Unknown: $1"; exit 1 ;;
         esac
     done
+
+    discover_repos "$repo_filter"
+    load_cve_lists
+    setup_state_paths
 
     if is_running; then
         echo "Already running (PID $(cat "$PIDFILE")). Use --stop or --status."
@@ -528,7 +651,13 @@ main() {
     trap 'rm -f "$PIDFILE"' EXIT
 
     mkdir -p "$WORK_DIR"
-    ensure_curl_repo
+
+    log "Active repos: ${ACTIVE_REPOS[*]}"
+    log "CVEs: ${#ALL_FAST_CVES[@]} fast + ${#ALL_REGRESSION_CVES[@]} regression = ${#ALL_CVES[@]} total"
+
+    for repo_name in "${ACTIVE_REPOS[@]}"; do
+        ensure_repo "$repo_name"
+    done
 
     log "Caching CVE source code..."
     cache_cve_sources
@@ -548,21 +677,20 @@ main() {
         regression_floor=$(cat "$REGRESSION_FLOOR_FILE")
         log "Loaded baseline: $baseline  regression floor: $regression_floor"
     else
-        log "Computing baseline on ${#FAST_CVES[@]} hard CVEs..."
-        run_benchmark "baseline" "${FAST_CVES[@]}"
-        baseline=$(cat "$SCRIPT_DIR/.score-baseline.tmp")
+        log "Computing baseline on ${#ALL_FAST_CVES[@]} fast CVEs..."
+        run_benchmark "baseline" "${ALL_FAST_CVES[@]}"
+        baseline=$(cat "$SCOPE_DIR/.score-baseline.tmp")
         echo "$baseline" > "$BASELINE_FILE"
 
-        log "Computing regression floor on ${#REGRESSION_CVES[@]} easy CVEs..."
-        run_benchmark "baseline-regression" "${REGRESSION_CVES[@]}"
-        regression_floor=$(cat "$SCRIPT_DIR/.score-baseline-regression.tmp")
+        log "Computing regression floor on ${#ALL_REGRESSION_CVES[@]} regression CVEs..."
+        run_benchmark "baseline-regression" "${ALL_REGRESSION_CVES[@]}"
+        regression_floor=$(cat "$SCOPE_DIR/.score-baseline-regression.tmp")
         echo "$regression_floor" > "$REGRESSION_FLOOR_FILE"
 
         log "Baseline: $baseline  Regression floor: $regression_floor"
         log_hash "$(compute_hash)" "$baseline" "+0.000" "baseline"
     fi
 
-    # -n 0 means baseline only — exit after setup
     if [ "$max_iterations" -eq 0 ]; then
         log "Baseline ready: $baseline. Exiting (use -n N to run N experiment iterations)."
         rm -f "$PIDFILE"
@@ -583,13 +711,11 @@ main() {
         log "Iteration $iteration  (fast_baseline=$baseline  reg_floor=$regression_floor)"
         log "══════════════════════════════════════"
 
-        # Agent proposes a change
         log "Agent proposing change..."
         local heuristic
         heuristic=$(apply_change "$iteration")
         log "Heuristic: $heuristic"
 
-        # No changes → skip, but bail if stuck
         if git -C "$REPO_ROOT" diff --quiet -- "${SKILL_FILES[@]}"; then
             consecutive_nochange=$(( consecutive_nochange + 1 ))
             log "No changes — skipping ($consecutive_nochange/$max_consecutive_nochange)"
@@ -601,7 +727,6 @@ main() {
         fi
         consecutive_nochange=0
 
-        # Hash dedup
         local new_hash
         new_hash=$(compute_hash)
         if hash_tried "$new_hash"; then
@@ -610,7 +735,6 @@ main() {
             continue
         fi
 
-        # Commit (will reset --hard if no improvement)
         git -C "$REPO_ROOT" add "${SKILL_FILES[@]}"
         git -C "$REPO_ROOT" -c commit.gpgsign=false commit -m "experiment: iter-$iteration — $heuristic" --quiet
 
@@ -618,21 +742,19 @@ main() {
         local new_score=""
         local status="discard"
 
-        # Phase 1: fast benchmark (5 CVEs in parallel)
-        run_benchmark "iter-${iteration}-fast" "${FAST_CVES[@]}"
+        run_benchmark "iter-${iteration}-fast" "${ALL_FAST_CVES[@]}"
         local fast_score
-        fast_score=$(cat "$SCRIPT_DIR/.score-iter-${iteration}-fast.tmp")
+        fast_score=$(cat "$SCOPE_DIR/.score-iter-${iteration}-fast.tmp")
         local fast_delta
         fast_delta=$(python3 -c "print(f'{$fast_score - $old_baseline:+.3f}')")
         log "Fast: $fast_score ($fast_delta)"
         new_score="$fast_score"
 
         if python3 -c "exit(0 if $fast_score > $old_baseline else 1)"; then
-            # Phase 2: regression check — only the easy CVEs we already find
-            log "Fast improved → regression check on ${#REGRESSION_CVES[@]} easy CVEs..."
-            run_benchmark "iter-${iteration}-regression" "${REGRESSION_CVES[@]}"
+            log "Fast improved → regression check on ${#ALL_REGRESSION_CVES[@]} regression CVEs..."
+            run_benchmark "iter-${iteration}-regression" "${ALL_REGRESSION_CVES[@]}"
             local reg_score
-            reg_score=$(cat "$SCRIPT_DIR/.score-iter-${iteration}-regression.tmp")
+            reg_score=$(cat "$SCOPE_DIR/.score-iter-${iteration}-regression.tmp")
             log "Regression: $reg_score (floor=$regression_floor)"
             new_score="$fast_score"
 

@@ -79,6 +79,53 @@ For every call site of the following APIs, answer the mandatory question. A "NO"
 
 ---
 
+## Integer Type Tracking (C/C++)
+
+For every variable used as a size, length, count, or array index in a C/C++ file, perform this triage. A "YES" in the Flag column is a candidate finding — stop and report.
+
+| Column | What to record |
+|--------|---------------|
+| **Variable** | Name and declaration line |
+| **Declared type** | `int`, `short`, `size_t`, `uint32_t`, `ssize_t`, etc. |
+| **Source** | `peer` (network/user input), `local` (computed internally), `mixed` |
+| **Cast chain** | Every implicit or explicit cast from source to sink (e.g. `ntohs→int→size_t`) |
+| **Sink** | `malloc`, `memcpy n`, `array[idx]`, `realloc` |
+
+**Flag if any of the following applies:**
+
+| Condition | Why dangerous | Flag |
+|-----------|--------------|------|
+| Signed type (`int`, `short`, `ssize_t`) used where `size_t`/`unsigned` is expected | Negative value silently widens to enormous `size_t` | YES if no `n <= 0` guard before sink |
+| Narrowing cast: `long`→`int`, `int`→`short`, `uint32_t`→`uint16_t` | High bits truncated; attacker controls truncated value | YES if result fed to sink without re-validation |
+| Unsigned subtraction `a - b` where `b` may exceed `a` | Wraps to near-`SIZE_MAX` | YES if no `a >= b` guard before subtraction |
+| Multiplication `a * b` fed to `malloc`/`memcpy` | Overflows to small value → under-allocation | YES if no `a <= SIZE_MAX / b` guard |
+| Two peer-controlled values added: `a + b` fed to `malloc` | Wraps to 0 or small value | YES if no `a <= SIZE_MAX - b` guard |
+
+**Per-variable triage procedure:**
+1. Find every assignment to the variable: `grep -n "<varname>" <file>`
+2. Identify the declared type and whether the RHS is peer-controlled (`ntohs`, `ntohl`, `atoi`, `strtol`, packet field read, `recv` output, etc.)
+3. Trace forward: list every arithmetic operation between assignment and the sink
+4. For each operation, apply the flag table above
+5. If flagged: check the 10 lines before the sink for a guard that rules out the dangerous value
+6. No guard → REPORT with the cast chain and the sink line number
+
+**Detection greps (run on each C/C++ file):**
+```bash
+# Signed variable used as size (catch signed→size_t promotion)
+grep -n "int\s\+\w\+.*=.*ntohs\|int\s\+\w\+.*=.*ntohl\|int\s\+\w\+.*=.*atoi\|int\s\+\w\+.*=.*strtol" <file>
+
+# Narrowing cast patterns
+grep -n "(int)\|(short)\|(uint16_t)\|(uint8_t)" <file>
+
+# Unsigned subtraction candidates
+grep -n "\-\-\|= .* - " <file>  # review each for unsigned operands
+
+# Multiplication into alloc
+grep -n "malloc.*\*\|calloc" <file>
+```
+
+---
+
 ## Integer Overflow/Underflow
 
 **Pattern:** Arithmetic without bounds checking

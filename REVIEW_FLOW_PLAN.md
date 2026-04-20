@@ -38,7 +38,7 @@ When `/edc:edc-review` runs today:
    skill, does inline file reads, writes .meta.json manually. Context is incomplete.
 2. **Agent skips re-verification** — after manually building context, agent decides to
    "proceed directly" instead of re-running the orchestrator script.
-3. **Agent ignores task files** — review-tasks/{module}.md files are created by the script
+3. **Agent ignores task files** — review/{module}.md files are created by the script
    but the agent never reads them. It fetches the PR diff itself and does its own analysis.
 4. **No hard failures** — every failure mode has an implicit "work around it" fallback.
 
@@ -69,7 +69,7 @@ fall back to inline analysis when skills fail. Removing that option removes the 
   │         skill reads task file
   │         skill loads context.md + issues.md + {module}.md
   │         skill reviews the listed files
-  │         skill writes review-tasks/report-{module}.md
+  │         skill writes review/report-{module}.md
   │         if report not written → HARD STOP
   │
   └─ run script --consolidate
@@ -115,7 +115,7 @@ fall back to inline analysis when skills fail. Removing that option removes the 
 5. **Verified handoffs.** After every skill completes, the script re-runs to confirm the
    expected output exists. Trust nothing implicitly.
 
-6. **Per-module skill invocation.** Script outputs one `TASK review-tasks/{module}.md` line
+6. **Per-module skill invocation.** Script outputs one `TASK review/{module}.md` line
    per module. Top agent invokes edc-review skill once per line, passing the task file path.
    The skill does the scoped review and writes the report.
 
@@ -134,10 +134,10 @@ fall back to inline analysis when skills fail. Removing that option removes the 
 - [x] Add `--check-context` mode: thin assertion that `.context/.meta.json` exists and
       `lastCommit` matches HEAD. Used by the command to verify edc-build/edc-update
       actually worked before re-entering build mode.
-- [x] Add `--consolidate` mode: reads `review-tasks/manifest.json` to determine expected
-      reports, merges all `review-tasks/report-{module}.md` into `review-{target}.md`,
+- [x] Add `--consolidate` mode: reads `review/manifest.json` to determine expected
+      reports, merges all `review/report-{module}.md` into `review-{target}.md`,
       exits non-zero if any expected report is missing
-- [x] After writing task files, print one `TASK review-tasks/{module}.md` line per module
+- [x] After writing task files, print one `TASK review/{module}.md` line per module
       to stdout (so the command can iterate without needing Read access)
 - [x] `manifest.json` is the script's internal source of truth (consumed only by
       `--consolidate` and `--verify`). The agent never reads it. TASK stdout lines are
@@ -163,7 +163,7 @@ fall back to inline analysis when skills fail. Removing that option removes the 
   - Scope review to listed files only — do not expand
   - Load `.context/context.md`, `.context/issues.md`, `.context/{module}.md` (module name
     derived from task file basename)
-  - Write report to `review-tasks/report-{module}.md`
+  - Write report to `review/report-{module}.md`
   - Otherwise: behave as today (full standalone review)
 
 ### Out of scope (follow-up PRs)

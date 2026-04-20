@@ -31,18 +31,18 @@ Do not work around these conditions. The script is the authority.
 
 ## Step 2 — Read the manifest
 
-Read `review-tasks/manifest.json` for the list of modules and changed files.
+Read `review/manifest.json` for the list of modules and changed files.
 
 ## Step 3 — Process each module task sequentially
 
 For each module in the manifest:
-1. Read `review-tasks/{module}.md`
+1. Read `review/{module}.md`
 2. Follow the instructions in that file exactly — do not paraphrase or skip steps
-3. Do not begin the next module until `review-tasks/report-{module}.md` is written
+3. Do not begin the next module until `review/report-{module}.md` is written
 
 ## Step 4 — Consolidate
 
 Write `review-{TARGET_SHORT}.md`:
 1. Header: target, baseline, date, modules reviewed
-2. Full contents of each `review-tasks/report-{module}.md`, unedited
+2. Full contents of each `review/report-{module}.md`, unedited
 3. Summary: cross-module findings, overall risk rating

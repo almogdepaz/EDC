@@ -172,7 +172,8 @@ Respond with ONLY a JSON object, no other text:
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--model", LLM_JUDGE_MODEL, "--output-format", "json"],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL
         )
 
         if result.returncode != 0:

@@ -28,13 +28,13 @@ Read the first line of output:
 - `Review tasks ready` → proceed
 
 **Step 2 — Read the manifest:**
-Read `review-tasks/manifest.json` for the list of modules and files.
+Read `review/manifest.json` for the list of modules and files.
 
 **Step 3 — Process each module task sequentially:**
 For each module in the manifest:
-1. Read `review-tasks/{module}.md`
+1. Read `review/{module}.md`
 2. Follow its instructions exactly — do not paraphrase or skip steps
-3. Do not move to the next module until `review-tasks/report-{module}.md` is written
+3. Do not move to the next module until `review/report-{module}.md` is written
 
 **Step 4 — Consolidate:**
 Write `review-{TARGET_SHORT}.md` with: header, full per-module reports (unedited), cross-module summary.

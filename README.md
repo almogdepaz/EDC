@@ -13,7 +13,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
 Run these in order on any codebase:
 
 1. `/edc:edc-build` — analyzes every function line-by-line using First Principles, 5 Whys, and 5 Hows. Produces:
-   - `.context/context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
+   - `context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
    - `.context/{module}.md` — deep per-module analysis
    - `.context/issues.md` — actionable list of all problems found
    - `.context/complexity.md` — bloat, duplication, overengineering audit
@@ -29,13 +29,10 @@ Run these in order on any codebase:
 
 ### Hooks (Claude Code only)
 
-The plugin installs two hooks that run automatically, designed to keep context overhead minimal:
+The plugin installs two hooks that run automatically:
 
-- **SessionStart** — loads `.context/context.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
-
-- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/.meta.json`, then injects only that module's `.context/{module}.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
-
-The result: the agent always has the architecture overview, gets deep module context exactly when it needs it, and never loads the full project context.
+- **SessionStart** — on every new session, surfaces any existing `.context/` files so the agent starts context-aware
+- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, injects relevant module context so the agent never edits blind
 
 ## Install
 
@@ -64,22 +61,6 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
 ```
 
-## Gitignore
-
-EDC writes scratch state into your repo. Add these to your target repo's `.gitignore`:
-
-```
-.context/
-review-tasks/
-review-*.md
-```
-
-- `.context/` — per-module deep context written by `edc-build`/`edc-update`
-- `review-tasks/` — per-module task files and reports from `edc-review`
-- `review-*.md` — consolidated review output
-
-If these get committed, `edc-review` filters them out of diffs automatically so the tool doesn't review its own output, but you'll still want them ignored to keep your git history clean.
-
 ## Commands
 
 | Command | Description |
@@ -89,30 +70,6 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-review` | Differential review using context (PR URL, commit SHA, or diff path) |
-
-### `/edc:edc-review` invocation examples
-
-```bash
-# review a GitHub PR by URL
-/edc:edc-review https://github.com/owner/repo/pull/42
-
-# review current branch against main (full branch diff)
-/edc:edc-review HEAD --baseline main
-
-# review a specific branch against main
-/edc:edc-review feature/auth --baseline main
-
-# review a single commit (defaults to its parent as baseline)
-/edc:edc-review abc1234
-
-# review a range of commits
-/edc:edc-review HEAD --baseline HEAD~5
-
-# review a pre-generated diff file
-/edc:edc-review path/to/changes.patch
-```
-
-Without `--baseline`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--baseline main`.
 
 ## Repo Structure
 

@@ -93,6 +93,7 @@ Be thorough. Do not skip any function."
         --max-turns 50 \
         --output-format text \
         --dangerously-skip-permissions) \
+        < /dev/null \
         > "$output_dir/claude-output.txt" 2>&1 || true
 
     local end_time=$(date +%s)
@@ -134,7 +135,7 @@ main() {
 
     # Initialize results file
     if [ ! -f "$RESULTS_FILE" ]; then
-        echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$RESULTS_FILE"
+        echo -e "timestamp\tcve\tcategory\tseverity\tverdict\tconfidence\tduration\tnotes" > "$RESULTS_FILE"
     fi
 
     # Iterate repos

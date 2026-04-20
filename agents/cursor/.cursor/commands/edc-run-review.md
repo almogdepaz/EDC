@@ -2,47 +2,30 @@
 description: Performs differential review of code changes using codebase context
 ---
 
-# Review
+# Differential Review
 
 **Arguments:** passed from command input (PR URL, commit SHA, or diff path; optional `--baseline <ref>`)
 
-## Step 1 — Run the orchestrator
+The orchestrator script runs the full pipeline self-driven: it spawns fresh `cursor agent -p`
+sessions for context build/update, per-module review, and consolidation. Your only job
+is to invoke it and surface its output. You have no other tools — do not attempt the
+review work inline.
 
 ```bash
+export EDC_AGENT_CLI=cursor
+set -- <target> [--baseline <ref>]
 if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh <target> [--baseline <ref>]
+  bash .edc/scripts/edc-review.sh --auto "$@"
 elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" <target> [--baseline <ref>]
+  bash "$HOME/.edc/scripts/edc-review.sh" --auto "$@"
 else
-  echo "SCRIPT_MISSING"
+  echo "SCRIPT_MISSING: install EDC orchestrator first (run agents/cursor/install.sh from the EDC repo)"
+  exit 1
 fi
 ```
 
-Read the first line of output:
+If the script exits non-zero, surface its error message verbatim and stop. Do not retry.
+Do not attempt the work inline — you cannot, let the orchestrator handle subprocess spawning.
 
-| Output starts with | Action |
-|--------------------|--------|
-| `CONTEXT_MISSING` | Run `edc-run-build` first. Stop. Tell the user to re-run after the build. |
-| `CONTEXT_STALE` | Run `edc-run-build` first. Stop. Tell the user to re-run after the update. |
-| `SCRIPT_MISSING` | Tell the user to run `install.sh --project <dir>` from the EDC repo. Stop. |
-| `Review tasks ready` | Proceed to Step 2. |
-
-Do not work around these conditions. The script is the authority.
-
-## Step 2 — Read the manifest
-
-Read `review-tasks/manifest.json` for the list of modules and changed files.
-
-## Step 3 — Process each module task sequentially
-
-For each module in the manifest:
-1. Read `review-tasks/{module}.md`
-2. Follow the instructions in that file exactly — do not paraphrase or skip steps
-3. Do not begin the next module until `review-tasks/report-{module}.md` is written
-
-## Step 4 — Consolidate
-
-Write `review-{TARGET_SHORT}.md`:
-1. Header: target, baseline, date, modules reviewed
-2. Full contents of each `review-tasks/report-{module}.md`, unedited
-3. Summary: cross-module findings, overall risk rating
+The script prints `Consolidated: <path>` and `Verified: <path>` on success. Tell the
+user the path of the final review file.

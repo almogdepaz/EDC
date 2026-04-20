@@ -58,6 +58,9 @@ case "$AGENT" in
     done
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
+    download "agents/cursor/.cursor/commands/edc-run-update.md" "$TARGET/commands/edc-run-update.md"
+    download "agents/cursor/.cursor/commands/edc-run-split.md" "$TARGET/commands/edc-run-split.md"
+    download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
     download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/"
     ;;

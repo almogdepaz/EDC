@@ -9,7 +9,7 @@
 #
 # Usage:
 #   edc-review.sh <target> [--baseline <ref>]         build mode (default — emit TASK lines)
-#   edc-review.sh --auto <target> [--baseline <ref>]  self-driving mode (claude code only — spawns claude -p)
+#   edc-review.sh --auto <target> [--baseline <ref>]  self-driving mode (spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                       merge per-module reports into final review file
 #   edc-review.sh --verify                            assert context fresh + reports + final file exist
@@ -34,6 +34,14 @@ if ! command -v jq > /dev/null 2>&1; then
 fi
 
 META=".context/.meta.json"
+
+# ── agent CLI configuration ──────────────────────────────────────────────────
+#
+# EDC_AGENT_CLI selects which CLI spawns subprocess agents in --auto mode.
+#   "claude"  → claude -p  (default, backward-compatible)
+#   "cursor"  → cursor agent -p
+
+EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
 
 # ── timeout detection ────────────────────────────────────────────────────────
 #
@@ -93,8 +101,8 @@ run_with_timeout() {
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-# stream_filter: read NDJSON from claude -p --output-format stream-json --verbose
-# and print human-readable progress lines.
+# stream_filter: read NDJSON from agent CLI --output-format stream-json
+# and print human-readable progress lines. Handles both Claude and Cursor formats.
 stream_filter() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -108,6 +116,16 @@ stream_filter() {
     tool_info=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "tool_use") | "→ \(.name)(\((.input | to_entries | first | .value // "") | tostring | .[0:80]))") | .[] else empty end' 2>/dev/null)
     if [ -n "$tool_info" ]; then
       printf '%s\n' "$tool_info"
+      continue
+    fi
+    # type=tool_call (Cursor stream format) — show tool name on start
+    tool_call_info=$(printf '%s' "$line" | jq -r '
+      if .type == "tool_call" and .subtype == "started" then
+        (.tool_call | to_entries[0] |
+         "→ \(.key)(\(.value.args // {} | to_entries[0] | .value // "" | tostring | .[0:80]))")
+      else empty end' 2>/dev/null)
+    if [ -n "$tool_call_info" ]; then
+      printf '%s\n' "$tool_call_info"
       continue
     fi
     # type=result with is_error=true
@@ -200,6 +218,70 @@ assert_report_valid() {
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
     return 1
   fi
+}
+
+# ── agent CLI helpers ────────────────────────────────────────────────────────
+
+# Strip YAML frontmatter (--- … ---) from a file, return body only.
+strip_frontmatter() {
+  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2' "$1"
+}
+
+# Find a Cursor resource file (command, skill, etc.) under .cursor/ or ~/.cursor/.
+find_cursor_resource() {
+  local rel="$1"
+  for base in ".cursor" "$HOME/.cursor"; do
+    if [ -f "$base/$rel" ]; then
+      echo "$base/$rel"
+      return 0
+    fi
+  done
+  echo "ERROR: $rel not found in .cursor/ or ~/.cursor/" >&2
+  return 1
+}
+
+# Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
+resolve_prompt() {
+  local action="$1"; shift
+  case "$EDC_AGENT_CLI" in
+    claude)
+      case "$action" in
+        build)  echo "/edc:edc-build" ;;
+        update) echo "/edc:edc-update" ;;
+        review) echo "/edc:edc-review-impl --task-file $1" ;;
+      esac
+      ;;
+    cursor)
+      case "$action" in
+        build|update)
+          local cmd_name
+          if [ "$action" = "build" ]; then cmd_name="edc-run-build.md"; else cmd_name="edc-run-update.md"; fi
+          local f
+          f=$(find_cursor_resource "commands/$cmd_name") || return 1
+          strip_frontmatter "$f"
+          ;;
+        review)
+          printf 'Read the file at %s and follow every instruction in it.\nUse the edc-review-impl skill for the review methodology — read its SKILL.md first.\nWrite the report to the path specified in the task file.\nDo not skip reading the .context/ files.' "$1"
+          ;;
+      esac
+      ;;
+  esac
+}
+
+# Spawn a subprocess agent with the appropriate CLI.
+run_agent() {
+  local prompt="$1"
+  case "$EDC_AGENT_CLI" in
+    claude)
+      claude -p --output-format stream-json --verbose \
+        --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+        <<< "$prompt"
+      ;;
+    cursor)
+      cursor agent -p --output-format stream-json --force --trust \
+        <<< "$prompt"
+      ;;
+  esac
 }
 
 # ── check-context mode ───────────────────────────────────────────────────────
@@ -296,17 +378,28 @@ verify_mode() {
   echo "Verified: $final"
 }
 
-# ── auto mode (claude code only) ─────────────────────────────────────────────
+# ── auto mode ────────────────────────────────────────────────────────────────
 #
-# Self-driving pipeline: detect context state, spawn `claude -p` for each phase,
-# verify outputs, consolidate, verify. The orchestrator script owns every decision;
-# the spawned agents have one job each. Requires `claude` on PATH.
+# Self-driving pipeline: detect context state, spawn agent subprocesses for each
+# phase, verify outputs, consolidate, verify. The orchestrator script owns every
+# decision; the spawned agents have one job each.
+# Set EDC_AGENT_CLI=claude|cursor before invoking.
 
 auto_mode() {
-  if ! command -v claude > /dev/null 2>&1; then
-    echo "ERROR: --auto mode requires 'claude' CLI on PATH" >&2
-    exit 2
-  fi
+  case "$EDC_AGENT_CLI" in
+    claude)
+      command -v claude > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
+      ;;
+    cursor)
+      command -v cursor > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
+      ;;
+    *)
+      echo "ERROR: EDC_AGENT_CLI must be 'claude' or 'cursor'" >&2
+      exit 2
+      ;;
+  esac
 
   local target="$1"; shift
   local extra_args=("$@")
@@ -326,20 +419,20 @@ auto_mode() {
   # Recover from missing/stale context (one shot)
   case "$recovery" in
     build)
-      echo "→ context missing, spawning claude -p for edc-build..."
+      echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..."
+      local build_prompt
+      build_prompt=$(resolve_prompt build) || exit 1
       run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-        claude -p --output-format stream-json --verbose \
-          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "/edc:edc-build" \
+        run_agent "$build_prompt" \
         | stream_filter \
         || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
       ;;
     update)
-      echo "→ context stale, spawning claude -p for edc-update..."
+      echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
+      local update_prompt
+      update_prompt=$(resolve_prompt update) || exit 1
       run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-        claude -p --output-format stream-json --verbose \
-          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "/edc:edc-update" \
+        run_agent "$update_prompt" \
         | stream_filter \
         || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
       ;;
@@ -366,23 +459,18 @@ auto_mode() {
     exit 1
   fi
 
-  # Spawn one claude -p per module
-  #
-  # CRITICAL: `claude -p` reads the prompt from stdin (positional prompt argv is
-  # not accepted in current versions — it errors with "Input must be provided
-  # either through stdin or as a prompt argument"). We feed it via here-string.
-  # Loop iterates `<<< "$tasks"` which otherwise leaks into claude -p's stdin
-  # on iteration 1 (clobbering the prompt and draining the queue), but the
-  # here-string on each invocation overrides that stdin.
+  # Spawn one agent subprocess per module.
+  # The here-string on each run_agent call provides the prompt via stdin,
+  # overriding the loop's <<< "$tasks" so it doesn't leak into the subprocess.
   while IFS= read -r task_path; do
     [ -z "$task_path" ] && continue
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
+    local review_prompt
+    review_prompt=$(resolve_prompt review "$task_path") || exit 1
     run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-      claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-      <<< "/edc:edc-review-impl --task-file $task_path" \
+      run_agent "$review_prompt" \
       | stream_filter \
       || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \
@@ -392,8 +480,8 @@ auto_mode() {
   # Consolidate + verify
   bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
   bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
-  # Explicit exit so any late-arriving subprocess output (claude -p children,
-  # MCP servers, etc.) can't poison our exit code after the pipeline succeeded.
+  # Explicit exit so any late-arriving subprocess output can't poison our
+  # exit code after the pipeline succeeded.
   exit 0
 }
 

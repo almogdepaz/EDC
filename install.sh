@@ -52,6 +52,7 @@ case "$AGENT" in
 
   cursor)
     TARGET="$HOME/.cursor"
+    SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Cursor..."
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/skills/$(skill_rel "$f")"
@@ -62,7 +63,9 @@ case "$AGENT" in
     download "agents/cursor/.cursor/commands/edc-run-split.md" "$TARGET/commands/edc-run-split.md"
     download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
     download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/"
+    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
+    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, orchestrator at $SCRIPTS_TARGET/"
     ;;
 
   codex)

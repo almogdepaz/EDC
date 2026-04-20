@@ -1,7 +1,7 @@
 ---
 name: edc:edc-review
 description: Performs differential review of code changes using codebase context
-argument-hint: "<pr-url|commit-sha|diff-path> [--baseline <ref>]"
+argument-hint: "--base <ref> | <target> [--base <ref>] | <pr-url>"
 allowed-tools:
   - Bash
 ---

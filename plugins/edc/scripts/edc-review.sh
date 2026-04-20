@@ -8,8 +8,9 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--baseline <ref>]         build mode (default — emit TASK lines)
-#   edc-review.sh --auto <target> [--baseline <ref>]  self-driving mode (spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh <target> [--base <ref>]              build mode (default — emit TASK lines)
+#   edc-review.sh --auto <target> [--base <ref>]      self-driving mode (spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh --base <ref>                        shorthand for: --auto HEAD --base <ref>
 #   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                       merge per-module reports into final review file
 #   edc-review.sh --verify                            assert context fresh + reports + final file exist
@@ -493,7 +494,7 @@ build_mode() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --baseline) baseline="$2"; shift 2 ;;
+      --base) baseline="$2"; shift 2 ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -640,6 +641,14 @@ case "${1:-}" in
     fi
     auto_mode "$@"
     ;;
+  --base)
+    # Shorthand: --base <ref> → --auto HEAD --base <ref>
+    if [ -z "${2:-}" ]; then
+      echo "ERROR: --base requires a ref (e.g. --base main)" >&2
+      exit 2
+    fi
+    auto_mode HEAD --base "$2"
+    ;;
   --check-context)
     check_context_mode
     ;;
@@ -651,8 +660,9 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--baseline <ref>]" >&2
-    echo "       edc-review.sh --auto <target> [--baseline <ref>]" >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>]" >&2
+    echo "       edc-review.sh --auto <target> [--base <ref>]" >&2
+    echo "       edc-review.sh --base <ref>     (shorthand for --auto HEAD --base <ref>)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

@@ -41,8 +41,11 @@ META=".context/.meta.json"
 # EDC_AGENT_CLI selects which CLI spawns subprocess agents for the review pipeline.
 #   "claude"  → claude -p  (default, backward-compatible)
 #   "cursor"  → cursor agent -p
+#   "codex"   → codex exec
 
 EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
+CODEX_EXEC_HOME=""
+CODEX_EXEC_HOME_OWNED=0
 
 # ── timeout detection ────────────────────────────────────────────────────────
 #
@@ -107,10 +110,34 @@ run_with_timeout() {
   return $rc
 }
 
+cleanup_codex_exec_home() {
+  if [ "${CODEX_EXEC_HOME_OWNED:-0}" -eq 1 ] && [ -n "${CODEX_EXEC_HOME:-}" ] && [ -d "$CODEX_EXEC_HOME" ]; then
+    rm -rf "$CODEX_EXEC_HOME"
+  fi
+}
+
+ensure_codex_exec_home() {
+  if [ -n "${CODEX_EXEC_HOME:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${EDC_CODEX_HOME:-}" ]; then
+    mkdir -p "$EDC_CODEX_HOME"
+    CODEX_EXEC_HOME="$EDC_CODEX_HOME"
+    CODEX_EXEC_HOME_OWNED=0
+    return 0
+  fi
+
+  CODEX_EXEC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-codex-home.XXXXXX") \
+    || { echo "ERROR: could not create temporary CODEX_HOME" >&2; return 1; }
+  CODEX_EXEC_HOME_OWNED=1
+  trap cleanup_codex_exec_home EXIT
+}
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-# stream_filter: read NDJSON from agent CLI --output-format stream-json
-# and print human-readable progress lines. Handles both Claude and Cursor formats.
+# stream_filter: read NDJSON from agent CLI output and print human-readable
+# progress lines. Handles Claude, Cursor, and Codex formats.
 stream_filter() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -140,6 +167,27 @@ stream_filter() {
     err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
     if [ -n "$err" ]; then
       printf '%s\n' "$err" >&2
+      continue
+    fi
+    # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
+    # agent_message carries the assistant text the user needs to see; without
+    # this handler the pipeline runs silent under real `codex exec`.
+    codex_msg=$(printf '%s' "$line" | jq -r '
+      if (.msg.type // "") == "agent_message" then (.msg.message // "")
+      elif (.msg.type // "") == "agent_reasoning" then "… \(.msg.text // "")"
+      elif (.msg.type // "") == "exec_command_begin" then "→ \(((.msg.command // []) | join(" "))[0:120])"
+      else empty end' 2>/dev/null)
+    if [ -n "$codex_msg" ]; then
+      printf '%s\n' "$codex_msg"
+      continue
+    fi
+    # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
+    codex_err=$(printf '%s' "$line" | jq -r '
+      if .type == "error" then "ERROR (subprocess): \(.message // "unknown error")"
+      elif (.msg.type // "") == "error" then "ERROR (subprocess): \(.msg.message // "unknown error")"
+      else empty end' 2>/dev/null)
+    if [ -n "$codex_err" ]; then
+      printf '%s\n' "$codex_err" >&2
     fi
   done
 }
@@ -230,29 +278,40 @@ assert_report_valid() {
 
 # ── agent CLI helpers ────────────────────────────────────────────────────────
 
-# Locate a cursor-runtime skill's SKILL.md. Searches project-local then global.
-# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
-find_cursor_skill() {
-  local name="$1"
-  for base in ".cursor/skills" "$HOME/.cursor/skills"; do
+# Locate an installed runtime skill's SKILL.md. Searches project-local first,
+# then the global agent install path.
+find_installed_skill() {
+  local name="$1"; shift
+  local base
+  for base in "$@"; do
     if [ -f "$base/$name/SKILL.md" ]; then
       echo "$base/$name/SKILL.md"
       return 0
     fi
   done
-  echo "ERROR: skill '$name' not found in .cursor/skills/ or ~/.cursor/skills/" >&2
+  echo "ERROR: skill '$name' not found in: $*" >&2
   return 1
+}
+
+# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
+find_cursor_skill() {
+  find_installed_skill "$1" ".cursor/skills" "$HOME/.cursor/skills"
+}
+
+# Codex skills are installed under .codex/skills/<name>/ or ~/.codex/skills/<name>/.
+find_codex_skill() {
+  find_installed_skill "$1" ".codex/skills" "$HOME/.codex/skills"
 }
 
 # Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
 #
-# Both paths route through the same -impl skills (edc-build-impl, edc-update-impl,
-# edc-review-impl) — single source of truth, no workflow duplication.
+# Cursor and Codex route through the same -impl skills directly; Claude routes
+# through command wrappers that invoke those same -impl skills.
 #
 # Claude: slash commands — the plugin system resolves the command wrapper,
 #         which invokes the matching -impl skill.
-# Cursor: cat the skill file and strip frontmatter — cursor subprocess then
-#         follows the skill instructions directly.
+# Cursor/Codex: cat the installed skill file so the subprocess follows the
+#               exact same instructions directly.
 resolve_prompt() {
   local action="$1"; shift
   local prompt_arg_string="$*"
@@ -281,6 +340,29 @@ resolve_prompt() {
           local task_path="$1"
           local review_skill review_dir
           review_skill=$(find_cursor_skill "edc-review-impl") || return 1
+          review_dir=$(dirname "$review_skill")
+          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
+            "$task_path" "$review_skill" "$review_dir"
+          ;;
+      esac
+      ;;
+    codex)
+      case "$action" in
+        build)
+          local skill
+          skill=$(find_codex_skill "edc-build-impl") || return 1
+          cat "$skill"
+          ;;
+        update)
+          local skill
+          skill=$(find_codex_skill "edc-update-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
+          cat "$skill"
+          ;;
+        review)
+          local task_path="$1"
+          local review_skill review_dir
+          review_skill=$(find_codex_skill "edc-review-impl") || return 1
           review_dir=$(dirname "$review_skill")
           printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
             "$task_path" "$review_skill" "$review_dir"
@@ -389,7 +471,7 @@ verify_mode() {
 # Self-driving pipeline: detect context state, spawn agent subprocesses for each
 # phase, verify outputs, consolidate, verify. The orchestrator script owns every
 # decision; the spawned agents have one job each.
-# Set EDC_AGENT_CLI=claude|cursor before invoking.
+# Set EDC_AGENT_CLI=claude|cursor|codex before invoking.
 
 auto_mode() {
   case "$EDC_AGENT_CLI" in
@@ -401,8 +483,13 @@ auto_mode() {
       command -v cursor > /dev/null 2>&1 \
         || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
       ;;
+    codex)
+      command -v codex > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
+      ensure_codex_exec_home || exit 1
+      ;;
     *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude' or 'cursor'" >&2
+      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
       exit 2
       ;;
   esac
@@ -447,6 +534,13 @@ auto_mode() {
             | stream_filter \
             || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
           ;;
+        codex)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
       esac
       ;;
     update)
@@ -465,6 +559,13 @@ auto_mode() {
         cursor)
           run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
             cursor agent -p --output-format stream-json --force --trust \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+        codex)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
             <<< "$update_prompt" \
             | stream_filter \
             || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
@@ -516,6 +617,13 @@ auto_mode() {
       cursor)
         run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
           cursor agent -p --output-format stream-json --force --trust \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+      codex)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
           <<< "$review_prompt" \
           | stream_filter \
           || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }

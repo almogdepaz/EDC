@@ -79,11 +79,19 @@ case "$AGENT" in
 
   codex)
     TARGET="$HOME/.codex/skills"
+    SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Codex..."
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/$(skill_rel "$f")"
     done
-    echo "Done. Use \$edc-context or \$edc-review to invoke."
+    download "agents/codex/.codex/skills/edc-build/SKILL.md" "$TARGET/edc-build/SKILL.md"
+    download "agents/codex/.codex/skills/edc-update/SKILL.md" "$TARGET/edc-update/SKILL.md"
+    download "agents/codex/.codex/skills/edc-split/SKILL.md" "$TARGET/edc-split/SKILL.md"
+    download "agents/codex/.codex/skills/edc-audit/SKILL.md" "$TARGET/edc-audit/SKILL.md"
+    download "agents/codex/.codex/skills/edc-run-review/SKILL.md" "$TARGET/edc-run-review/SKILL.md"
+    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
+    echo "Done. Skills at $TARGET/, orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-split, \$edc-audit, or \$edc-run-review."
     ;;
 
   gemini)

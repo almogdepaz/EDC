@@ -253,7 +253,7 @@ resolve_prompt() {
       case "$action" in
         build)  echo "/edc:edc-build" ;;
         update) echo "/edc:edc-update" ;;
-        review) echo "/edc:edc-review-impl --task-file $1" ;;
+        review) echo "/edc:edc-review --task-file $1" ;;
       esac
       ;;
     cursor)

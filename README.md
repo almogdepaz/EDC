@@ -10,7 +10,10 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
 
 ### Build pipeline
 
-Run these in order on any codebase:
+Run these entrypoints in order on any codebase:
+- Claude Code: `/edc:...`
+- Codex: `$edc-...`
+- Cursor: installed `edc-run-*` commands
 
 1. `/edc:edc-build` — analyzes every function line-by-line using First Principles, 5 Whys, and 5 Hows. Produces:
    - `.context/context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
@@ -58,6 +61,32 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s codex
 ```
 
+This installs the user-facing Codex skills:
+- `$edc-build`
+- `$edc-update`
+- `$edc-split`
+- `$edc-audit`
+- `$edc-run-review`
+
+It also installs the shared orchestrator at `~/.edc/scripts/edc-review.sh`.
+
+#### Codex auth with the orchestrator
+
+The orchestrator spawns `codex exec` subprocesses under an isolated
+`CODEX_HOME` (a fresh temp dir per run) so pipeline state never collides with
+your interactive Codex sessions. That isolation also means the subprocesses
+don't inherit your Codex login.
+
+If `codex exec` fails with an auth error inside the pipeline, point the
+orchestrator at your real Codex home before invoking the skill:
+
+```bash
+export EDC_CODEX_HOME="$HOME/.codex"
+```
+
+When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim (and does not
+clean it up).
+
 ### Gemini CLI
 
 ```bash
@@ -89,6 +118,16 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+
+### Codex skill equivalents
+
+| Skill | Description |
+|-------|-------------|
+| `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
+| `$edc-split` | Split `full-context.md` into per-module `.context/*.md` files |
+| `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
+| `$edc-audit` | Bloat, duplication, and overengineering detection |
+| `$edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
 
 ### `/edc:edc-run-review` invocation examples
 
@@ -140,6 +179,6 @@ edc/
       pretooluse-context-inject.mjs  # injects module context before edits
   agents/                            # agent-specific wrappers
     cursor/                          # Cursor commands + install script
-    codex/                           # Codex AGENTS.md + install script
+    codex/                           # Codex wrapper skills + AGENTS.md + install script
     gemini/                          # Gemini GEMINI.md + install script
 ```

@@ -16,7 +16,7 @@
 # Run from repo root: bash tests/hardening/t6-auto-mode.sh
 set -euo pipefail
 
-SCRIPT_REL="scripts/edc-review.sh"
+SCRIPT_REL="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
 TMPDIR_T6=$(mktemp -d)

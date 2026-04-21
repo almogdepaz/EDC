@@ -18,7 +18,12 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
-# Canonical skill files (single source of truth: plugins/edc/skills/)
+# Canonical skill files.
+# IMPORTANT: when adding/removing a skill file, update BOTH lists:
+#   - this SKILLS array (used by `curl | bash` remote install)
+#   - agents/cursor/install.sh (used by local clone install)
+# The two installers intentionally enumerate files explicitly so adding a new
+# file without registering it fails loudly in both paths instead of one.
 SKILLS=(
   "plugins/edc/skills/edc-context/SKILL.md"
   "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"

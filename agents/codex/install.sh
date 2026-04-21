@@ -21,13 +21,13 @@ else
 fi
 
 mkdir -p "$TARGET/edc-context/resources"
-mkdir -p "$TARGET/edc-review"
+mkdir -p "$TARGET/edc-review-impl"
 mkdir -p "$SCRIPTS_TARGET"
 
 cp "$SKILL_SRC/edc-context/SKILL.md" "$TARGET/edc-context/"
 cp "$SKILL_SRC/edc-context/resources/"* "$TARGET/edc-context/resources/"
-cp "$SKILL_SRC/edc-review/"* "$TARGET/edc-review/"
+cp "$SKILL_SRC/edc-review-impl/"* "$TARGET/edc-review-impl/"
 cp "$REPO_ROOT/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
 chmod +x "$SCRIPTS_TARGET/edc-review.sh"
 
-echo "Done. Skills at $TARGET/, orchestrator at $SCRIPTS_TARGET/. Use \$edc-context or \$edc-review to invoke."
+echo "Done. Skills at $TARGET/, orchestrator at $SCRIPTS_TARGET/. Use \$edc-context or \$edc-review-impl to invoke."

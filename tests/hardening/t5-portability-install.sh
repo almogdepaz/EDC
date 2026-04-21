@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT="scripts/edc-review.sh"
-COMMAND="plugins/edc/commands/edc-review.md"
+COMMAND="plugins/edc/commands/edc-run-review.md"
 HOOK="plugins/edc/hooks/session-start.mjs"
 PLUGIN_SCRIPT="plugins/edc/scripts/edc-review.sh"
 

@@ -5,13 +5,13 @@ alwaysApply: true
 
 At the start of every conversation, do the following:
 
-1. Check if `context.md` exists in the project root.
+1. Check if `.context/context.md` exists in the project.
 
-2. **If `context.md` does not exist:**
+2. **If `.context/context.md` does not exist:**
    Output: "No codebase context found. Run `edc-run-build` to generate deep architectural context and enable smarter code assistance."
    Stop here.
 
-3. **If `context.md` exists:**
+3. **If `.context/context.md` exists:**
    - Read and internalize it as the architectural baseline for this session.
    - Check `.context/.meta.json`. If it exists and `lastCommit` differs from the output of `git rev-parse HEAD`, warn:
      "EDC context is stale (built at `<lastCommit[0..7]>`, HEAD is `<HEAD[0..7]>`). Run `edc-run-build` to update."

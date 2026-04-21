@@ -18,7 +18,12 @@ if [ -z "$AGENT" ]; then
   exit 1
 fi
 
-# Canonical skill files (single source of truth: plugins/edc/skills/)
+# Canonical skill files.
+# IMPORTANT: when adding/removing a skill file, update BOTH lists:
+#   - this SKILLS array (used by `curl | bash` remote install)
+#   - agents/cursor/install.sh (used by local clone install)
+# The two installers intentionally enumerate files explicitly so adding a new
+# file without registering it fails loudly in both paths instead of one.
 SKILLS=(
   "plugins/edc/skills/edc-context/SKILL.md"
   "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
@@ -29,6 +34,10 @@ SKILLS=(
   "plugins/edc/skills/edc-review-impl/adversarial.md"
   "plugins/edc/skills/edc-review-impl/reporting.md"
   "plugins/edc/skills/edc-review-impl/patterns.md"
+  "plugins/edc/skills/edc-build-impl/SKILL.md"
+  "plugins/edc/skills/edc-update-impl/SKILL.md"
+  "plugins/edc/skills/edc-split-impl/SKILL.md"
+  "plugins/edc/skills/edc-audit-impl/SKILL.md"
 )
 
 download() {
@@ -52,14 +61,20 @@ case "$AGENT" in
 
   cursor)
     TARGET="$HOME/.cursor"
+    SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Cursor..."
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/skills/$(skill_rel "$f")"
     done
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
+    download "agents/cursor/.cursor/commands/edc-run-update.md" "$TARGET/commands/edc-run-update.md"
+    download "agents/cursor/.cursor/commands/edc-run-split.md" "$TARGET/commands/edc-run-split.md"
+    download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
     download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/"
+    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
+    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, orchestrator at $SCRIPTS_TARGET/"
     ;;
 
   codex)

@@ -25,7 +25,7 @@ Run these in order on any codebase:
 
 4. `/edc:edc-audit` — identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
 
-5. `/edc:edc-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
+5. `/edc:edc-run-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
 
 ### Hooks (Claude Code only)
 
@@ -88,31 +88,34 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-split` | Split `full-context.md` into per-module `.context/*.md` files |
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
-| `/edc:edc-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+| `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
 
-### `/edc:edc-review` invocation examples
+### `/edc:edc-run-review` invocation examples
 
 ```bash
 # review a GitHub PR by URL
-/edc:edc-review https://github.com/owner/repo/pull/42
+/edc:edc-run-review https://github.com/owner/repo/pull/42
 
-# review current branch against main (full branch diff)
-/edc:edc-review HEAD --baseline main
+# review current branch against main (shorthand: implies HEAD)
+/edc:edc-run-review --base main
+
+# review current branch against main (explicit form)
+/edc:edc-run-review HEAD --base main
 
 # review a specific branch against main
-/edc:edc-review feature/auth --baseline main
+/edc:edc-run-review feature/auth --base main
 
-# review a single commit (defaults to its parent as baseline)
-/edc:edc-review abc1234
+# review a single commit (defaults to its parent as base)
+/edc:edc-run-review abc1234
 
 # review a range of commits
-/edc:edc-review HEAD --baseline HEAD~5
+/edc:edc-run-review HEAD --base HEAD~5
 
 # review a pre-generated diff file
-/edc:edc-review path/to/changes.patch
+/edc:edc-run-review path/to/changes.patch
 ```
 
-Without `--baseline`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--baseline main`.
+Without `--base`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--base main`.
 
 ## Repo Structure
 
@@ -121,12 +124,13 @@ edc/
   install.sh                         # one-line installer for all agents
   plugins/edc/                       # Claude Code plugin (single source of truth)
     .claude-plugin/plugin.json
-    commands/                        # claude slash commands (5 total)
+    commands/                        # claude slash commands (5 user-facing + 1 internal)
       edc-build.md
       edc-split.md
       edc-update.md
       edc-audit.md
-      edc-review.md
+      edc-run-review.md             # user-facing: runs orchestrator
+      edc-review.md                  # internal: invoked by orchestrator subprocess
     skills/                          # canonical skill content
       edc-context/                   # generalized from TOB audit-context-building
       edc-review/                    # generalized from TOB differential-review

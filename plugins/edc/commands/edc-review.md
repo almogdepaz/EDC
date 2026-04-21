@@ -1,33 +1,18 @@
 ---
 name: edc:edc-review
-description: Performs differential review of code changes using codebase context
-argument-hint: "<pr-url|commit-sha|diff-path> [--baseline <ref>]"
+description: Internal — invokes the review skill for a single module (used by the orchestrator, not called directly by users)
+argument-hint: "--task-file <path>"
 allowed-tools:
+  - Skill
+  - Read
+  - Write
+  - Grep
+  - Glob
   - Bash
 ---
 
-# Differential Review
+# Differential Review (per-module)
 
 **Arguments:** $ARGUMENTS
 
-The orchestrator script runs the full pipeline self-driven: it spawns fresh `claude -p`
-sessions for context build/update, per-module review, and consolidation. Your only job
-is to invoke it and surface its output. You have no other tools.
-
-```bash
-set -- $ARGUMENTS
-if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh --auto "$@"
-elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" --auto "$@"
-else
-  echo "SCRIPT_MISSING: install EDC orchestrator first"
-  exit 1
-fi
-```
-
-If the script exits non-zero, surface its error message verbatim and stop. Do not retry.
-Do not attempt the work inline — you cannot, you only have Bash.
-
-The script prints `Consolidated: <path>` and `Verified: <path>` on success. Tell the
-user the path of the final review file.
+Invoke the `edc-review-impl` skill and follow its instructions exactly. Pass through the arguments above.

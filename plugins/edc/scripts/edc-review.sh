@@ -288,22 +288,6 @@ resolve_prompt() {
   esac
 }
 
-# Spawn a subprocess agent with the appropriate CLI.
-run_agent() {
-  local prompt="$1"
-  case "$EDC_AGENT_CLI" in
-    claude)
-      claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "$prompt"
-      ;;
-    cursor)
-      cursor agent -p --output-format stream-json --force --trust \
-        <<< "$prompt"
-      ;;
-  esac
-}
-
 # ── check-context mode ───────────────────────────────────────────────────────
 
 check_context_mode() {
@@ -442,19 +426,48 @@ auto_mode() {
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..."
       local build_prompt
       build_prompt=$(resolve_prompt build) || exit 1
-      run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-        run_agent "$build_prompt" \
-        | stream_filter \
-        || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+      # NOTE: spawn is inlined per CLI (not factored into a function) because
+      # `timeout`/`gtimeout` cannot exec shell functions — only real binaries.
+      # See `run_with_timeout` for the watchdog fallback that does support functions.
+      case "$EDC_AGENT_CLI" in
+        claude)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            claude -p --output-format stream-json --verbose \
+              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
+        cursor)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            cursor agent -p --output-format stream-json --force --trust \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
+      esac
       ;;
     update)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
       local update_prompt
       update_prompt=$(resolve_prompt update) || exit 1
-      run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-        run_agent "$update_prompt" \
-        | stream_filter \
-        || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+      case "$EDC_AGENT_CLI" in
+        claude)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            claude -p --output-format stream-json --verbose \
+              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+        cursor)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            cursor agent -p --output-format stream-json --force --trust \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+      esac
       ;;
   esac
 
@@ -480,8 +493,8 @@ auto_mode() {
   fi
 
   # Spawn one agent subprocess per module.
-  # The here-string on each run_agent call provides the prompt via stdin,
-  # overriding the loop's <<< "$tasks" so it doesn't leak into the subprocess.
+  # The here-string on each spawn provides the prompt via stdin, overriding
+  # the loop's <<< "$tasks" so it doesn't leak into the subprocess.
   while IFS= read -r task_path; do
     [ -z "$task_path" ] && continue
     local module
@@ -489,10 +502,23 @@ auto_mode() {
     echo "→ reviewing module: $module"
     local review_prompt
     review_prompt=$(resolve_prompt review "$task_path") || exit 1
-    run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-      run_agent "$review_prompt" \
-      | stream_filter \
-      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+    case "$EDC_AGENT_CLI" in
+      claude)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          claude -p --output-format stream-json --verbose \
+            --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+      cursor)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          cursor agent -p --output-format stream-json --force --trust \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+    esac
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
   done <<< "$tasks"
@@ -525,6 +551,16 @@ build_mode() {
   if [ ! -f "$META" ]; then
     echo "CONTEXT_MISSING"
     echo "No .context/.meta.json found. Run edc-build before reviewing."
+    exit 1
+  fi
+
+  # Structural check: context.md must exist and contain ## headings. Absent or
+  # stubbed context.md means edc-build never finished (or wrote junk) — treat as
+  # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
+  local ctx=".context/context.md"
+  if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
+    echo "CONTEXT_MISSING"
+    echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
     exit 1
   fi
 
@@ -661,12 +697,12 @@ case "${1:-}" in
     build_mode "$@"
     ;;
   --base)
-    # Shorthand: --base <ref> → HEAD --base <ref>
+    # Shorthand: --base <ref> [extras...] → HEAD --base <ref> [extras...]
     if [ -z "${2:-}" ]; then
       echo "ERROR: --base requires a ref (e.g. --base main)" >&2
       exit 2
     fi
-    auto_mode HEAD --base "$2"
+    auto_mode HEAD --base "$2" "${@:3}"
     ;;
   --check-context)
     check_context_mode
@@ -685,6 +721,11 @@ case "${1:-}" in
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2
+    exit 2
+    ;;
+  --*)
+    echo "ERROR: unknown flag: $1" >&2
+    echo "Run 'edc-review.sh' with no args for usage." >&2
     exit 2
     ;;
   *)

@@ -17,9 +17,9 @@ is to invoke it and surface its output. You have no other tools.
 ```bash
 set -- $ARGUMENTS
 if [ -f ".edc/scripts/edc-review.sh" ]; then
-  bash .edc/scripts/edc-review.sh --auto "$@"
+  bash .edc/scripts/edc-review.sh "$@"
 elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-review.sh" --auto "$@"
+  bash "$HOME/.edc/scripts/edc-review.sh" "$@"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1

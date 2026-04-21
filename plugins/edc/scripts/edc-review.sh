@@ -8,14 +8,14 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>]              build mode (default — emit TASK lines)
-#   edc-review.sh --auto <target> [--base <ref>]      self-driving mode (spawns agent subprocesses via EDC_AGENT_CLI)
-#   edc-review.sh --base <ref>                        shorthand for: --auto HEAD --base <ref>
-#   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
-#   edc-review.sh --consolidate                       merge per-module reports into final review file
-#   edc-review.sh --verify                            assert context fresh + reports + final file exist
+#   edc-review.sh <target> [--base <ref>]              full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
+#   edc-review.sh --build <target> [--base <ref>]      task-generation only (emit TASK lines, no subprocess spawning)
+#   edc-review.sh --check-context                      assert .context/.meta.json fresh (no diff, no task gen)
+#   edc-review.sh --consolidate                        merge per-module reports into final review file
+#   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
-# Build mode exit codes:
+# --build exit codes:
 #   0 — review-tasks/ written, TASK lines on stdout, proceed with skill
 #   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
 #   2 — bad arguments or environment error
@@ -38,7 +38,7 @@ META=".context/.meta.json"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
-# EDC_AGENT_CLI selects which CLI spawns subprocess agents in --auto mode.
+# EDC_AGENT_CLI selects which CLI spawns subprocess agents for the review pipeline.
 #   "claude"  → claude -p  (default, backward-compatible)
 #   "cursor"  → cursor agent -p
 
@@ -55,11 +55,18 @@ elif command -v gtimeout > /dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
 else
   TIMEOUT_BIN=""
-  # Only print the warning from the top-level invocation (auto mode) — avoid
-  # noise from nested `bash "$0"` calls inside auto_mode that capture stdout/stderr.
-  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ] && [ "${1:-}" = "--auto" ]; then
-    echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
-    export EDC_TIMEOUT_WARNED=1
+  # Print once per top-level invocation, but only when we'll actually spawn
+  # subprocesses (i.e. the default auto_mode path). Skip for phase-internal
+  # flags and usage errors. EDC_TIMEOUT_WARNED is exported so the nested
+  # `bash "$0" --build ...` call inside auto_mode inherits it and stays silent.
+  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ]; then
+    case "${1:-}" in
+      --build|--check-context|--consolidate|--verify|"") ;;
+      *)
+        echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+        export EDC_TIMEOUT_WARNED=1
+        ;;
+    esac
   fi
 fi
 
@@ -419,7 +426,7 @@ auto_mode() {
 
   # Attempt 1: try to build review tasks
   local out recovery=""
-  out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   # Detect context-state markers anywhere in output (robust against any
   # startup noise like warnings, tracing, etc.)
@@ -455,7 +462,7 @@ auto_mode() {
     bash "$0" --check-context > /dev/null \
       || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
     # Attempt 2: build tasks now that context is ready
-    out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+    out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
   fi
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
@@ -645,16 +652,16 @@ TASK
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  --auto)
+  --build)
     shift
     if [ -z "${1:-}" ]; then
-      echo "ERROR: --auto requires a target" >&2
+      echo "ERROR: --build requires a target" >&2
       exit 2
     fi
-    auto_mode "$@"
+    build_mode "$@"
     ;;
   --base)
-    # Shorthand: --base <ref> → --auto HEAD --base <ref>
+    # Shorthand: --base <ref> → HEAD --base <ref>
     if [ -z "${2:-}" ]; then
       echo "ERROR: --base requires a ref (e.g. --base main)" >&2
       exit 2
@@ -672,15 +679,15 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>]" >&2
-    echo "       edc-review.sh --auto <target> [--base <ref>]" >&2
-    echo "       edc-review.sh --base <ref>     (shorthand for --auto HEAD --base <ref>)" >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>]              full review pipeline (default)" >&2
+    echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
+    echo "       edc-review.sh --build <target> [--base <ref>]      generate review-tasks/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2
     exit 2
     ;;
   *)
-    build_mode "$@"
+    auto_mode "$@"
     ;;
 esac

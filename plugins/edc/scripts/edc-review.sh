@@ -255,11 +255,12 @@ find_cursor_skill() {
 #         follows the skill instructions directly.
 resolve_prompt() {
   local action="$1"; shift
+  local prompt_arg_string="$*"
   case "$EDC_AGENT_CLI" in
     claude)
       case "$action" in
         build)  echo "/edc:edc-build" ;;
-        update) echo "/edc:edc-update" ;;
+        update) echo "/edc:edc-update${prompt_arg_string:+ $prompt_arg_string}" ;;
         review) echo "/edc:edc-review --task-file $1" ;;
       esac
       ;;
@@ -273,6 +274,7 @@ resolve_prompt() {
         update)
           local skill
           skill=$(find_cursor_skill "edc-update-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
           cat "$skill"
           ;;
         review)
@@ -450,7 +452,7 @@ auto_mode() {
     update)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
       local update_prompt
-      update_prompt=$(resolve_prompt update) || exit 1
+      update_prompt=$(resolve_prompt update "${extra_args[@]}") || exit 1
       case "$EDC_AGENT_CLI" in
         claude)
           run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \

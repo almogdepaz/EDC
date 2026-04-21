@@ -96,23 +96,26 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 # review a GitHub PR by URL
 /edc:edc-run-review https://github.com/owner/repo/pull/42
 
-# review current branch against main (full branch diff)
-/edc:edc-run-review HEAD --baseline main
+# review current branch against main (shorthand: implies HEAD)
+/edc:edc-run-review --base main
+
+# review current branch against main (explicit form)
+/edc:edc-run-review HEAD --base main
 
 # review a specific branch against main
-/edc:edc-run-review feature/auth --baseline main
+/edc:edc-run-review feature/auth --base main
 
-# review a single commit (defaults to its parent as baseline)
+# review a single commit (defaults to its parent as base)
 /edc:edc-run-review abc1234
 
 # review a range of commits
-/edc:edc-run-review HEAD --baseline HEAD~5
+/edc:edc-run-review HEAD --base HEAD~5
 
 # review a pre-generated diff file
 /edc:edc-run-review path/to/changes.patch
 ```
 
-Without `--baseline`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--baseline main`.
+Without `--base`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--base main`.
 
 ## Repo Structure
 

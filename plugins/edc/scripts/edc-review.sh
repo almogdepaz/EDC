@@ -223,25 +223,29 @@ assert_report_valid() {
 
 # ── agent CLI helpers ────────────────────────────────────────────────────────
 
-# Strip YAML frontmatter (--- … ---) from a file, return body only.
-strip_frontmatter() {
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2' "$1"
-}
-
-# Find a Cursor resource file (command, skill, etc.) under .cursor/ or ~/.cursor/.
-find_cursor_resource() {
-  local rel="$1"
-  for base in ".cursor" "$HOME/.cursor"; do
-    if [ -f "$base/$rel" ]; then
-      echo "$base/$rel"
+# Locate a cursor-runtime skill's SKILL.md. Searches project-local then global.
+# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
+find_cursor_skill() {
+  local name="$1"
+  for base in ".cursor/skills" "$HOME/.cursor/skills"; do
+    if [ -f "$base/$name/SKILL.md" ]; then
+      echo "$base/$name/SKILL.md"
       return 0
     fi
   done
-  echo "ERROR: $rel not found in .cursor/ or ~/.cursor/" >&2
+  echo "ERROR: skill '$name' not found in .cursor/skills/ or ~/.cursor/skills/" >&2
   return 1
 }
 
 # Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
+#
+# Both paths route through the same -impl skills (edc-build-impl, edc-update-impl,
+# edc-review-impl) — single source of truth, no workflow duplication.
+#
+# Claude: slash commands — the plugin system resolves the command wrapper,
+#         which invokes the matching -impl skill.
+# Cursor: cat the skill file and strip frontmatter — cursor subprocess then
+#         follows the skill instructions directly.
 resolve_prompt() {
   local action="$1"; shift
   case "$EDC_AGENT_CLI" in
@@ -254,15 +258,23 @@ resolve_prompt() {
       ;;
     cursor)
       case "$action" in
-        build|update)
-          local cmd_name
-          if [ "$action" = "build" ]; then cmd_name="edc-run-build.md"; else cmd_name="edc-run-update.md"; fi
-          local f
-          f=$(find_cursor_resource "commands/$cmd_name") || return 1
-          strip_frontmatter "$f"
+        build)
+          local skill
+          skill=$(find_cursor_skill "edc-build-impl") || return 1
+          cat "$skill"
+          ;;
+        update)
+          local skill
+          skill=$(find_cursor_skill "edc-update-impl") || return 1
+          cat "$skill"
           ;;
         review)
-          printf 'Read the file at %s and follow every instruction in it.\nUse the edc-review-impl skill for the review methodology — read its SKILL.md first.\nWrite the report to the path specified in the task file.\nDo not skip reading the .context/ files.' "$1"
+          local task_path="$1"
+          local review_skill review_dir
+          review_skill=$(find_cursor_skill "edc-review-impl") || return 1
+          review_dir=$(dirname "$review_skill")
+          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
+            "$task_path" "$review_skill" "$review_dir"
           ;;
       esac
       ;;

@@ -29,6 +29,10 @@ SKILLS=(
   "plugins/edc/skills/edc-review-impl/adversarial.md"
   "plugins/edc/skills/edc-review-impl/reporting.md"
   "plugins/edc/skills/edc-review-impl/patterns.md"
+  "plugins/edc/skills/edc-build-impl/SKILL.md"
+  "plugins/edc/skills/edc-update-impl/SKILL.md"
+  "plugins/edc/skills/edc-split-impl/SKILL.md"
+  "plugins/edc/skills/edc-audit-impl/SKILL.md"
 )
 
 download() {

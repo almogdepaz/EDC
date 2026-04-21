@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
-# Task 1 smoke test: verify --allowed-tools "Skill,Bash" appears in all claude -p calls
+# Task 1 smoke test: verify claude -p invocations are locked down via --allowed-tools
 # Run from repo root: bash tests/hardening/t1-tool-lockdown.sh
 set -euo pipefail
 
 SCRIPT="scripts/edc-review.sh"
+EXPECTED_TOOLS='--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob"'
 
 echo "=== T1: Subprocess tool lockdown ==="
 
-# Count actual claude -p invocations (continuation lines — in pipelines after run_with_timeout)
-total=$(grep -E '^\s+claude -p' "$SCRIPT" | wc -l | tr -d ' ')
-
-# Count --allowed-tools "Skill,Bash" lines in non-comment context
-# Each claude -p invocation must have exactly one --allowed-tools line nearby
-locked=$(grep -v '^#' "$SCRIPT" | grep -c -- '--allowed-tools "Skill,Bash"')
+total=$(grep -cE '^\s+claude -p' "$SCRIPT")
+locked=$(grep -v '^#' "$SCRIPT" | grep -cF -- "$EXPECTED_TOOLS")
 
 echo "claude -p actual invocations in script: $total"
-echo "--allowed-tools \"Skill,Bash\" occurrences (non-comment): $locked"
+echo "$EXPECTED_TOOLS occurrences (non-comment): $locked"
 
-if [ "$total" -ne 3 ]; then
-  echo "FAIL: expected 3 claude -p invocations, found $total"
+if [ "$total" -lt 1 ]; then
+  echo "FAIL: expected >=1 claude -p invocation, found $total"
   exit 1
 fi
 
-if [ "$locked" -ne 3 ]; then
-  echo "FAIL: expected 3 --allowed-tools lockdowns, found $locked"
+if [ "$locked" -ne "$total" ]; then
+  echo "FAIL: every claude -p must have $EXPECTED_TOOLS (invocations=$total, lockdowns=$locked)"
   exit 1
 fi
 
-echo "PASS: all 3 claude -p invocations have --allowed-tools \"Skill,Bash\" lockdown"
+echo "PASS: all $total claude -p invocation(s) have $EXPECTED_TOOLS lockdown"

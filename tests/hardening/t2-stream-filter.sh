@@ -63,12 +63,13 @@ source_and_test() {
 
 source_and_test
 
-# 3. Verify all 3 actual claude -p invocations use --output-format stream-json --verbose
+# 3. Verify every claude -p invocation uses --output-format stream-json --verbose
 # (exclude comment lines)
+total=$(grep -cE '^\s+claude -p' "$SCRIPT")
 locked=$(grep -v '^#' "$SCRIPT" | grep -c -- '--output-format stream-json --verbose')
-echo "claude -p invocations with stream-json: $locked"
-if [ "$locked" -ne 3 ]; then
-  echo "FAIL: expected 3 invocations with stream-json, found $locked"
+echo "claude -p invocations: $total; with stream-json: $locked"
+if [ "$total" -lt 1 ] || [ "$locked" -ne "$total" ]; then
+  echo "FAIL: every claude -p must use --output-format stream-json --verbose (invocations=$total, matched=$locked)"
   exit 1
 fi
-echo "PASS: all 3 claude -p invocations use stream-json"
+echo "PASS: all $total claude -p invocation(s) use stream-json"

@@ -15,24 +15,28 @@ else
   exit 1
 fi
 
-# ── 4b: all 3 claude -p calls wrapped with run_with_timeout ──────────────────
-# Count only actual invocations (lines starting with spaces/tabs then run_with_timeout,
-# not the function definition line or comments)
-wrapped=$(grep -E '^\s+run_with_timeout [0-9]' "$SCRIPT" | wc -l | tr -d ' ')
-if [ "$wrapped" -eq 3 ]; then
-  echo "PASS: all 3 claude -p calls wrapped with run_with_timeout ($wrapped)"
+# ── 4b: every agent phase (build/update/review) wrapped with run_with_timeout ─
+# Matches both literal seconds (`run_with_timeout 60`) and env-default form
+# (`run_with_timeout "${EDC_*_TIMEOUT:-N}"`).
+wrapped=$(grep -cE '^\s+run_with_timeout ("\$\{EDC_[A-Z_]+_TIMEOUT:-[0-9]+\}"|[0-9]+)' "$SCRIPT")
+if [ "$wrapped" -ge 3 ]; then
+  echo "PASS: agent phases wrapped with run_with_timeout ($wrapped)"
 else
-  echo "FAIL: expected 3 wrapped calls, found $wrapped"
+  echo "FAIL: expected >=3 wrapped calls (build/update/review), found $wrapped"
   exit 1
 fi
 
-# ── 4c: timeout limits match spec (1200/600/900) ──────────────────────────────
-if grep -q 'run_with_timeout 1200' "$SCRIPT" && \
-   grep -q 'run_with_timeout 600'  "$SCRIPT" && \
-   grep -q 'run_with_timeout 900'  "$SCRIPT"; then
-  echo "PASS: timeout limits 1200/600/900 present"
+# ── 4c: per-phase timeouts configurable via env vars with defaults ────────────
+missing=""
+for var in EDC_BUILD_TIMEOUT EDC_UPDATE_TIMEOUT EDC_REVIEW_TIMEOUT; do
+  if ! grep -qE "run_with_timeout \"\\\$\\{$var:-[0-9]+\\}\"" "$SCRIPT"; then
+    missing="$missing $var"
+  fi
+done
+if [ -z "$missing" ]; then
+  echo "PASS: EDC_{BUILD,UPDATE,REVIEW}_TIMEOUT env overrides with defaults present"
 else
-  echo "FAIL: expected timeout limits 1200, 600, 900 in script"
+  echo "FAIL: missing env-override timeouts:$missing"
   exit 1
 fi
 

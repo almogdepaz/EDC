@@ -382,7 +382,7 @@ Write ALL findings to .context/issues.md with:
         < /dev/null \
         > "$run_dir/claude-output.txt" 2>&1 &
     local claude_pid=$!
-    ( sleep 300 && kill "$claude_pid" 2>/dev/null ) &
+    ( sleep 600 && kill "$claude_pid" 2>/dev/null ) &
     local watchdog=$!
     wait "$claude_pid" 2>/dev/null || true
     kill "$watchdog" 2>/dev/null || true

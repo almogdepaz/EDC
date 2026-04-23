@@ -5,7 +5,17 @@ description: Incrementally updates .context/ files based on branch changes
 
 # Update Context
 
-**Arguments:** optional `--base <ref>` for comparison reference. Default: auto-detect merge base with main/master.
+**Arguments:** optional `--base <ref>` for comparison reference and repeatable `--ignore <glob>` to exclude files from this run. Default base: auto-detect merge base with main/master.
+
+## Ignore Rules
+
+Before computing changed files, resolve ignore patterns in this order:
+
+1. If one or more `--ignore <glob>` arguments were provided, use only those patterns.
+2. Otherwise, if `.edcignore` exists in the repo root, read non-empty, non-comment lines from it.
+3. Otherwise, do not exclude any additional files.
+
+Apply ignore rules to repo-relative file paths before mapping changed files to modules.
 
 ## Prerequisites
 
@@ -31,7 +41,9 @@ Map each changed file to its module using the `modules` mapping in `.meta.json`.
 
 ### Step 3 — Re-analyze affected modules
 
-For each affected module, invoke the `edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+For each affected module, spawn a **clean subagent** to invoke the `edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. The subagent MUST be fresh with NO access to the current conversation context — this prevents bias from user discussion influencing findings. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+
+**Clean Slate Rule:** Analysis subagents must not inherit the parent conversation. See `edc-build-impl` for rationale.
 
 ### Step 4 — Update .context/{module}.md files
 

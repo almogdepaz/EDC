@@ -1,0 +1,2 @@
+timestamp	cve	category	severity	verdict	confidence	duration	notes
+2026-04-19T13:31:55	CVE-2023-38545	heap-buffer-overflow	critical	exact	0.99	0	judge: Issue 1 explicitly identifies CVE-2023-38545, correctly describes the root cause (socks5_resolve_local being a local variable reset on every re-entry in non-blocking mode, losing the protective flip), and traces the exact code path from the lost state to the unchecked memcpy overflow.; keywords(file_mentioned; cat=4/8; pat=42/65)

@@ -53,6 +53,79 @@ git diff <range> | grep "^-" | grep -E "require|assert|validate|check|guard|thro
 
 ---
 
+## Sharp-Edges C API Checklist
+
+For every call site of the following APIs, answer the mandatory question. A "NO" answer is a candidate finding — do not rationalize past it.
+
+| API | Mandatory per-call-site question | Flag if |
+|-----|----------------------------------|---------|
+| `memcpy(dst, src, n)` | Is `n` bounded by `sizeof(dst)` / allocation size of `dst` on **ALL** paths, including when the peer sends a maximum-size value? | `n` is peer-controlled or computed from peer data without a guard `n <= sizeof(dst)` immediately before the call |
+| `memmove(dst, src, n)` | Same as memcpy | Same |
+| `memset(dst, c, n)` | Is `n` bounded by the allocation size of `dst`? | `n` is derived from peer data |
+| `strcpy(dst, src)` / `strcat(dst, src)` | FLAG UNCONDITIONALLY — these have no length argument | Always report; check if `strlen(src) < sizeof(dst)` guard precedes the call |
+| `sprintf(buf, fmt, ...)` | Is the result bounded by `sizeof(buf)`? | Use of `%s` with peer-controlled string, or format string not a string literal |
+| `snprintf(buf, n, ...)` | Is `n == sizeof(buf)`? Is the return value checked for truncation when the result is used as a length? | `n` != `sizeof(buf)`, or return value ignored when the written bytes are later used as a size |
+| `realloc(ptr, new_size)` | Is the return value checked for NULL **before** `ptr` is overwritten? Pattern `ptr = realloc(ptr, n)` leaks the old allocation on failure | Return value stored back into the same variable (`p = realloc(p, ...)`) without NULL check |
+| `malloc(a * b)` / `calloc(a, b)` | Can `a * b` overflow `size_t`? Is there a `if (b && a > SIZE_MAX / b)` guard before the call? | Either `a` or `b` is peer-controlled with no overflow pre-check |
+| `malloc(a + b)` | Can `a + b` wrap around? Is there a `if (a > SIZE_MAX - b)` guard? | Either operand is peer-controlled |
+| `int n` / `short n` used as size | Is `n` guarded with `if (n <= 0)` before being passed to `malloc`/`memcpy`/array index? Signed→`size_t` implicit conversion makes a negative value huge | Signed variable from peer data (`ntohs`, `atoi`, etc.) used as size without negativity check |
+
+**Audit workflow for C files:**
+1. `grep -n "memcpy\|memmove\|memset\|strcpy\|strcat\|sprintf\|snprintf\|realloc\|malloc\|calloc" <file>`
+2. For each hit, answer the checklist question above
+3. Trace the size argument backward to its source — is it peer-controlled?
+4. If peer-controlled: check for a guard in the 10 lines before the call
+5. No guard → append finding immediately to output file
+
+---
+
+## Integer Type Tracking (C/C++)
+
+For every variable used as a size, length, count, or array index in a C/C++ file, perform this triage. A "YES" in the Flag column is a candidate finding — stop and report.
+
+| Column | What to record |
+|--------|---------------|
+| **Variable** | Name and declaration line |
+| **Declared type** | `int`, `short`, `size_t`, `uint32_t`, `ssize_t`, etc. |
+| **Source** | `peer` (network/user input), `local` (computed internally), `mixed` |
+| **Cast chain** | Every implicit or explicit cast from source to sink (e.g. `ntohs→int→size_t`) |
+| **Sink** | `malloc`, `memcpy n`, `array[idx]`, `realloc` |
+
+**Flag if any of the following applies:**
+
+| Condition | Why dangerous | Flag |
+|-----------|--------------|------|
+| Signed type (`int`, `short`, `ssize_t`) used where `size_t`/`unsigned` is expected | Negative value silently widens to enormous `size_t` | YES if no `n <= 0` guard before sink |
+| Narrowing cast: `long`→`int`, `int`→`short`, `uint32_t`→`uint16_t` | High bits truncated; attacker controls truncated value | YES if result fed to sink without re-validation |
+| Unsigned subtraction `a - b` where `b` may exceed `a` | Wraps to near-`SIZE_MAX` | YES if no `a >= b` guard before subtraction |
+| Multiplication `a * b` fed to `malloc`/`memcpy` | Overflows to small value → under-allocation | YES if no `a <= SIZE_MAX / b` guard |
+| Two peer-controlled values added: `a + b` fed to `malloc` | Wraps to 0 or small value | YES if no `a <= SIZE_MAX - b` guard |
+
+**Per-variable triage procedure:**
+1. Find every assignment to the variable: `grep -n "<varname>" <file>`
+2. Identify the declared type and whether the RHS is peer-controlled (`ntohs`, `ntohl`, `atoi`, `strtol`, packet field read, `recv` output, etc.)
+3. Trace forward: list every arithmetic operation between assignment and the sink
+4. For each operation, apply the flag table above
+5. If flagged: check the 10 lines before the sink for a guard that rules out the dangerous value
+6. No guard → REPORT with the cast chain and the sink line number
+
+**Detection greps (run on each C/C++ file):**
+```bash
+# Signed variable used as size (catch signed→size_t promotion)
+grep -n "int\s\+\w\+.*=.*ntohs\|int\s\+\w\+.*=.*ntohl\|int\s\+\w\+.*=.*atoi\|int\s\+\w\+.*=.*strtol" <file>
+
+# Narrowing cast patterns
+grep -n "(int)\|(short)\|(uint16_t)\|(uint8_t)" <file>
+
+# Unsigned subtraction candidates
+grep -n "\-\-\|= .* - " <file>  # review each for unsigned operands
+
+# Multiplication into alloc
+grep -n "malloc.*\*\|calloc" <file>
+```
+
+---
+
 ## Integer Overflow/Underflow
 
 **Pattern:** Arithmetic without bounds checking

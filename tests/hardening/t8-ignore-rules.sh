@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Task 8 smoke test: ignore rules for review file selection
+# Run from repo root: bash tests/hardening/t8-ignore-rules.sh
+set -euo pipefail
+
+SCRIPT="scripts/edc-review.sh"
+ORIG_DIR="$(pwd)"
+TMPDIR_T8=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_T8"' EXIT
+
+echo "=== T8: Ignore rules ==="
+
+cd "$TMPDIR_T8"
+git init -q
+git config user.email "test@test.com"
+git config user.name "Test"
+
+mkdir -p src generated
+printf 'one\n' > src/keep.txt
+printf 'one\n' > generated/skip.txt
+git add src/keep.txt generated/skip.txt
+git commit -q -m "init"
+
+printf 'two\n' > src/keep.txt
+printf 'two\n' > generated/skip.txt
+git add src/keep.txt generated/skip.txt
+git commit -q -m "change files"
+HEAD_SHA=$(git rev-parse HEAD)
+
+mkdir -p .context
+cat > .context/.meta.json <<EOF
+{"lastCommit":"$HEAD_SHA","modules":[]}
+EOF
+printf '## Module Map\n\n- root\n' > .context/context.md
+
+# ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
+printf 'generated/**\n' > .edcignore
+
+bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > /tmp/t8-build-out.txt
+
+if grep -q '"src/keep.txt"' review-tasks/manifest.json \
+  && ! grep -q '"generated/skip.txt"' review-tasks/manifest.json; then
+  echo "PASS: .edcignore excludes matching files from review tasks"
+else
+  echo "FAIL: .edcignore did not filter manifest as expected"
+  cat review-tasks/manifest.json
+  exit 1
+fi
+
+# ── 8b: --ignore overrides .edcignore for the run ─────────────────────────────
+bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 --ignore src/** > /tmp/t8-build-out.txt
+
+if grep -q '"generated/skip.txt"' review-tasks/manifest.json \
+  && ! grep -q '"src/keep.txt"' review-tasks/manifest.json; then
+  echo "PASS: --ignore overrides .edcignore"
+else
+  echo "FAIL: --ignore did not override .edcignore as expected"
+  cat review-tasks/manifest.json
+  exit 1
+fi
+
+echo ""
+echo "All T8 checks passed."

@@ -5,7 +5,17 @@ description: Builds or updates deep architectural context for any codebase
 
 # Build Context
 
-**Arguments:** optional `--force` to rebuild from scratch even if context exists, `--focus <module>` for specific module analysis.
+**Arguments:** optional `--force` to rebuild from scratch even if context exists, `--focus <module>` for specific module analysis, and repeatable `--ignore <glob>` to exclude files from analysis for this run.
+
+## Ignore Rules
+
+Before building or updating context, resolve ignore patterns in this order:
+
+1. If one or more `--ignore <glob>` arguments were provided, use only those patterns.
+2. Otherwise, if `.edcignore` exists in the repo root, read non-empty, non-comment lines from it.
+3. Otherwise, do not exclude any additional files.
+
+Apply ignore rules to repo-relative file paths before selecting files or modules to analyze.
 
 ## Routing
 
@@ -16,6 +26,8 @@ Check if `.context/.meta.json` exists AND `--force` was NOT passed:
   1. Invoke the `edc-context` skill (NOT `audit-context-building` — that is a different plugin) for the full workflow. Write the complete analysis to `.context/full-context.md`.
   2. Then invoke the `edc-split-impl` skill to produce `.context/context.md` + `.context/{module}.md` + `.context/issues.md` + `.context/.meta.json`.
   3. Then invoke the `edc-audit-impl` skill to produce `.context/complexity.md`.
+
+**CRITICAL — Clean Slate Rule:** All analysis (edc-context, edc-review-impl, edc-audit-impl) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
 ## Post-Build: Agent Snippets
 

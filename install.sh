@@ -72,9 +72,11 @@ case "$AGENT" in
     download "agents/cursor/.cursor/commands/edc-run-split.md" "$TARGET/commands/edc-run-split.md"
     download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
     download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
+    download "scripts/edc" "$SCRIPTS_TARGET/edc"
     download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc"
     chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, orchestrator at $SCRIPTS_TARGET/"
+    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
     ;;
 
   codex)
@@ -89,9 +91,11 @@ case "$AGENT" in
     download "agents/codex/.codex/skills/edc-split/SKILL.md" "$TARGET/edc-split/SKILL.md"
     download "agents/codex/.codex/skills/edc-audit/SKILL.md" "$TARGET/edc-audit/SKILL.md"
     download "agents/codex/.codex/skills/edc-run-review/SKILL.md" "$TARGET/edc-run-review/SKILL.md"
+    download "scripts/edc" "$SCRIPTS_TARGET/edc"
     download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc"
     chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    echo "Done. Skills at $TARGET/, orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-split, \$edc-audit, or \$edc-run-review."
+    echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-split, \$edc-audit, or \$edc-run-review."
     ;;
 
   gemini)

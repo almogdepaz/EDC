@@ -84,7 +84,7 @@ run_with_timeout() {
     local rc=$?
     if [ $rc -eq 124 ]; then
       echo "ERROR: phase '$label' timed out after ${secs}s" >&2
-      exit 1
+      return 1
     fi
     return $rc
   fi

@@ -93,6 +93,28 @@ clean it up).
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
 ```
 
+## Terminal CLI
+
+Cursor and Codex installs also place a shared terminal wrapper at `~/.edc/scripts/edc`.
+
+```bash
+# build or update context in the current repo
+~/.edc/scripts/edc build --agent claude
+~/.edc/scripts/edc build --agent cursor --force
+~/.edc/scripts/edc build --agent codex --focus orchestrator
+
+# run the review pipeline in the current repo
+~/.edc/scripts/edc review --agent claude --base main
+~/.edc/scripts/edc review --agent cursor HEAD --base main
+~/.edc/scripts/edc review --agent codex https://github.com/owner/repo/pull/42
+```
+
+Notes:
+- `--agent` is mandatory.
+- `build` defaults to the current directory if no path is passed.
+- `review` delegates to `edc-review.sh`, so it automatically builds or updates `.context/` first when context is missing or stale.
+- Claude build requires the EDC Claude plugin/commands to already be installed because it invokes `/edc:edc-build`.
+
 ## Gitignore
 
 EDC writes scratch state into your repo. Add these to your target repo's `.gitignore`:

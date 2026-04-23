@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  edc build --agent claude|cursor|codex [path] [--force] [--focus <module>]
+  edc review --agent claude|cursor|codex [target] [--base <ref>]
+
+Commands:
+  build   Build or update .context/ in the target repo
+  review  Run the differential review pipeline (auto-builds/updates context if needed)
+
+Notes:
+  --agent is required for every command.
+  build defaults path to the current directory.
+  review delegates to the shared edc-review orchestrator.
+EOF
+}
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+require_command() {
+  local agent="$1"
+  case "$agent" in
+    claude)
+      command -v claude > /dev/null 2>&1 || die "--agent claude specified but 'claude' not found on PATH"
+      ;;
+    cursor)
+      command -v cursor > /dev/null 2>&1 || die "--agent cursor specified but 'cursor' not found on PATH"
+      ;;
+    codex)
+      command -v codex > /dev/null 2>&1 || die "--agent codex specified but 'codex' not found on PATH"
+      ;;
+    *)
+      die "--agent must be one of: claude, cursor, codex"
+      ;;
+  esac
+}
+
+join_args() {
+  local result=""
+  local arg
+  for arg in "$@"; do
+    result="${result:+$result }$arg"
+  done
+  printf '%s' "$result"
+}
+
+find_skill() {
+  local name="$1"
+  shift
+  local base
+  for base in "$@"; do
+    if [ -f "$base/$name/SKILL.md" ]; then
+      printf '%s\n' "$base/$name/SKILL.md"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_cursor_build_skill() {
+  find_skill "edc-build-impl" \
+    "$REPO_ROOT/plugins/edc/skills" \
+    ".cursor/skills" \
+    "$HOME/.cursor/skills"
+}
+
+find_codex_build_skill() {
+  find_skill "edc-build-impl" \
+    "$REPO_ROOT/plugins/edc/skills" \
+    ".codex/skills" \
+    "$HOME/.codex/skills"
+}
+
+resolve_build_prompt() {
+  local agent="$1"
+  shift
+  local arg_string
+  arg_string="$(join_args "$@")"
+
+  case "$agent" in
+    claude)
+      printf '/edc:edc-build%s\n' "${arg_string:+ $arg_string}"
+      ;;
+    cursor)
+      local skill
+      skill="$(find_cursor_build_skill)" || die "edc-build-impl not found. Install EDC Cursor skills first."
+      if [ -n "$arg_string" ]; then
+        printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$arg_string"
+      fi
+      cat "$skill"
+      ;;
+    codex)
+      local skill
+      skill="$(find_codex_build_skill)" || die "edc-build-impl not found. Install EDC Codex skills first."
+      if [ -n "$arg_string" ]; then
+        printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$arg_string"
+      fi
+      cat "$skill"
+      ;;
+  esac
+}
+
+find_review_script() {
+  local candidate
+  for candidate in \
+    ".edc/scripts/edc-review.sh" \
+    "$SCRIPT_DIR/edc-review.sh" \
+    "$HOME/.edc/scripts/edc-review.sh"
+  do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+build_cmd() {
+  local agent=""
+  local target="."
+  local positional_target=""
+  local -a passthrough=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || die "--agent requires a value"
+        agent="$2"
+        shift 2
+        ;;
+      --force)
+        passthrough+=("$1")
+        shift
+        ;;
+      --focus)
+        [ "$#" -ge 2 ] || die "--focus requires a module name"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --*)
+        die "unknown build option: $1"
+        ;;
+      *)
+        if [ -n "$positional_target" ]; then
+          die "build accepts at most one path"
+        fi
+        positional_target="$1"
+        shift
+        ;;
+    esac
+  done
+
+  [ -n "$agent" ] || die "--agent is required"
+  require_command "$agent"
+
+  if [ -n "$positional_target" ]; then
+    target="$positional_target"
+  fi
+  [ -d "$target" ] || die "build target directory not found: $target"
+
+  local prompt
+  prompt="$(cd "$target" && resolve_build_prompt "$agent" "${passthrough[@]}")"
+
+  case "$agent" in
+    claude)
+      (
+        cd "$target"
+        claude -p \
+          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+          <<< "$prompt"
+      )
+      ;;
+    cursor)
+      (
+        cd "$target"
+        cursor agent -p --force --trust <<< "$prompt"
+      )
+      ;;
+    codex)
+      (
+        cd "$target"
+        codex exec --sandbox workspace-write - <<< "$prompt"
+      )
+      ;;
+  esac
+}
+
+review_cmd() {
+  local agent=""
+  local -a passthrough=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || die "--agent requires a value"
+        agent="$2"
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        passthrough+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [ -n "$agent" ] || die "--agent is required"
+  require_command "$agent"
+
+  local review_script
+  review_script="$(find_review_script)" \
+    || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
+
+  EDC_AGENT_CLI="$agent" bash "$review_script" "${passthrough[@]}"
+}
+
+main() {
+  [ "$#" -gt 0 ] || {
+    usage
+    exit 2
+  }
+
+  local command="$1"
+  shift
+
+  case "$command" in
+    build)
+      build_cmd "$@"
+      ;;
+    review)
+      review_cmd "$@"
+      ;;
+    --help|-h|help)
+      usage
+      ;;
+    *)
+      die "unknown command: $command"
+      ;;
+  esac
+}
+
+main "$@"

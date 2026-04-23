@@ -5,7 +5,17 @@ description: Builds or updates deep architectural context for any codebase
 
 # Build Context
 
-**Arguments:** optional `--force` to rebuild from scratch even if context exists, `--focus <module>` for specific module analysis.
+**Arguments:** optional `--force` to rebuild from scratch even if context exists, `--focus <module>` for specific module analysis, and repeatable `--ignore <glob>` to exclude files from analysis for this run.
+
+## Ignore Rules
+
+Before building or updating context, resolve ignore patterns in this order:
+
+1. If one or more `--ignore <glob>` arguments were provided, use only those patterns.
+2. Otherwise, if `.edcignore` exists in the repo root, read non-empty, non-comment lines from it.
+3. Otherwise, do not exclude any additional files.
+
+Apply ignore rules to repo-relative file paths before selecting files or modules to analyze.
 
 ## Routing
 

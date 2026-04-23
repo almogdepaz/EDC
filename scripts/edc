@@ -7,8 +7,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  edc build --agent claude|cursor|codex [path] [--force] [--focus <module>]
-  edc review --agent claude|cursor|codex [target] [--base <ref>]
+  edc build --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]...
 
 Commands:
   build   Build or update .context/ in the target repo
@@ -17,6 +17,7 @@ Commands:
 Notes:
   --agent is required for every command.
   build defaults path to the current directory.
+  --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
   review delegates to the shared edc-review orchestrator.
 EOF
 }
@@ -146,6 +147,11 @@ build_cmd() {
         passthrough+=("$1" "$2")
         shift 2
         ;;
+      --ignore)
+        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
       --help|-h)
         usage
         exit 0
@@ -207,6 +213,11 @@ review_cmd() {
       --agent)
         [ "$#" -ge 2 ] || die "--agent requires a value"
         agent="$2"
+        shift 2
+        ;;
+      --base|--ignore)
+        [ "$#" -ge 2 ] || die "$1 requires a value"
+        passthrough+=("$1" "$2")
         shift 2
         ;;
       --help|-h)

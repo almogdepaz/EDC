@@ -5,7 +5,17 @@ description: Incrementally updates .context/ files based on branch changes
 
 # Update Context
 
-**Arguments:** optional `--base <ref>` for comparison reference. Default: auto-detect merge base with main/master.
+**Arguments:** optional `--base <ref>` for comparison reference and repeatable `--ignore <glob>` to exclude files from this run. Default base: auto-detect merge base with main/master.
+
+## Ignore Rules
+
+Before computing changed files, resolve ignore patterns in this order:
+
+1. If one or more `--ignore <glob>` arguments were provided, use only those patterns.
+2. Otherwise, if `.edcignore` exists in the repo root, read non-empty, non-comment lines from it.
+3. Otherwise, do not exclude any additional files.
+
+Apply ignore rules to repo-relative file paths before mapping changed files to modules.
 
 ## Prerequisites
 

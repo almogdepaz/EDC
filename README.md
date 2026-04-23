@@ -102,16 +102,20 @@ Cursor and Codex installs also place a shared terminal wrapper at `~/.edc/script
 ~/.edc/scripts/edc build --agent claude
 ~/.edc/scripts/edc build --agent cursor --force
 ~/.edc/scripts/edc build --agent codex --focus orchestrator
+~/.edc/scripts/edc build --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 
 # run the review pipeline in the current repo
 ~/.edc/scripts/edc review --agent claude --base main
 ~/.edc/scripts/edc review --agent cursor HEAD --base main
 ~/.edc/scripts/edc review --agent codex https://github.com/owner/repo/pull/42
+~/.edc/scripts/edc review --agent codex HEAD --base main --ignore 'generated/**'
 ```
 
 Notes:
 - `--agent` is mandatory.
 - `build` defaults to the current directory if no path is passed.
+- `--ignore` may be repeated. If any `--ignore` flags are passed, EDC ignores `.edcignore` for that run.
+- Otherwise, if `.edcignore` exists in the repo root, EDC reads non-empty, non-comment lines from it as repo-relative glob patterns.
 - `review` delegates to `edc-review.sh`, so it automatically builds or updates `.context/` first when context is missing or stale.
 - Claude build requires the EDC Claude plugin/commands to already be installed because it invokes `/edc:edc-build`.
 

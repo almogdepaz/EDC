@@ -8,9 +8,11 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>]              full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]...
+#                                                     full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
-#   edc-review.sh --build <target> [--base <ref>]      task-generation only (emit TASK lines, no subprocess spawning)
+#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]...
+#                                                     task-generation only (emit TASK lines, no subprocess spawning)
 #   edc-review.sh --check-context                      assert .context/.meta.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
@@ -234,6 +236,69 @@ manifest_modules() {
   echo "$val"
 }
 
+load_ignore_patterns() {
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@"
+    return 0
+  fi
+
+  if [ ! -f ".edcignore" ]; then
+    return 0
+  fi
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < ".edcignore"
+}
+
+path_matches_ignore() {
+  local path="$1" pattern="$2"
+  if [[ "$pattern" == */ ]]; then
+    [[ "$path" == ${pattern}* ]]
+    return
+  fi
+
+  [[ "$path" == "$pattern" ]] \
+    || [[ "$path" == "$pattern/"* ]] \
+    || [[ "$path" == $pattern ]]
+}
+
+filter_ignored_files() {
+  local files="$1"
+  shift
+  local patterns
+  patterns=$(load_ignore_patterns "$@")
+  if [ -z "$patterns" ]; then
+    printf '%s' "$files"
+    return 0
+  fi
+
+  local filtered=""
+  local file pattern ignored
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    ignored=0
+    while IFS= read -r pattern; do
+      [ -z "$pattern" ] && continue
+      if path_matches_ignore "$file" "$pattern"; then
+        ignored=1
+        break
+      fi
+    done <<< "$patterns"
+    [ "$ignored" -eq 1 ] && continue
+    filtered+="${file}"$'\n'
+  done <<< "$files"
+
+  printf '%s' "$filtered"
+}
+
 assert_context_fresh() {
   if [ ! -f "$META" ]; then
     echo "ERROR: context missing ($META not found)" >&2
@@ -318,7 +383,7 @@ resolve_prompt() {
   case "$EDC_AGENT_CLI" in
     claude)
       case "$action" in
-        build)  echo "/edc:edc-build" ;;
+        build)  echo "/edc:edc-build${prompt_arg_string:+ $prompt_arg_string}" ;;
         update) echo "/edc:edc-update${prompt_arg_string:+ $prompt_arg_string}" ;;
         review) echo "/edc:edc-review --task-file $1" ;;
       esac
@@ -328,6 +393,7 @@ resolve_prompt() {
         build)
           local skill
           skill=$(find_cursor_skill "edc-build-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
           cat "$skill"
           ;;
         update)
@@ -351,6 +417,7 @@ resolve_prompt() {
         build)
           local skill
           skill=$(find_codex_skill "edc-build-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
           cat "$skill"
           ;;
         update)
@@ -496,6 +563,26 @@ auto_mode() {
 
   local target="$1"; shift
   local extra_args=("$@")
+  local -a build_args=() update_args=()
+  local idx=0
+  while [ "$idx" -lt "${#extra_args[@]}" ]; do
+    case "${extra_args[$idx]}" in
+      --base)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --base requires a ref" >&2; exit 2; }
+        update_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        idx=$((idx + 2))
+        ;;
+      --ignore)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
+        build_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        update_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        idx=$((idx + 2))
+        ;;
+      *)
+        idx=$((idx + 1))
+        ;;
+    esac
+  done
 
   # Attempt 1: try to build review tasks
   local out recovery=""
@@ -514,7 +601,7 @@ auto_mode() {
     build)
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..."
       local build_prompt
-      build_prompt=$(resolve_prompt build) || exit 1
+      build_prompt=$(resolve_prompt build "${build_args[@]}") || exit 1
       # NOTE: spawn is inlined per CLI (not factored into a function) because
       # `timeout`/`gtimeout` cannot exec shell functions — only real binaries.
       # See `run_with_timeout` for the watchdog fallback that does support functions.
@@ -546,7 +633,7 @@ auto_mode() {
     update)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
       local update_prompt
-      update_prompt=$(resolve_prompt update "${extra_args[@]}") || exit 1
+      update_prompt=$(resolve_prompt update "${update_args[@]}") || exit 1
       case "$EDC_AGENT_CLI" in
         claude)
           run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
@@ -646,10 +733,16 @@ auto_mode() {
 build_mode() {
   local target="$1"; shift
   local baseline=""
+  local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --base) baseline="$2"; shift 2 ;;
+      --ignore)
+        [ $# -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
+        ignore_patterns+=("$2")
+        shift 2
+        ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -706,10 +799,11 @@ build_mode() {
   # them would make the tool eat its own tail (review .context/, review-tasks/,
   # or prior review-*.md files as if they were source).
   files=$(echo "$files" | grep -Ev '^(\.context/|review-tasks/|review-[^/]+\.md$)' || true)
+  files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
 
   if [ -z "$files" ]; then
-    echo "ERROR: no reviewable files after filtering tool output (.context/, review-tasks/, review-*.md)" >&2
-    echo "HINT: target contains only edc scratch files — gitignore .context/ and review-tasks/ in this repo." >&2
+    echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
+    echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
     exit 2
   fi
 
@@ -825,9 +919,11 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>]              full review pipeline (default)" >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]..." >&2
+    echo "                                                     full review pipeline (default)" >&2
     echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
-    echo "       edc-review.sh --build <target> [--base <ref>]      generate review-tasks/ only (no subprocess spawning)" >&2
+    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]..." >&2
+    echo "                                                     generate review-tasks/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

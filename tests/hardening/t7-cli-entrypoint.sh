@@ -88,7 +88,7 @@ fi
 
 # ── 7c: claude build dispatches slash command prompt ──────────────────────────
 rm -rf "$CAPTURE/claude"
-run_cli build "$PROJECT" --agent claude --force
+run_cli build "$PROJECT" --agent claude --force --ignore generated/**
 
 if [ "$(cat "$CAPTURE/claude/cwd")" = "$PROJECT" ]; then
   echo "PASS: claude build runs in target project"
@@ -106,7 +106,7 @@ else
   exit 1
 fi
 
-if grep -q '^/edc:edc-build --force$' "$CAPTURE/claude/stdin"; then
+if grep -q '^/edc:edc-build --force --ignore generated/\*\*$' "$CAPTURE/claude/stdin"; then
   echo "PASS: claude build prompt uses slash command wrapper"
 else
   echo "FAIL: claude build prompt incorrect"
@@ -121,7 +121,7 @@ CURSOR_BUILD_SKILL
 EOF
 
 rm -rf "$CAPTURE/cursor"
-run_cli build --agent cursor "$PROJECT" --focus parser
+run_cli build --agent cursor "$PROJECT" --focus parser --ignore generated/**
 
 if [ "$(cat "$CAPTURE/cursor/cwd")" = "$PROJECT" ]; then
   echo "PASS: cursor build runs in target project"
@@ -141,7 +141,7 @@ else
   exit 1
 fi
 
-if grep -q 'use these CLI arguments: --focus parser' "$CAPTURE/cursor/stdin" \
+if grep -q 'use these CLI arguments: --focus parser --ignore generated/\*\*' "$CAPTURE/cursor/stdin" \
   && grep -q 'name: edc-build-impl' "$CAPTURE/cursor/stdin"; then
   echo "PASS: cursor build prompt includes args and skill content"
 else
@@ -157,7 +157,7 @@ CODEX_BUILD_SKILL
 EOF
 
 rm -rf "$CAPTURE/codex"
-run_cli build --agent codex "$PROJECT" --force
+run_cli build --agent codex "$PROJECT" --force --ignore generated/**
 
 if [ "$(cat "$CAPTURE/codex/cwd")" = "$PROJECT" ]; then
   echo "PASS: codex build runs in target project"
@@ -177,7 +177,7 @@ else
   exit 1
 fi
 
-if grep -q 'use these CLI arguments: --force' "$CAPTURE/codex/stdin" \
+if grep -q 'use these CLI arguments: --force --ignore generated/\*\*' "$CAPTURE/codex/stdin" \
   && grep -q 'name: edc-build-impl' "$CAPTURE/codex/stdin"; then
   echo "PASS: codex build prompt includes args and skill content"
 else
@@ -199,7 +199,7 @@ EOF
 chmod +x "$PROJECT/.edc/scripts/edc-review.sh"
 
 rm -rf "$CAPTURE/review"
-(cd "$PROJECT" && run_cli review --agent codex HEAD --base main)
+(cd "$PROJECT" && run_cli review --agent codex HEAD --base main --ignore generated/**)
 
 if [ "$(cat "$CAPTURE/review/agent")" = "codex" ]; then
   echo "PASS: review exports EDC_AGENT_CLI to orchestrator"
@@ -210,7 +210,9 @@ fi
 
 if grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
   && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
-  && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null; then
+  && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review/args" >/dev/null; then
   echo "PASS: review forwards target and base args"
 else
   echo "FAIL: review args not forwarded correctly"

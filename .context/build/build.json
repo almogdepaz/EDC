@@ -1,0 +1,112 @@
+{
+  "migratedFrom": "v1-flat-context",
+  "legacyMeta": {
+    "lastCommit": "cf71bc95d5c0e6bfc1a4d0ffbdcd8b71b2c6753c",
+    "lastFullBuild": "cf71bc95d5c0e6bfc1a4d0ffbdcd8b71b2c6753c",
+    "lastUpdate": "2026-04-23T11:25:41Z",
+    "modules": {
+      "runtime-cli": {
+        "files": [
+          "README.md",
+          "install.sh",
+          "scripts/edc",
+          "scripts/edc-review.sh",
+          ".edc/scripts/edc-review.sh",
+          ".edcignore",
+          ".gitignore"
+        ],
+        "contextFile": ".context/runtime-cli.md"
+      },
+      "plugin-surface": {
+        "files": [
+          "plugins/edc/.claude-plugin/plugin.json",
+          "plugins/edc/README.md",
+          "plugins/edc/commands/edc-build.md",
+          "plugins/edc/commands/edc-update.md",
+          "plugins/edc/commands/edc-split.md",
+          "plugins/edc/commands/edc-audit.md",
+          "plugins/edc/commands/edc-review.md",
+          "plugins/edc/commands/edc-run-review.md",
+          "plugins/edc/hooks/hooks.json",
+          "plugins/edc/hooks/session-start.mjs",
+          "plugins/edc/hooks/pretooluse-context-inject.mjs"
+        ],
+        "contextFile": ".context/plugin-surface.md"
+      },
+      "canonical-skills": {
+        "files": [
+          "plugins/edc/skills/edc-build-impl/SKILL.md",
+          "plugins/edc/skills/edc-update-impl/SKILL.md",
+          "plugins/edc/skills/edc-split-impl/SKILL.md",
+          "plugins/edc/skills/edc-audit-impl/SKILL.md",
+          "plugins/edc/skills/edc-context/SKILL.md",
+          "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md",
+          "plugins/edc/skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md",
+          "plugins/edc/skills/edc-context/resources/OUTPUT_REQUIREMENTS.md",
+          "plugins/edc/skills/edc-review-impl/SKILL.md",
+          "plugins/edc/skills/edc-review-impl/methodology.md",
+          "plugins/edc/skills/edc-review-impl/adversarial.md",
+          "plugins/edc/skills/edc-review-impl/patterns.md",
+          "plugins/edc/skills/edc-review-impl/reporting.md"
+        ],
+        "contextFile": ".context/canonical-skills.md"
+      },
+      "agent-wrappers": {
+        "files": [
+          "agents/cursor/install.sh",
+          "agents/cursor/.cursor/commands/edc-run-build.md",
+          "agents/cursor/.cursor/commands/edc-run-review.md",
+          "agents/cursor/.cursor/commands/edc-run-update.md",
+          "agents/cursor/.cursor/commands/edc-run-split.md",
+          "agents/cursor/.cursor/commands/edc-run-audit.md",
+          "agents/cursor/.cursor/rules/edc-session-start.mdc",
+          "agents/codex/install.sh",
+          "agents/codex/AGENTS.md",
+          "agents/codex/.codex/skills/edc-build/SKILL.md",
+          "agents/codex/.codex/skills/edc-update/SKILL.md",
+          "agents/codex/.codex/skills/edc-split/SKILL.md",
+          "agents/codex/.codex/skills/edc-audit/SKILL.md",
+          "agents/codex/.codex/skills/edc-run-review/SKILL.md",
+          "agents/gemini/install.sh",
+          "agents/gemini/GEMINI.md"
+        ],
+        "contextFile": ".context/agent-wrappers.md"
+      },
+      "benchmarking": {
+        "files": [
+          "benchmark/PLAN.md",
+          "benchmark/run.sh",
+          "benchmark/autoresearch.sh",
+          "benchmark/parse_gt.py",
+          "benchmark/score.py",
+          "benchmark/curl/ground-truth.md",
+          "benchmark/curl/repo.conf",
+          "benchmark/curl/cve-lists.conf",
+          "benchmark/redis/ground-truth.md",
+          "benchmark/redis/repo.conf",
+          "benchmark/redis/cve-lists.conf",
+          "benchmark/baseline-score.txt",
+          "benchmark/regression-floor.txt",
+          "benchmark/tried-hashes.tsv",
+          "benchmark/results.tsv",
+          "benchmark/ideas.tsv"
+        ],
+        "contextFile": ".context/benchmarking.md"
+      },
+      "hardening-tests": {
+        "files": [
+          "tests/hardening/t1-tool-lockdown.sh",
+          "tests/hardening/t2-stream-filter.sh",
+          "tests/hardening/t3-content-validation.sh",
+          "tests/hardening/t4-timeouts-pipe-guards.sh",
+          "tests/hardening/t5-portability-install.sh",
+          "tests/hardening/t6-auto-mode.sh",
+          "tests/hardening/t7-cli-entrypoint.sh",
+          "tests/hardening/t7-codex-auto-mode.sh",
+          "tests/hardening/t8-ignore-rules.sh"
+        ],
+        "contextFile": ".context/hardening-tests.md"
+      }
+    }
+  }
+}

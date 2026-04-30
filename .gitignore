@@ -1,2 +1,5 @@
 benchmark/autoresearch-output.log
 benchmark/BLOGPOST.md
+
+benchmark/.edc-bench/
+.edc/

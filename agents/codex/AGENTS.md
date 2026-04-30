@@ -6,7 +6,6 @@ This project uses EDC for deep codebase context and code review.
 
 - **$edc-build** — Full context build. Routes into the shared EDC build flow and writes `.context/`.
 - **$edc-update** — Incremental context refresh from branch diff.
-- **$edc-split** — Split `.context/full-context.md` into module files and overview files.
 - **$edc-audit** — Overengineering, duplication, and complexity audit.
 - **$edc-run-review** — Self-driving differential review. Spawns fresh `codex exec` subprocesses through the shared orchestrator.
 - **$edc-context** — Low-level deep architectural analysis skill used by the build/update pipeline.
@@ -18,7 +17,7 @@ This project uses EDC for deep codebase context and code review.
 
 - First time: run `$edc-build`
 - On later changes: run `$edc-update`
-- If you need the manual pipeline: `$edc-build` writes `.context/full-context.md`, then splits it into `.context/context.md`, `.context/{module}.md`, `.context/issues.md`, `.context/complexity.md`, and `.context/.meta.json`
+- `$edc-build` writes `.context/index.md`, `.context/manifest.json`, `.context/modules/<name>.md`, `.context/reports/issues.md`, `.context/reports/complexity.md`, and `.context/build/*`.
 
 ### Review changes
 
@@ -56,3 +55,7 @@ temp dir per run) so pipeline state stays separated from the user's
 interactive Codex sessions. If `codex exec` fails with an auth error,
 export `EDC_CODEX_HOME=$HOME/.codex` before running the skill — the
 orchestrator will reuse that path verbatim instead of creating a temp one.
+
+## Codebase Context (EDC)
+
+Deep architectural context is available in `.context/`. Read `.context/index.md` first for the module map, then `.context/modules/<name>.md` for the module you're working in. Check `.context/reports/issues.md` before making changes. Codex `--context-mode advisory|inject` install/review flows are not implemented yet and fail loudly by design.

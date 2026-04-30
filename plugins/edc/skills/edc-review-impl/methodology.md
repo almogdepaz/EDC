@@ -6,12 +6,12 @@ Detailed phase-by-phase workflow for code review.
 
 **FIRST ACTION — Check for existing context, then build baseline if needed:**
 
-If `.context/context.md` exists in the repository:
-1. Read `.context/context.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+If `.context/index.md` exists in the repository:
+1. Read `.context/index.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
 2. This IS your baseline — skip the full context build
 3. Map changed files to modules using the Module Map table
-4. Load `.context/{module}.md` for affected modules
-5. Load `.context/issues.md` to check if changes touch known issues
+4. Load `.context/modules/{module}.md` for affected modules
+5. Load `.context/reports/issues.md` to check if changes touch known issues
 
 If `.context/` does NOT exist but the `edc:edc-context` skill is available (NOT `audit-context-building` — that is a different plugin):
 
@@ -75,20 +75,20 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 - **LOW**: Comments, tests, UI, logging
 
 **Context-aware triage (if `.context/` exists):**
-- Check `.context/issues.md` — does this PR touch files with known issues?
-- Check module coupling in `.context/context.md` — does this change have cascade risk?
-- Elevate risk for changes touching fragility clusters documented in `.context/{module}.md`
+- Check `.context/reports/issues.md` — does this PR touch files with known issues?
+- Check module coupling in `.context/index.md` — does this change have cascade risk?
+- Elevate risk for changes touching fragility clusters documented in `.context/modules/{module}.md`
 
 ---
 
 ## Phase 0.5: C Memory Safety Fast-Path (run BEFORE deep analysis)
 
-**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
+**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/reports/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
 
 ```bash
 # Create output file immediately
-mkdir -p .context 2>/dev/null || true
-OUTPUT_FILE=".context/issues.md"
+mkdir -p .context/reports 2>/dev/null || true
+OUTPUT_FILE=".context/reports/issues.md"
 cat > "$OUTPUT_FILE" << 'EOF'
 # Security Review Findings
 <!-- findings appended below as discovered -->
@@ -182,7 +182,7 @@ For each changed file:
    ```
 
 7. **Invariant compliance (if `.context/` exists):**
-   - Read `.context/{module}.md` for the affected module
+   - Read `.context/modules/{module}.md` for the affected module
    - Does the change violate any documented invariant?
    - Does it break an implicit contract with another module?
    - Does the coupling map flag cascade risk?
@@ -225,8 +225,8 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 - 50+ calls: CRITICAL
 
 **Context-aware blast radius (if `.context/` exists):**
-- Cross-module coupling section in `.context/context.md` maps cascade paths
-- `.context/{module}.md` documents which modules depend on the changed module
+- Cross-module coupling section in `.context/index.md` maps cascade paths
+- `.context/modules/{module}.md` documents which modules depend on the changed module
 - Use these instead of grep when available — they capture non-obvious coupling
 
 **Priority matrix:**

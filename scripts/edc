@@ -8,14 +8,16 @@ usage() {
   cat <<'EOF'
 Usage:
   edc build --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
-  edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]...
+  edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc doctor
 
 Commands:
   build   Build or update .context/ in the target repo
   review  Run the differential review pipeline (auto-builds/updates context if needed)
+  doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for every command.
+  --agent is required for build and review.
   build defaults path to the current directory.
   --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
   review delegates to the shared edc-review orchestrator.
@@ -113,8 +115,8 @@ resolve_build_prompt() {
 find_review_script() {
   local candidate
   for candidate in \
-    ".edc/scripts/edc-review.sh" \
     "$SCRIPT_DIR/edc-review.sh" \
+    ".edc/scripts/edc-review.sh" \
     "$HOME/.edc/scripts/edc-review.sh"
   do
     if [ -f "$candidate" ]; then
@@ -123,6 +125,54 @@ find_review_script() {
     fi
   done
   return 1
+}
+
+find_doctor_script() {
+  local candidate
+  for candidate in \
+    "$REPO_ROOT/plugins/edc/scripts/edc-doctor.sh" \
+    ".edc/scripts/edc-doctor.sh" \
+    "$HOME/.edc/scripts/edc-doctor.sh"
+  do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+read_manifest_default_mode() {
+  local manifest=".context/manifest.json"
+  [ -f "$manifest" ] || return 0
+  command -v jq > /dev/null 2>&1 || die "jq is required to read $manifest"
+  jq -r '.policy.defaultMode // empty' "$manifest"
+}
+
+validate_context_mode() {
+  local mode="$1"
+  [ -n "$mode" ] || return 0
+  case "$mode" in
+    advisory|inject) ;;
+    *) die "--context-mode must be advisory or inject" ;;
+  esac
+}
+
+enforce_agent_context_mode() {
+  local agent="$1" mode="$2"
+  [ -n "$mode" ] || return 0
+  if [ "$agent" != "claude" ]; then
+    echo "edc: $agent/$mode not yet implemented" >&2
+    exit 2
+  fi
+}
+
+run_doctor_in_dir() {
+  local target="$1"
+  local doctor_script
+  doctor_script="$(cd "$target" && find_doctor_script)" \
+    || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
+  (cd "$target" && bash "$doctor_script")
 }
 
 build_cmd() {
@@ -202,10 +252,13 @@ build_cmd() {
       )
       ;;
   esac
+
+  run_doctor_in_dir "$target"
 }
 
 review_cmd() {
   local agent=""
+  local context_mode=""
   local -a passthrough=()
 
   while [ "$#" -gt 0 ]; do
@@ -217,6 +270,12 @@ review_cmd() {
         ;;
       --base|--ignore)
         [ "$#" -ge 2 ] || die "$1 requires a value"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        context_mode="$2"
         passthrough+=("$1" "$2")
         shift 2
         ;;
@@ -232,13 +291,26 @@ review_cmd() {
   done
 
   [ -n "$agent" ] || die "--agent is required"
+  validate_context_mode "$context_mode"
+  if [ -z "$context_mode" ]; then
+    context_mode="$(read_manifest_default_mode)"
+    validate_context_mode "$context_mode"
+  fi
+  enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
 
   local review_script
   review_script="$(find_review_script)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$agent" bash "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
+}
+
+doctor_cmd() {
+  local doctor_script
+  doctor_script="$(find_doctor_script)" \
+    || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
+  bash "$doctor_script"
 }
 
 main() {
@@ -256,6 +328,9 @@ main() {
       ;;
     review)
       review_cmd "$@"
+      ;;
+    doctor)
+      doctor_cmd "$@"
       ;;
     --help|-h|help)
       usage

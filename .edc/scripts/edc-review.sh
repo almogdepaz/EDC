@@ -8,14 +8,16 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>]              build mode (default — emit TASK lines)
-#   edc-review.sh --auto <target> [--base <ref>]      self-driving mode (spawns agent subprocesses via EDC_AGENT_CLI)
-#   edc-review.sh --base <ref>                        shorthand for: --auto HEAD --base <ref>
-#   edc-review.sh --check-context                     assert .context/.meta.json fresh (no diff, no task gen)
-#   edc-review.sh --consolidate                       merge per-module reports into final review file
-#   edc-review.sh --verify                            assert context fresh + reports + final file exist
+#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+#                                                     full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
+#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+#                                                     task-generation only (emit TASK lines, no subprocess spawning)
+#   edc-review.sh --check-context                      assert .context/manifest.json fresh (no diff, no task gen)
+#   edc-review.sh --consolidate                        merge per-module reports into final review file
+#   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
-# Build mode exit codes:
+# --build exit codes:
 #   0 — review-tasks/ written, TASK lines on stdout, proceed with skill
 #   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
 #   2 — bad arguments or environment error
@@ -34,15 +36,18 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 2
 fi
 
-META=".context/.meta.json"
+MANIFEST=".context/manifest.json"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
-# EDC_AGENT_CLI selects which CLI spawns subprocess agents in --auto mode.
+# EDC_AGENT_CLI selects which CLI spawns subprocess agents for the review pipeline.
 #   "claude"  → claude -p  (default, backward-compatible)
 #   "cursor"  → cursor agent -p
+#   "codex"   → codex exec
 
 EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
+CODEX_EXEC_HOME=""
+CODEX_EXEC_HOME_OWNED=0
 
 # ── timeout detection ────────────────────────────────────────────────────────
 #
@@ -55,11 +60,18 @@ elif command -v gtimeout > /dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
 else
   TIMEOUT_BIN=""
-  # Only print the warning from the top-level invocation (auto mode) — avoid
-  # noise from nested `bash "$0"` calls inside auto_mode that capture stdout/stderr.
-  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ] && [ "${1:-}" = "--auto" ]; then
-    echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
-    export EDC_TIMEOUT_WARNED=1
+  # Print once per top-level invocation, but only when we'll actually spawn
+  # subprocesses (i.e. the default auto_mode path). Skip for phase-internal
+  # flags and usage errors. EDC_TIMEOUT_WARNED is exported so the nested
+  # `bash "$0" --build ...` call inside auto_mode inherits it and stays silent.
+  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ]; then
+    case "${1:-}" in
+      --build|--check-context|--consolidate|--verify|"") ;;
+      *)
+        echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+        export EDC_TIMEOUT_WARNED=1
+        ;;
+    esac
   fi
 fi
 
@@ -74,7 +86,7 @@ run_with_timeout() {
     local rc=$?
     if [ $rc -eq 124 ]; then
       echo "ERROR: phase '$label' timed out after ${secs}s" >&2
-      exit 1
+      return 1
     fi
     return $rc
   fi
@@ -100,10 +112,34 @@ run_with_timeout() {
   return $rc
 }
 
+cleanup_codex_exec_home() {
+  if [ "${CODEX_EXEC_HOME_OWNED:-0}" -eq 1 ] && [ -n "${CODEX_EXEC_HOME:-}" ] && [ -d "$CODEX_EXEC_HOME" ]; then
+    rm -rf "$CODEX_EXEC_HOME"
+  fi
+}
+
+ensure_codex_exec_home() {
+  if [ -n "${CODEX_EXEC_HOME:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${EDC_CODEX_HOME:-}" ]; then
+    mkdir -p "$EDC_CODEX_HOME"
+    CODEX_EXEC_HOME="$EDC_CODEX_HOME"
+    CODEX_EXEC_HOME_OWNED=0
+    return 0
+  fi
+
+  CODEX_EXEC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-codex-home.XXXXXX") \
+    || { echo "ERROR: could not create temporary CODEX_HOME" >&2; return 1; }
+  CODEX_EXEC_HOME_OWNED=1
+  trap cleanup_codex_exec_home EXIT
+}
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-# stream_filter: read NDJSON from agent CLI --output-format stream-json
-# and print human-readable progress lines. Handles both Claude and Cursor formats.
+# stream_filter: read NDJSON from agent CLI output and print human-readable
+# progress lines. Handles Claude, Cursor, and Codex formats.
 stream_filter() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
@@ -133,6 +169,27 @@ stream_filter() {
     err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
     if [ -n "$err" ]; then
       printf '%s\n' "$err" >&2
+      continue
+    fi
+    # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
+    # agent_message carries the assistant text the user needs to see; without
+    # this handler the pipeline runs silent under real `codex exec`.
+    codex_msg=$(printf '%s' "$line" | jq -r '
+      if (.msg.type // "") == "agent_message" then (.msg.message // "")
+      elif (.msg.type // "") == "agent_reasoning" then "… \(.msg.text // "")"
+      elif (.msg.type // "") == "exec_command_begin" then "→ \(((.msg.command // []) | join(" "))[0:120])"
+      else empty end' 2>/dev/null)
+    if [ -n "$codex_msg" ]; then
+      printf '%s\n' "$codex_msg"
+      continue
+    fi
+    # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
+    codex_err=$(printf '%s' "$line" | jq -r '
+      if .type == "error" then "ERROR (subprocess): \(.message // "unknown error")"
+      elif (.msg.type // "") == "error" then "ERROR (subprocess): \(.msg.message // "unknown error")"
+      else empty end' 2>/dev/null)
+    if [ -n "$codex_err" ]; then
+      printf '%s\n' "$codex_err" >&2
     fi
   done
 }
@@ -143,13 +200,13 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
-read_meta_last_commit() {
+read_manifest_source_commit() {
   local val
-  val=$(grep -o '"lastCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$META" \
+  val=$(grep -o '"sourceCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$MANIFEST" \
     | head -1 \
-    | sed 's/.*"lastCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    | sed 's/.*"sourceCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read lastCommit from $META" >&2
+    echo "ERROR: could not read sourceCommit from $MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -170,8 +227,8 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(grep -o '"module"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | sed 's/.*"module"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
+    | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read modules from review-tasks/manifest.json" >&2
     return 1
@@ -179,21 +236,84 @@ manifest_modules() {
   echo "$val"
 }
 
+load_ignore_patterns() {
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@"
+    return 0
+  fi
+
+  if [ ! -f ".edcignore" ]; then
+    return 0
+  fi
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < ".edcignore"
+}
+
+path_matches_ignore() {
+  local path="$1" pattern="$2"
+  if [[ "$pattern" == */ ]]; then
+    [[ "$path" == ${pattern}* ]]
+    return
+  fi
+
+  [[ "$path" == "$pattern" ]] \
+    || [[ "$path" == "$pattern/"* ]] \
+    || [[ "$path" == $pattern ]]
+}
+
+filter_ignored_files() {
+  local files="$1"
+  shift
+  local patterns
+  patterns=$(load_ignore_patterns "$@")
+  if [ -z "$patterns" ]; then
+    printf '%s' "$files"
+    return 0
+  fi
+
+  local filtered=""
+  local file pattern ignored
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    ignored=0
+    while IFS= read -r pattern; do
+      [ -z "$pattern" ] && continue
+      if path_matches_ignore "$file" "$pattern"; then
+        ignored=1
+        break
+      fi
+    done <<< "$patterns"
+    [ "$ignored" -eq 1 ] && continue
+    filtered+="${file}"$'\n'
+  done <<< "$files"
+
+  printf '%s' "$filtered"
+}
+
 assert_context_fresh() {
-  if [ ! -f "$META" ]; then
-    echo "ERROR: context missing ($META not found)" >&2
+  if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: context missing ($MANIFEST not found)" >&2
     return 1
   fi
-  local head last_commit
+  local head source_commit
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; return 1; }
-  last_commit=$(read_meta_last_commit)
-  if [ "$last_commit" != "$head" ]; then
-    echo "ERROR: context stale (built at: $last_commit, HEAD: $head)" >&2
+  source_commit=$(read_manifest_source_commit)
+  if [ "$source_commit" != "$head" ]; then
+    echo "ERROR: context stale (built at: $source_commit, HEAD: $head)" >&2
     return 1
   fi
-  # content validation: context.md must have at least one ## heading (edc-build
+  # content validation: index.md must have at least one ## heading (edc-build
   # emits module map, invariants, trust boundaries as ## sections)
-  local ctx=".context/context.md"
+  local ctx=".context/index.md"
   if [ ! -f "$ctx" ]; then
     echo "ERROR: context file missing ($ctx) — run /edc:edc-build" >&2
     return 1
@@ -223,64 +343,98 @@ assert_report_valid() {
 
 # ── agent CLI helpers ────────────────────────────────────────────────────────
 
-# Strip YAML frontmatter (--- … ---) from a file, return body only.
-strip_frontmatter() {
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2' "$1"
-}
-
-# Find a Cursor resource file (command, skill, etc.) under .cursor/ or ~/.cursor/.
-find_cursor_resource() {
-  local rel="$1"
-  for base in ".cursor" "$HOME/.cursor"; do
-    if [ -f "$base/$rel" ]; then
-      echo "$base/$rel"
+# Locate an installed runtime skill's SKILL.md. Searches project-local first,
+# then the global agent install path.
+find_installed_skill() {
+  local name="$1"; shift
+  local base
+  for base in "$@"; do
+    if [ -f "$base/$name/SKILL.md" ]; then
+      echo "$base/$name/SKILL.md"
       return 0
     fi
   done
-  echo "ERROR: $rel not found in .cursor/ or ~/.cursor/" >&2
+  echo "ERROR: skill '$name' not found in: $*" >&2
   return 1
 }
 
-# Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
-resolve_prompt() {
-  local action="$1"; shift
-  case "$EDC_AGENT_CLI" in
-    claude)
-      case "$action" in
-        build)  echo "/edc:edc-build" ;;
-        update) echo "/edc:edc-update" ;;
-        review) echo "/edc:edc-review-impl --task-file $1" ;;
-      esac
-      ;;
-    cursor)
-      case "$action" in
-        build|update)
-          local cmd_name
-          if [ "$action" = "build" ]; then cmd_name="edc-run-build.md"; else cmd_name="edc-run-update.md"; fi
-          local f
-          f=$(find_cursor_resource "commands/$cmd_name") || return 1
-          strip_frontmatter "$f"
-          ;;
-        review)
-          printf 'Read the file at %s and follow every instruction in it.\nUse the edc-review-impl skill for the review methodology — read its SKILL.md first.\nWrite the report to the path specified in the task file.\nDo not skip reading the .context/ files.' "$1"
-          ;;
-      esac
-      ;;
-  esac
+# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
+find_cursor_skill() {
+  find_installed_skill "$1" ".cursor/skills" "$HOME/.cursor/skills"
 }
 
-# Spawn a subprocess agent with the appropriate CLI.
-run_agent() {
-  local prompt="$1"
+# Codex skills are installed under .codex/skills/<name>/ or ~/.codex/skills/<name>/.
+find_codex_skill() {
+  find_installed_skill "$1" ".codex/skills" "$HOME/.codex/skills"
+}
+
+# Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
+#
+# Cursor and Codex route through the same -impl skills directly; Claude routes
+# through command wrappers that invoke those same -impl skills.
+#
+# Claude: slash commands — the plugin system resolves the command wrapper,
+#         which invokes the matching -impl skill.
+# Cursor/Codex: cat the installed skill file so the subprocess follows the
+#               exact same instructions directly.
+resolve_prompt() {
+  local action="$1"; shift
+  local prompt_arg_string="$*"
   case "$EDC_AGENT_CLI" in
     claude)
-      claude -p --output-format stream-json --verbose \
-        --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-        <<< "$prompt"
+      case "$action" in
+        build)  echo "/edc:edc-build${prompt_arg_string:+ $prompt_arg_string}" ;;
+        update) echo "/edc:edc-update${prompt_arg_string:+ $prompt_arg_string}" ;;
+        review) echo "/edc:edc-review --task-file $1" ;;
+      esac
       ;;
     cursor)
-      cursor agent -p --output-format stream-json --force --trust \
-        <<< "$prompt"
+      case "$action" in
+        build)
+          local skill
+          skill=$(find_cursor_skill "edc-build-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
+          cat "$skill"
+          ;;
+        update)
+          local skill
+          skill=$(find_cursor_skill "edc-update-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
+          cat "$skill"
+          ;;
+        review)
+          local task_path="$1"
+          local review_skill review_dir
+          review_skill=$(find_cursor_skill "edc-review-impl") || return 1
+          review_dir=$(dirname "$review_skill")
+          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
+            "$task_path" "$review_skill" "$review_dir"
+          ;;
+      esac
+      ;;
+    codex)
+      case "$action" in
+        build)
+          local skill
+          skill=$(find_codex_skill "edc-build-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
+          cat "$skill"
+          ;;
+        update)
+          local skill
+          skill=$(find_codex_skill "edc-update-impl") || return 1
+          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
+          cat "$skill"
+          ;;
+        review)
+          local task_path="$1"
+          local review_skill review_dir
+          review_skill=$(find_codex_skill "edc-review-impl") || return 1
+          review_dir=$(dirname "$review_skill")
+          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
+            "$task_path" "$review_skill" "$review_dir"
+          ;;
+      esac
       ;;
   esac
 }
@@ -384,7 +538,7 @@ verify_mode() {
 # Self-driving pipeline: detect context state, spawn agent subprocesses for each
 # phase, verify outputs, consolidate, verify. The orchestrator script owns every
 # decision; the spawned agents have one job each.
-# Set EDC_AGENT_CLI=claude|cursor before invoking.
+# Set EDC_AGENT_CLI=claude|cursor|codex before invoking.
 
 auto_mode() {
   case "$EDC_AGENT_CLI" in
@@ -396,18 +550,47 @@ auto_mode() {
       command -v cursor > /dev/null 2>&1 \
         || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
       ;;
+    codex)
+      command -v codex > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
+      ensure_codex_exec_home || exit 1
+      ;;
     *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude' or 'cursor'" >&2
+      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
       exit 2
       ;;
   esac
 
   local target="$1"; shift
   local extra_args=("$@")
+  local -a build_args=() update_args=()
+  local idx=0
+  while [ "$idx" -lt "${#extra_args[@]}" ]; do
+    case "${extra_args[$idx]}" in
+      --base)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --base requires a ref" >&2; exit 2; }
+        update_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        idx=$((idx + 2))
+        ;;
+      --ignore)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
+        build_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        update_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
+        idx=$((idx + 2))
+        ;;
+      --context-mode)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
+        idx=$((idx + 2))
+        ;;
+      *)
+        idx=$((idx + 1))
+        ;;
+    esac
+  done
 
   # Attempt 1: try to build review tasks
   local out recovery=""
-  out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   # Detect context-state markers anywhere in output (robust against any
   # startup noise like warnings, tracing, etc.)
@@ -422,20 +605,63 @@ auto_mode() {
     build)
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..."
       local build_prompt
-      build_prompt=$(resolve_prompt build) || exit 1
-      run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-        run_agent "$build_prompt" \
-        | stream_filter \
-        || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+      build_prompt=$(resolve_prompt build "${build_args[@]}") || exit 1
+      # NOTE: spawn is inlined per CLI (not factored into a function) because
+      # `timeout`/`gtimeout` cannot exec shell functions — only real binaries.
+      # See `run_with_timeout` for the watchdog fallback that does support functions.
+      case "$EDC_AGENT_CLI" in
+        claude)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            claude -p --output-format stream-json --verbose \
+              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
+        cursor)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            cursor agent -p --output-format stream-json --force --trust \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
+        codex)
+          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
+            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
+            <<< "$build_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
+          ;;
+      esac
       ;;
     update)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
       local update_prompt
-      update_prompt=$(resolve_prompt update) || exit 1
-      run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-        run_agent "$update_prompt" \
-        | stream_filter \
-        || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+      update_prompt=$(resolve_prompt update "${update_args[@]}") || exit 1
+      case "$EDC_AGENT_CLI" in
+        claude)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            claude -p --output-format stream-json --verbose \
+              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+        cursor)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            cursor agent -p --output-format stream-json --force --trust \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+        codex)
+          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
+            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
+            <<< "$update_prompt" \
+            | stream_filter \
+            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+          ;;
+      esac
       ;;
   esac
 
@@ -443,7 +669,7 @@ auto_mode() {
     bash "$0" --check-context > /dev/null \
       || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
     # Attempt 2: build tasks now that context is ready
-    out=$(bash "$0" "$target" "${extra_args[@]}" 2>&1) || true
+    out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
   fi
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
@@ -461,8 +687,8 @@ auto_mode() {
   fi
 
   # Spawn one agent subprocess per module.
-  # The here-string on each run_agent call provides the prompt via stdin,
-  # overriding the loop's <<< "$tasks" so it doesn't leak into the subprocess.
+  # The here-string on each spawn provides the prompt via stdin, overriding
+  # the loop's <<< "$tasks" so it doesn't leak into the subprocess.
   while IFS= read -r task_path; do
     [ -z "$task_path" ] && continue
     local module
@@ -470,10 +696,30 @@ auto_mode() {
     echo "→ reviewing module: $module"
     local review_prompt
     review_prompt=$(resolve_prompt review "$task_path") || exit 1
-    run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-      run_agent "$review_prompt" \
-      | stream_filter \
-      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+    case "$EDC_AGENT_CLI" in
+      claude)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          claude -p --output-format stream-json --verbose \
+            --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+      cursor)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          cursor agent -p --output-format stream-json --force --trust \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+      codex)
+        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
+          env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
+          <<< "$review_prompt" \
+          | stream_filter \
+          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+        ;;
+    esac
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
   done <<< "$tasks"
@@ -491,10 +737,20 @@ auto_mode() {
 build_mode() {
   local target="$1"; shift
   local baseline=""
+  local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --base) baseline="$2"; shift 2 ;;
+      --ignore)
+        [ $# -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
+        ignore_patterns+=("$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ $# -ge 2 ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
+        shift 2
+        ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -503,17 +759,27 @@ build_mode() {
   local head
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; exit 2; }
 
-  if [ ! -f "$META" ]; then
+  if [ ! -f "$MANIFEST" ]; then
     echo "CONTEXT_MISSING"
-    echo "No .context/.meta.json found. Run edc-build before reviewing."
+    echo "No .context/manifest.json found. Run edc-build before reviewing."
     exit 1
   fi
 
-  local last_commit
-  last_commit=$(read_meta_last_commit)
-  if [ "$last_commit" != "$head" ]; then
+  # Structural check: index.md must exist and contain ## headings. Absent or
+  # stubbed index.md means edc-build never finished (or wrote junk) — treat as
+  # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
+  local ctx=".context/index.md"
+  if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
+    echo "CONTEXT_MISSING"
+    echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
+    exit 1
+  fi
+
+  local source_commit
+  source_commit=$(read_manifest_source_commit)
+  if [ "$source_commit" != "$head" ]; then
     echo "CONTEXT_STALE"
-    echo "Context is stale (built at: $last_commit, HEAD: $head). Run edc-update before reviewing."
+    echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
     exit 1
   fi
 
@@ -541,10 +807,11 @@ build_mode() {
   # them would make the tool eat its own tail (review .context/, review-tasks/,
   # or prior review-*.md files as if they were source).
   files=$(echo "$files" | grep -Ev '^(\.context/|review-tasks/|review-[^/]+\.md$)' || true)
+  files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
 
   if [ -z "$files" ]; then
-    echo "ERROR: no reviewable files after filtering tool output (.context/, review-tasks/, review-*.md)" >&2
-    echo "HINT: target contains only edc scratch files — gitignore .context/ and review-tasks/ in this repo." >&2
+    echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
+    echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
     exit 2
   fi
 
@@ -575,7 +842,7 @@ build_mode() {
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      echo -n "    { \"module\": \"$module\", \"files\": ["
+      echo -n "    { \"name\": \"$module\", \"doc\": \".context/modules/${module}.md\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
         | grep -v '^$' \
@@ -609,9 +876,9 @@ ${file_list}
 
 ## Instructions
 
-1. Read \`.context/context.md\` — module map, invariants, trust boundaries
-2. Read \`.context/issues.md\` if it exists — cross-reference known issues against the files above
-3. Read \`.context/${module}.md\` if it exists — deep per-module context, invariants, call graphs
+1. Read \`.context/index.md\` — module map, invariants, trust boundaries
+2. Read \`.context/reports/issues.md\` if it exists — cross-reference known issues against the files above
+3. Read \`.context/modules/${module}.md\` if it exists — deep per-module context, invariants, call graphs
 4. Use the edc-review skill to perform the full review on the files listed above
 5. Write your report to \`review-tasks/report-${module}.md\`
 
@@ -633,21 +900,21 @@ TASK
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
-  --auto)
+  --build)
     shift
     if [ -z "${1:-}" ]; then
-      echo "ERROR: --auto requires a target" >&2
+      echo "ERROR: --build requires a target" >&2
       exit 2
     fi
-    auto_mode "$@"
+    build_mode "$@"
     ;;
   --base)
-    # Shorthand: --base <ref> → --auto HEAD --base <ref>
+    # Shorthand: --base <ref> [extras...] → HEAD --base <ref> [extras...]
     if [ -z "${2:-}" ]; then
       echo "ERROR: --base requires a ref (e.g. --base main)" >&2
       exit 2
     fi
-    auto_mode HEAD --base "$2"
+    auto_mode HEAD --base "$2" "${@:3}"
     ;;
   --check-context)
     check_context_mode
@@ -660,15 +927,22 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>]" >&2
-    echo "       edc-review.sh --auto <target> [--base <ref>]" >&2
-    echo "       edc-review.sh --base <ref>     (shorthand for --auto HEAD --base <ref>)" >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
+    echo "                                                     full review pipeline (default)" >&2
+    echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
+    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
+    echo "                                                     generate review-tasks/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2
     exit 2
     ;;
+  --*)
+    echo "ERROR: unknown flag: $1" >&2
+    echo "Run 'edc-review.sh' with no args for usage." >&2
+    exit 2
+    ;;
   *)
-    build_mode "$@"
+    auto_mode "$@"
     ;;
 esac

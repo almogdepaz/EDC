@@ -11,9 +11,12 @@ trap 'rm -rf "$TMPDIR_T8"' EXIT
 echo "=== T8: Ignore rules ==="
 
 cd "$TMPDIR_T8"
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
 git init -q
 git config user.email "test@test.com"
 git config user.name "Test"
+git config commit.gpgsign false
 
 mkdir -p src generated
 printf 'one\n' > src/keep.txt
@@ -28,10 +31,10 @@ git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
 
 mkdir -p .context
-cat > .context/.meta.json <<EOF
-{"lastCommit":"$HEAD_SHA","modules":[]}
+cat > .context/manifest.json <<EOF
+{"schemaVersion":2,"sourceCommit":"$HEAD_SHA","modules":[]}
 EOF
-printf '## Module Map\n\n- root\n' > .context/context.md
+printf '## Module Map\n\n- root\n' > .context/index.md
 
 # ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
 printf 'generated/**\n' > .edcignore

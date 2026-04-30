@@ -8,12 +8,12 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]...
+#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 #                                                     full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
-#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]...
+#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 #                                                     task-generation only (emit TASK lines, no subprocess spawning)
-#   edc-review.sh --check-context                      assert .context/.meta.json fresh (no diff, no task gen)
+#   edc-review.sh --check-context                      assert .context/manifest.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
@@ -36,7 +36,7 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 2
 fi
 
-META=".context/.meta.json"
+MANIFEST=".context/manifest.json"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -200,13 +200,13 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
-read_meta_last_commit() {
+read_manifest_source_commit() {
   local val
-  val=$(grep -o '"lastCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$META" \
+  val=$(grep -o '"sourceCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$MANIFEST" \
     | head -1 \
-    | sed 's/.*"lastCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+    | sed 's/.*"sourceCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read lastCommit from $META" >&2
+    echo "ERROR: could not read sourceCommit from $MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -227,8 +227,8 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(grep -o '"module"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | sed 's/.*"module"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
+    | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read modules from review-tasks/manifest.json" >&2
     return 1
@@ -300,20 +300,20 @@ filter_ignored_files() {
 }
 
 assert_context_fresh() {
-  if [ ! -f "$META" ]; then
-    echo "ERROR: context missing ($META not found)" >&2
+  if [ ! -f "$MANIFEST" ]; then
+    echo "ERROR: context missing ($MANIFEST not found)" >&2
     return 1
   fi
-  local head last_commit
+  local head source_commit
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; return 1; }
-  last_commit=$(read_meta_last_commit)
-  if [ "$last_commit" != "$head" ]; then
-    echo "ERROR: context stale (built at: $last_commit, HEAD: $head)" >&2
+  source_commit=$(read_manifest_source_commit)
+  if [ "$source_commit" != "$head" ]; then
+    echo "ERROR: context stale (built at: $source_commit, HEAD: $head)" >&2
     return 1
   fi
-  # content validation: context.md must have at least one ## heading (edc-build
+  # content validation: index.md must have at least one ## heading (edc-build
   # emits module map, invariants, trust boundaries as ## sections)
-  local ctx=".context/context.md"
+  local ctx=".context/index.md"
   if [ ! -f "$ctx" ]; then
     echo "ERROR: context file missing ($ctx) — run /edc:edc-build" >&2
     return 1
@@ -578,6 +578,10 @@ auto_mode() {
         update_args+=("${extra_args[$idx]}" "${extra_args[$((idx + 1))]}")
         idx=$((idx + 2))
         ;;
+      --context-mode)
+        [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
+        idx=$((idx + 2))
+        ;;
       *)
         idx=$((idx + 1))
         ;;
@@ -743,6 +747,10 @@ build_mode() {
         ignore_patterns+=("$2")
         shift 2
         ;;
+      --context-mode)
+        [ $# -ge 2 ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
+        shift 2
+        ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -751,27 +759,27 @@ build_mode() {
   local head
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; exit 2; }
 
-  if [ ! -f "$META" ]; then
+  if [ ! -f "$MANIFEST" ]; then
     echo "CONTEXT_MISSING"
-    echo "No .context/.meta.json found. Run edc-build before reviewing."
+    echo "No .context/manifest.json found. Run edc-build before reviewing."
     exit 1
   fi
 
-  # Structural check: context.md must exist and contain ## headings. Absent or
-  # stubbed context.md means edc-build never finished (or wrote junk) — treat as
+  # Structural check: index.md must exist and contain ## headings. Absent or
+  # stubbed index.md means edc-build never finished (or wrote junk) — treat as
   # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
-  local ctx=".context/context.md"
+  local ctx=".context/index.md"
   if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
     echo "CONTEXT_MISSING"
     echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
     exit 1
   fi
 
-  local last_commit
-  last_commit=$(read_meta_last_commit)
-  if [ "$last_commit" != "$head" ]; then
+  local source_commit
+  source_commit=$(read_manifest_source_commit)
+  if [ "$source_commit" != "$head" ]; then
     echo "CONTEXT_STALE"
-    echo "Context is stale (built at: $last_commit, HEAD: $head). Run edc-update before reviewing."
+    echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
     exit 1
   fi
 
@@ -834,7 +842,7 @@ build_mode() {
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      echo -n "    { \"module\": \"$module\", \"files\": ["
+      echo -n "    { \"name\": \"$module\", \"doc\": \".context/modules/${module}.md\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
         | grep -v '^$' \
@@ -868,9 +876,9 @@ ${file_list}
 
 ## Instructions
 
-1. Read \`.context/context.md\` — module map, invariants, trust boundaries
-2. Read \`.context/issues.md\` if it exists — cross-reference known issues against the files above
-3. Read \`.context/${module}.md\` if it exists — deep per-module context, invariants, call graphs
+1. Read \`.context/index.md\` — module map, invariants, trust boundaries
+2. Read \`.context/reports/issues.md\` if it exists — cross-reference known issues against the files above
+3. Read \`.context/modules/${module}.md\` if it exists — deep per-module context, invariants, call graphs
 4. Use the edc-review skill to perform the full review on the files listed above
 5. Write your report to \`review-tasks/report-${module}.md\`
 
@@ -919,10 +927,10 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]..." >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
     echo "                                                     full review pipeline (default)" >&2
     echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
-    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]..." >&2
+    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
     echo "                                                     generate review-tasks/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2

@@ -18,6 +18,8 @@ When active, Claude will:
 
 This skill defines a structured analysis format (see Example: Function Micro-Analysis below) and runs **before** the vulnerability-hunting phase.
 
+When invoked from a v2 build, the per-module deep-context output is written to `.context/modules/<name>.md` (one file per module, kebab-case names). The consolidated provenance dump goes to `.context/build/full-context.md`. Do not write per-module docs at the top level of `.context/`.
+
 ---
 
 ## 2. When to Use This Skill

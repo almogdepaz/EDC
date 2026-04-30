@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
+import { execFileSync } from "child_process";
 
 // --- I/O helpers ---
 
@@ -75,13 +77,13 @@ function extractFilePathsFromBash(command) {
   return paths;
 }
 
-// --- module resolution ---
+// --- manifest + routing ---
 
-function loadMeta(projectRoot) {
-  const metaPath = join(projectRoot, ".context", ".meta.json");
-  if (!existsSync(metaPath)) return null;
+function loadManifest(projectRoot) {
+  const manifestPath = join(projectRoot, ".context", "manifest.json");
+  if (!existsSync(manifestPath)) return null;
   try {
-    return JSON.parse(readFileSync(metaPath, "utf-8"));
+    return JSON.parse(readFileSync(manifestPath, "utf-8"));
   } catch {
     return null;
   }
@@ -89,28 +91,38 @@ function loadMeta(projectRoot) {
 
 function normalizePath(p, projectRoot) {
   let normalized = p.replace(/^\.\//, "");
-  // strip absolute project root prefix
   if (projectRoot && normalized.startsWith(projectRoot)) {
     normalized = normalized.slice(projectRoot.length).replace(/^\//, "");
   }
   return normalized;
 }
 
-function resolveModule(filePath, meta, projectRoot) {
-  const normalized = normalizePath(filePath, projectRoot);
-  for (const [moduleName, moduleData] of Object.entries(meta.modules || {})) {
-    if (!moduleData.files) continue;
-    const match = moduleData.files.some((f) => {
-      const nf = normalizePath(f, projectRoot);
-      return (
-        nf === normalized ||
-        normalized.endsWith(nf) ||
-        nf.endsWith(normalized)
-      );
+function routeScriptPath() {
+  const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  return join(pluginDir, "scripts", "edc-route.sh");
+}
+
+function routeFile(manifestPath, filePath) {
+  const route = routeScriptPath();
+  if (!existsSync(route)) return null;
+  try {
+    const out = execFileSync(route, [manifestPath, filePath], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
     });
-    if (match) return moduleName;
+    const name = out.trim();
+    return name || null;
+  } catch {
+    // exit 1 (no match) or 2 (ambiguous) — both surface as no module
+    return null;
   }
-  return null;
+}
+
+function moduleDocPath(manifest, moduleName) {
+  const mod = (manifest.modules || []).find((m) => m.name === moduleName);
+  if (!mod) return null;
+  return mod.doc || `.context/modules/${moduleName}.md`;
 }
 
 // --- dedup ---
@@ -162,33 +174,35 @@ function main() {
 
   const platform = detectPlatform(input.raw);
   const projectRoot = input.cwd;
-  const meta = loadMeta(projectRoot);
-  if (!meta) return "{}";
+
+  const manifest = loadManifest(projectRoot);
+  if (!manifest) return "{}";
+
+  // advisory mode: hook is a no-op
+  if (manifest.policy?.defaultMode === "advisory") return "{}";
 
   const filePaths = extractFilePaths(input.toolName, input.toolInput);
   if (filePaths.length === 0) return "{}";
 
-  // resolve modules, deduplicate within this invocation
+  const manifestPath = join(projectRoot, ".context", "manifest.json");
+
   const seen = new Set();
   for (const fp of filePaths) {
-    const moduleName = resolveModule(fp, meta, projectRoot);
+    const normalized = normalizePath(fp, projectRoot);
+    const moduleName = routeFile(manifestPath, normalized);
     if (!moduleName || seen.has(moduleName)) continue;
     seen.add(moduleName);
 
-    // session-level dedup
     if (isDuplicate(input.sessionId, moduleName)) continue;
 
-    // found a new module to inject — read its context file
-    const contextFile =
-      meta.modules[moduleName]?.contextFile ||
-      `.context/${moduleName}.md`;
-    const contextPath = join(projectRoot, contextFile);
-
-    if (!existsSync(contextPath)) continue;
+    const docRel = moduleDocPath(manifest, moduleName);
+    if (!docRel) continue;
+    const docPath = join(projectRoot, docRel);
+    if (!existsSync(docPath)) continue;
 
     try {
-      const content = readFileSync(contextPath, "utf-8");
-      const header = `[edc] Auto-injected context for module "${moduleName}" (editing ${normalizePath(fp, projectRoot)})`;
+      const content = readFileSync(docPath, "utf-8");
+      const header = `[edc] Auto-injected context for module "${moduleName}" (editing ${normalized})`;
       return formatOutput(
         platform,
         input.hookEventName,

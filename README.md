@@ -2,7 +2,7 @@
 
 Deep codebase understanding and context-aware code review for AI coding agents. Inspired by [Trail of Bits](https://github.com/trailofbits/skills)' audit methodology, generalized for any language and any codebase.
 
-Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
+Works with **Claude Code**, **Cursor**, and **Codex**.
 
 ## What it does
 
@@ -85,12 +85,6 @@ export EDC_CODEX_HOME="$HOME/.codex"
 
 When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim (and does not
 clean it up).
-
-### Gemini CLI
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
-```
 
 ## Terminal CLI
 
@@ -202,5 +196,4 @@ edc/
   agents/                            # agent-specific wrappers
     cursor/                          # Cursor commands + install script
     codex/                           # Codex wrapper skills + AGENTS.md + install script
-    gemini/                          # Gemini GEMINI.md + install script
 ```

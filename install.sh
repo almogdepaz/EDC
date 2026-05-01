@@ -22,7 +22,7 @@ Usage:
   curl -fsSL $BASE/install.sh | bash -s <agent>
   bash install.sh --agent claude --context-mode advisory|inject
 
-Agents: claude, cursor, codex, gemini
+Agents: claude, cursor, codex
 EOF
 }
 
@@ -130,6 +130,33 @@ set_manifest_mode() {
   mv "$tmp" "$manifest"
 }
 
+install_terminal_cli() {
+  local scripts_target="$HOME/.edc/scripts"
+  mkdir -p "$scripts_target"
+  copy_or_download "scripts/edc"                         "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc-review.sh"   "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-doctor.sh"   "$scripts_target/edc-doctor.sh"
+  copy_or_download "plugins/edc/scripts/edc-route.sh"    "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-manifest.sh" "$scripts_target/edc-manifest.sh"
+  chmod +x \
+    "$scripts_target/edc" \
+    "$scripts_target/edc-review.sh" \
+    "$scripts_target/edc-doctor.sh" \
+    "$scripts_target/edc-route.sh" \
+    "$scripts_target/edc-manifest.sh"
+}
+
+print_path_hint() {
+  case ":$PATH:" in
+    *":$HOME/.edc/scripts:"*) ;;
+    *)
+      echo
+      echo "NOTE: $HOME/.edc/scripts is not on PATH. Add this to your shell rc to call 'edc' from anywhere:"
+      echo "  export PATH=\"\$HOME/.edc/scripts:\$PATH\""
+      ;;
+  esac
+}
+
 install_claude_runtime() {
   local mode="$1"
   local target="$HOME/.claude/plugins/edc"
@@ -191,7 +218,10 @@ EOF
   fi
 
   set_manifest_mode "$mode"
+  install_terminal_cli
   echo "Installed EDC Claude runtime in $target ($mode mode)."
+  echo "Terminal CLI installed at $HOME/.edc/scripts/edc."
+  print_path_hint
 }
 
 case "$AGENT" in
@@ -252,19 +282,7 @@ case "$AGENT" in
     echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
     ;;
 
-  gemini)
-    if [ -n "$CONTEXT_MODE" ]; then
-      not_implemented "gemini/$CONTEXT_MODE"
-    fi
-    TARGET="$HOME/.gemini/skills"
-    echo "Installing EDC skills globally for Gemini..."
-    for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/$(skill_rel "$f")"
-    done
-    echo "Done. Skills at $TARGET/"
-    ;;
-
   *)
-    die "unknown agent: $AGENT (supported: claude, cursor, codex, gemini)"
+    die "unknown agent: $AGENT (supported: claude, cursor, codex)"
     ;;
 esac

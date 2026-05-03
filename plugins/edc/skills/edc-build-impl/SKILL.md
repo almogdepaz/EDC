@@ -19,12 +19,26 @@ Apply ignore rules to repo-relative file paths before selecting files or modules
 
 ## Routing
 
-Check if `.context/manifest.json` exists AND `--force` was NOT passed:
+Routing is decided by the filesystem, not by judgment. Run this exact check first:
 
-- **If `.context/manifest.json` exists** → invoke the `edc-update-impl` skill (incremental update based on branch changes).
-- **If `.context/manifest.json` does NOT exist** (or `--force`) → run a full v2 build (see [Full Build](#full-build)).
+```bash
+bash plugins/edc/scripts/edc-clean-slate.sh --check
+rc=$?
+```
 
-The v2 layout has no v1 routing-metadata file. `manifest.json` is the only routing and policy contract; any legacy v1 routing-metadata file must be removed during cleanup (see step 7 of [Full Build](#full-build)).
+- `rc == 11` (healthy v2 layout) AND `--force` NOT passed → invoke the `edc-update-impl` skill. Do not fall through to a full build.
+- `rc == 11` AND `--force` passed → run `bash plugins/edc/scripts/edc-clean-slate.sh --force` then go to [Full Build](#full-build).
+- `rc == 10` (v1 leftovers or partial v2 detected) → run `bash plugins/edc/scripts/edc-clean-slate.sh` (auto-wipe) then go to [Full Build](#full-build). DO NOT route to update — `.meta.json`, top-level `.context/context.md`, top-level per-module `.md` files, and a missing/invalid `manifest.json` are ALL v1/partial signals, never an "existing context" signal.
+- otherwise (no `.context/`) → go to [Full Build](#full-build).
+
+`manifest.json` is the only routing and policy contract in the v2 layout. Never key routing decisions on `.meta.json` or any other v1 artifact.
+
+### Forbidden patterns (do not do these)
+
+- DO NOT invoke `edc:edc-split` / `Skill(edc:edc-split)` / any "split" step. There is no split in v2 — module docs are written directly to `.context/modules/<name>.md` by per-module subagents in step 2 of [Full Build](#full-build).
+- DO NOT invoke `Skill(edc:edc-context)` at the orchestrator level. The `edc-context` skill is invoked ONLY inside per-module subagents spawned in step 2. A top-level invocation will produce v1-shaped output and a single-context whole-repo pass that violates the v2 contract.
+- DO NOT invoke `Skill(edc:edc-audit)` (the slash-command-style skill). The build calls `edc-audit-impl` directly in step 5.
+- DO NOT write `.context/.meta.json`, `.context/context.md`, `.context/full-context.md` at top level, or any top-level per-module markdown. Those are v1 paths. v2 paths are listed in [Full Build](#full-build).
 
 **CRITICAL — Clean Slate Rule:** All analysis (`edc-context`, `edc-review-impl`, `edc-audit-impl`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
@@ -50,23 +64,29 @@ AGENTS.md
 
 Build steps:
 
-1. **Deep analysis.** Invoke the `edc-context` skill (NOT `audit-context-building` — that is a different plugin) to perform the full deep-context workflow. The deep run authors per-module deep docs directly to `.context/modules/<name>.md` and a consolidated provenance dump to `.context/build/full-context.md`. Module names are kebab-case and stable across runs.
+1. **Module discovery (orientation pass).** Identify module boundaries before any deep analysis. If `plugins/edc/scripts/edc-discover-modules.sh` is present, invoke it and treat its JSON output as authoritative; otherwise walk `git ls-files` (with ignore rules applied) and group by language convention: python packages (top-level `__init__.py`), rust crates (`Cargo.toml`), typescript workspace packages (`package.json` with `name`), or top-level directories as fallback. Emit a module list with file count, approximate LOC, and kebab-case name per entry. Module names are stable across runs. The orchestrator MUST NOT read source-code bodies during this pass — only paths and lightweight metadata.
 
-2. **Repo overview.** Author `.context/index.md` as a short startup orientation document. It must contain at least one `##` heading. Recommended sections: repo purpose, actor map, key flows, global invariants, trust boundaries, blast-radius summary, and a module table linking each module to `.context/modules/<name>.md`. Optimize for low token cost — this is the file loaded at session start.
+2. **Per-module deep analysis (mandatory fanout).** Pipe the discovered module list into `plugins/edc/scripts/edc-build-plan.sh`. For each `module-context` task in the output, spawn ONE subagent using the embedded `prompt` verbatim. Run subagents in parallel batches. Collect the ≤500-token summaries returned. Do not interpret, edit, or skip tasks — execute the plan as written.
 
-3. **Reports.** Invoke the `edc-audit-impl` skill to emit cross-cutting analytical output:
+3. **Cross-module flow synthesis.** Spawn a final subagent that consumes the module summaries from step 2 plus the signature index, traces top entrypoints across module boundaries, and writes cross-module flow notes that will be incorporated into `.context/index.md` in the next step. This subagent does NOT read full source bodies; it relies on the module docs and signature index.
+
+4. **Repo overview.** Author `.context/index.md` as a short startup orientation document by stitching together the module summaries from step 2 and the cross-module flow notes from step 3. It must contain at least one `##` heading. Recommended sections: repo purpose, actor map, key flows, global invariants, trust boundaries, blast-radius summary, and a module table linking each module to `.context/modules/<name>.md`. Optimize for low token cost — this is the file loaded at session start. The orchestrator MUST NOT re-read source bodies to produce this file.
+
+5. **Reports.** Invoke the `edc-audit-impl` skill to emit cross-cutting analytical output:
    - `.context/reports/issues.md` — known problems and risks
    - `.context/reports/complexity.md` — overengineering / bloat / duplication signals
 
    Reports live under `.context/reports/`, never at the top level of `.context/`.
 
-4. **Build provenance.** Write `.context/build/build.json` with the build metadata (build timestamp, EDC version, list of modules emitted, ignore-rule provenance, source-commit placeholder). `.context/build/full-context.md` is the consolidated deep-context dump from step 1. Adapters MUST NOT auto-load anything under `.context/build/`.
+6. **Build provenance.** Write `.context/build/build.json` with the build metadata (build timestamp, EDC version, list of modules emitted, ignore-rule provenance, source-commit placeholder). Concatenate the per-module deep docs from step 2 into `.context/build/full-context.md` as the consolidated provenance dump. Adapters MUST NOT auto-load anything under `.context/build/`.
 
-5. **Manifest.** Author a partial `manifest.json` (LLM-owned fields only) and pipe it through `plugins/edc/scripts/edc-manifest.sh` to produce the final `.context/manifest.json`. See [Manifest Authoring](#manifest-authoring).
+7. **Manifest.** Author a partial `manifest.json` (LLM-owned fields only) and pipe it through `plugins/edc/scripts/edc-manifest.sh` to produce the final `.context/manifest.json`. See [Manifest Authoring](#manifest-authoring).
 
-6. **Universal entrypoint.** Write `AGENTS.md` at the repo root (see [AGENTS.md](#agentsmd)).
+8. **Universal entrypoint.** Write `AGENTS.md` at the repo root (see [AGENTS.md](#agentsmd)).
 
-7. **Cleanup.** Delete any v1 leftovers in `.context/` that the v2 layout no longer uses: the v1 routing-metadata file, the top-level `context` overview file, and any top-level `issues`/`complexity`/`full-context`/per-module markdown files that v1 placed directly under `.context/` instead of under `modules/`, `reports/`, or `build/`. The build is not done while v1 artifacts coexist with v2 outputs.
+9. **Final validation.** Run the validator (see [Output Validation](#output-validation)). Any failure is a build failure — surface it; do not silently continue.
+
+   Cleanup of v1 leftovers happens BEFORE the build via `edc-clean-slate.sh` (see [Routing](#routing)), not at the end. By the time you reach this step, no v1 artifacts should exist; if any do, the routing step was bypassed and the build is invalid.
 
 The build is successful only when every required output above exists and the layout validates. `edc doctor` is the canonical end-to-end validator.
 
@@ -94,7 +114,7 @@ Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*`. The determin
 }
 ```
 
-- `defaultMode`: default to `"inject"`. `"advisory"` is the only other allowed value during build authoring. Do not emit `"strict"` here — strict is a runtime install choice, not a build default.
+- `defaultMode`: **if `.context/manifest.json` already exists, preserve its `policy.defaultMode` value** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not silently revert that choice. If no prior manifest exists, default to `"inject"`. `"advisory"` is the only other allowed value during build authoring. Do not emit `"strict"` here — strict is a runtime install choice, not a build default.
 - `unmatchedPathPolicy`: must be `"warn-allow"`.
 
 Do not write any other `policy.*` fields during build (no `guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`, etc.). Those are runtime install concerns.
@@ -124,7 +144,9 @@ Keep `AGENTS.md` short. It is not a substitute for `.context/index.md` — it ju
 
 ## Output Validation
 
-Before declaring the build done, verify:
+Before declaring the build done, run these exact checks. If `plugins/edc/scripts/edc-doctor.sh` is present, prefer it (`bash plugins/edc/scripts/edc-doctor.sh`); it covers the layout requirements below plus orphan-path routing.
+
+Manual checklist (must all pass):
 
 - `AGENTS.md` exists at repo root
 - `.context/index.md` exists and contains at least one `##` heading
@@ -132,6 +154,6 @@ Before declaring the build done, verify:
 - every entry in `manifest.modules[].doc` resolves to a file that exists
 - `.context/reports/issues.md` and `.context/reports/complexity.md` exist
 - `.context/build/full-context.md` and `.context/build/build.json` exist
-- no legacy v1 routing-metadata file or top-level v1 markdown files remain under `.context/`
+- `bash plugins/edc/scripts/edc-clean-slate.sh --check` exits `11` (no v1 leftovers, no partial-v2 state)
 
-If any check fails, the build has failed. Surface the failure; do not silently continue.
+If any check fails, the build has failed. Surface the specific failure (which file/check); do not declare success and do not leave a half-built `.context/` on disk — re-run `edc-clean-slate.sh --force` and retry, or surface the failure to the caller. A "successful" build that doesn't produce `manifest.json` is a CRITICAL bug and must be reported.

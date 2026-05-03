@@ -19,7 +19,20 @@ Apply ignore rules to repo-relative file paths before mapping changed files to m
 
 ## Prerequisites
 
-`.context/manifest.json` and `.context/index.md` must exist. If not, tell the user to invoke the `edc-build-impl` skill first. `manifest.json` is the only routing/policy contract in the v2 layout.
+Run this exact precondition check first:
+
+```bash
+bash plugins/edc/scripts/edc-clean-slate.sh --check
+rc=$?
+```
+
+- `rc == 11` → preconditions met, proceed.
+- `rc == 10` → v1 leftovers or partial v2 detected. ABORT this skill and route back to `edc-build-impl` for a full build (the build skill's [Routing](../edc-build-impl/SKILL.md#routing) section will handle the wipe). Do not attempt an incremental update on top of a broken layout — it will silently no-op and leave the user with an unusable context.
+- `rc == 0` with no `.context/` → no context exists. ABORT and tell the caller to invoke `edc-build-impl` first.
+
+`.context/manifest.json` and `.context/index.md` must both exist. `manifest.json` is the only routing/policy contract in the v2 layout. If either is missing after a `rc == 11` check, that is an invariant violation — fail loudly.
+
+If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `.context/` or unrelated tracked paths), the update is a no-op. Skip to Step 11 (Validate) and exit 0 — but only after confirming the layout is still healthy. Never declare success when `manifest.json` is missing or invalid.
 
 ## Process
 
@@ -49,9 +62,26 @@ Collect the set of affected modules. Also include any modules that `.context/mod
 
 ### Step 3 — Re-analyze affected modules
 
-For each affected module, spawn a **clean subagent** to invoke the `edc-context` skill (NOT `audit-context-building` — that is a different plugin) on ONLY the files in that module. The subagent MUST be fresh with NO access to the current conversation context — this prevents bias from user discussion influencing findings. Read the changed files and their immediate dependencies. Produce updated analysis for that module.
+`edc-build-plan.sh` expects the FULL module list on stdin and a comma-separated `--changed` filter as a single argument. Build the input from the existing manifest, then pipe it in:
 
-**Clean Slate Rule:** Analysis subagents must not inherit the parent conversation. See `edc-build-impl` for rationale.
+```bash
+# Comma-join the affected module names (no spaces)
+CHANGED="$(IFS=,; echo "${affected[*]}")"
+
+# Project the manifest's modules[] into the script's expected {name, paths} shape,
+# then pipe and filter
+jq '{
+  modules: [
+    .modules[] | {
+      name,
+      paths: ((.match.exactFiles // []) + (.match.prefixes // []) + (.match.globs // []))
+    }
+  ]
+}' .context/manifest.json \
+| bash plugins/edc/scripts/edc-build-plan.sh --changed "$CHANGED"
+```
+
+Execute the resulting `module-context` task list the same way as the build flow (see `edc-build-impl` step 2): spawn one clean subagent per task using the embedded `prompt` verbatim, run in parallel batches, collect summaries. Do not interpret, edit, or skip tasks.
 
 ### Step 4 — Update `.context/modules/<name>.md` files
 
@@ -109,7 +139,7 @@ Issues removed: <count>
 
 ### Step 10 — Refresh `.context/manifest.json`
 
-Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
+Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). **Preserve `policy.defaultMode` from the existing `.context/manifest.json`** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not revert that choice. Likewise preserve any other install-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
 
 Pipe the partial manifest through the deterministic generator to refresh `coverage.*` and `sourceCommit`:
 

@@ -136,6 +136,7 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+| `/edc:edc-doctor` | Diagnoses `.context/` layout, flags v1 leftovers / partial v2 state |
 
 ### Codex skill equivalents
 
@@ -180,15 +181,26 @@ edc/
   install.sh                         # one-line installer for all agents
   plugins/edc/                       # Claude Code plugin (single source of truth)
     .claude-plugin/plugin.json
-    commands/                        # claude slash commands (4 user-facing + 1 internal)
+    commands/                        # claude slash commands
       edc-build.md
       edc-update.md
       edc-audit.md
-      edc-run-review.md             # user-facing: runs orchestrator
+      edc-run-review.md              # user-facing: runs orchestrator
       edc-review.md                  # internal: invoked by orchestrator subprocess
+      edc-doctor.md                  # diagnose `.context/` layout
     skills/                          # canonical skill content
-      edc-context/                   # generalized from TOB audit-context-building
-      edc-review/                    # generalized from TOB differential-review
+      edc-context/                   # per-module deep analysis (TOB-derived)
+      edc-build-impl/                # full-build orchestrator (v2 module fanout)
+      edc-update-impl/               # incremental update from branch diff
+      edc-audit-impl/                # bloat / duplication / overengineering audit
+      edc-review-impl/               # differential review (TOB-derived)
+    scripts/                         # shell helpers invoked by skills
+      edc-build-plan.sh              # deterministic per-module task planner (jq)
+      edc-clean-slate.sh             # detects v1 leftovers, wipes for clean v2 build
+      edc-doctor.sh                  # diagnoses `.context/` layout health
+      edc-manifest.sh                # reads/writes `.context/manifest.json`
+      edc-route.sh                   # resolves a path to its module via manifest
+      edc-review.sh                  # shared review orchestrator (Codex/Cursor entrypoint)
     hooks/                           # automatic context injection
       hooks.json
       session-start.mjs              # surfaces context on session start

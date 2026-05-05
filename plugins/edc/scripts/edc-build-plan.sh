@@ -102,6 +102,7 @@ jq -r \
           "Invoke the `edc-context` skill on these files. " +
           "You may read sibling-module source if it materially improves this module'\''s context. " +
           "Write the deep doc directly to `.context/modules/" + (.name | kebab) + ".md`. " +
+          "In the module doc, include a `## Per-Function Risk Inventory` section. For each non-trivial function, COPY VERBATIM the edc-context skill's section-5.1 outputs: purpose, inputs/assumptions, error-path memory safety (UAF/double-free/dangling/cleanup ordering), integer arithmetic & size calc, flag/boolean variable tracing, recursive call analysis, state machine analysis. Do NOT summarize these into prose — the downstream reviewer needs the raw per-function checklist outputs. " +
           "Return a ≤500-token summary for the orchestrator."
         )
       })

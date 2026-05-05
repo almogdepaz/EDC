@@ -131,6 +131,58 @@ For each variable assigned from these functions: (1) is the variable declared `i
 
 ---
 
+## Phase 0.6: Variant Analysis Pass (for C/C++ files)
+
+**MANDATORY when Phase 0.5 finds any vulnerability.** After discovering ANY security issue, immediately search the entire file for variants of the same pattern class. This prevents missing closely-related bugs that share the root cause.
+
+For each finding from Phase 0.5, enumerate systematically:
+
+**If finding is buffer overflow (memcpy/strcpy variant):**
+```bash
+grep -n "memcpy\|memmove\|memset\|strcpy\|strcat\|sprintf\|snprintf" <file>
+```
+For every hit: is the destination fixed-size? Is the length bounded on ALL paths? List every call site. For each: "SAFE (length guarded)" or "UNSAFE (peer-controlled length)" — no rationalizations.
+
+**If finding is recursive stack overflow:**
+```bash
+grep -n "recurse\|<function_name>" <file>
+```
+For every recursive call site WITHIN the function: does THIS specific site have a depth check immediately before the call, or rely on a single entry-point guard? List each call site separately. "PER-SITE GUARD (safe)" or "ENTRY-ONLY GUARD (potential bypass)".
+
+**If finding is use-after-free or double-free:**
+```bash
+grep -n "free\|curl_free\|Curl_safefree" <file>
+```
+For every `free()` call: check next 30 lines for dereference. Also scan for error-handler paths that free the same pointer twice. List each free site: "SAFE (p=NULL after)" or "UNSAFE (dangling deref possible)" or "UNSAFE (double-free path)".
+
+**If finding is integer overflow into malloc:**
+```bash
+grep -n "malloc\|realloc\|calloc\|alloc" <file>
+```
+For every allocation: is the size computed from peer data? Is there an `if (a > SIZE_MAX / b)` or similar guard BEFORE the call? List each: "SAFE (overflow pre-checked)" or "UNSAFE (peer-controlled size, no guard)".
+
+**If finding is signed-to-unsigned conversion:**
+```bash
+grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
+```
+For every assignment from these functions: where is that variable next used as a size/index? Is there an `if (n <= 0)` guard immediately before? List: "SAFE (negativity checked before use)" or "UNSAFE (negative-to-huge promotion possible)".
+
+**Append a "VARIANT SWEEP" block to the output file:**
+```
+## Variant Sweep: [Pattern Class]
+
+**Searched for:** [What pattern was searched]
+**Total occurrences:** [count]
+**Safe:** [count] — [reason]
+**Unsafe:** [count or "None"]
+
+[Per-line verdict table]
+```
+
+**Proceed to Phase 1 only after the variant sweep is complete and appended to the output file.**
+
+---
+
 ## Phase 1: Changed Code Analysis
 
 For each changed file:

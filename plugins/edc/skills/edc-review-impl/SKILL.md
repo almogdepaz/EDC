@@ -144,6 +144,7 @@ Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Pha
 Before delivering:
 
 - [ ] **Output file created at start** (before any analysis — `issues.md` or `.context/reports/issues.md`)
+- [ ] **Complex C/C++ functions analyzed in dedicated isolated pass** (>100 LOC or with recursion/state-machine/parser structure: perform focused analysis on that function alone BEFORE continuing with the rest of the file, preventing context exhaustion on complex targets)
 - [ ] All changed files analyzed
 - [ ] Git blame on removed security code
 - [ ] Blast radius calculated for HIGH risk

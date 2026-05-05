@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT="scripts/edc"
 SCRIPT_ABS="$(pwd)/scripts/edc"
+BASH_BIN="$(command -v bash)"
 ROOT_INSTALL="install.sh"
 CURSOR_INSTALL="agents/cursor/install.sh"
 CODEX_INSTALL="agents/codex/install.sh"
@@ -29,8 +30,8 @@ mkdir -p "$FAKE_BIN" "$FAKE_HOME" "$PROJECT" "$CAPTURE"
 make_fake_agent() {
   local name="$1"
   cat > "$FAKE_BIN/$name" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 name="$(basename "$0")"
 out="${EDC_TEST_CAPTURE_DIR:?}/$name"
 mkdir -p "$out"
@@ -45,12 +46,27 @@ make_fake_agent claude
 make_fake_agent cursor
 make_fake_agent codex
 
+cat > "$FAKE_BIN/bash" <<'EOF'
+#!/bin/sh
+set -eu
+out="${EDC_TEST_CAPTURE_DIR:?}/review"
+mkdir -p "$out"
+printf '%s\n' "${EDC_AGENT_CLI:-}" > "$out/agent"
+printf '%s\n' "$1" > "$out/script"
+shift
+printf '%s\n' "$@" > "$out/args"
+EOF
+chmod +x "$FAKE_BIN/bash"
+
 run_cli() {
   PATH="$FAKE_BIN:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
-  bash "$SCRIPT_ABS" "$@"
+  "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
+
+eval "$(awk '/^find_review_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_ABS")" && pwd)"
 
 # ── 7a: --agent mandatory for build ───────────────────────────────────────────
 set +e
@@ -191,12 +207,20 @@ mkdir -p "$PROJECT/.edc/scripts"
 cat > "$PROJECT/.edc/scripts/edc-review.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-out="${EDC_TEST_CAPTURE_DIR:?}/review"
-mkdir -p "$out"
-printf '%s\n' "$EDC_AGENT_CLI" > "$out/agent"
-printf '%s\n' "$@" > "$out/args"
+echo "stale project copy"
 EOF
 chmod +x "$PROJECT/.edc/scripts/edc-review.sh"
+
+# The wrapper should prefer the checked-in repo/global script over a stale
+# project-local .edc/scripts copy when invoked from the repo checkout.
+selected_review_script="$(cd "$PROJECT" && find_review_script)"
+if [ "$selected_review_script" = "$SCRIPT_DIR/edc-review.sh" ]; then
+  echo "PASS: wrapper prefers repo edc-review.sh over stale project copy"
+else
+  echo "FAIL: wrapper selected stale project .edc/scripts/edc-review.sh"
+  echo "$selected_review_script"
+  exit 1
+fi
 
 rm -rf "$CAPTURE/review"
 (cd "$PROJECT" && run_cli review --agent codex HEAD --base main --ignore generated/**)
@@ -205,6 +229,14 @@ if [ "$(cat "$CAPTURE/review/agent")" = "codex" ]; then
   echo "PASS: review exports EDC_AGENT_CLI to orchestrator"
 else
   echo "FAIL: review did not export EDC_AGENT_CLI"
+  exit 1
+fi
+
+if [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ]; then
+  echo "PASS: review invokes repo edc-review.sh"
+else
+  echo "FAIL: review invoked the wrong edc-review.sh"
+  cat "$CAPTURE/review/script"
   exit 1
 fi
 

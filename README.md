@@ -2,7 +2,7 @@
 
 Deep codebase understanding and context-aware code review for AI coding agents. Inspired by [Trail of Bits](https://github.com/trailofbits/skills)' audit methodology, generalized for any language and any codebase.
 
-Works with **Claude Code**, **Cursor**, **Codex**, and **Gemini CLI**.
+Works with **Claude Code**, **Cursor**, and **Codex**.
 
 ## What it does
 
@@ -16,27 +16,27 @@ Run these entrypoints in order on any codebase:
 - Cursor: installed `edc-run-*` commands
 
 1. `/edc:edc-build` — analyzes every function line-by-line using First Principles, 5 Whys, and 5 Hows. Produces:
-   - `.context/context.md` — brief architecture map (actors, flows, invariants, trust boundaries)
-   - `.context/{module}.md` — deep per-module analysis
-   - `.context/issues.md` — actionable list of all problems found
-   - `.context/complexity.md` — bloat, duplication, overengineering audit
-   - `.context/full-context.md` — complete monolithic analysis (input to edc-split)
+   - `AGENTS.md` — short runtime orientation
+   - `.context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
+   - `.context/manifest.json` — routing and policy contract
+   - `.context/modules/<name>.md` — deep per-module analysis
+   - `.context/reports/issues.md` — actionable list of all problems found
+   - `.context/reports/complexity.md` — bloat, duplication, overengineering audit
+   - `.context/build/full-context.md` and `.context/build/build.json`
 
-2. `/edc:edc-split` — splits `full-context.md` into per-module files (use after `edc-build` if it produced a monolithic file)
+2. `/edc:edc-update` — incremental update from branch diff, so you don't rebuild from scratch on every PR
 
-3. `/edc:edc-update` — incremental update from branch diff, so you don't rebuild from scratch on every PR
+3. `/edc:edc-audit` — identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
 
-4. `/edc:edc-audit` — identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
-
-5. `/edc:edc-run-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
+4. `/edc:edc-run-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
 
 ### Hooks (Claude Code only)
 
 The plugin installs two hooks that run automatically, designed to keep context overhead minimal:
 
-- **SessionStart** — loads `.context/context.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
+- **SessionStart** — loads `.context/index.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
 
-- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/.meta.json`, then injects only that module's `.context/{module}.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
+- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/manifest.json`, then injects only that module's `.context/modules/<name>.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
 
 The result: the agent always has the architecture overview, gets deep module context exactly when it needs it, and never loads the full project context.
 
@@ -64,7 +64,6 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 This installs the user-facing Codex skills:
 - `$edc-build`
 - `$edc-update`
-- `$edc-split`
 - `$edc-audit`
 - `$edc-run-review`
 
@@ -86,12 +85,6 @@ export EDC_CODEX_HOME="$HOME/.codex"
 
 When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim (and does not
 clean it up).
-
-### Gemini CLI
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s gemini
-```
 
 ## Terminal CLI
 
@@ -140,7 +133,6 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | Command | Description |
 |---------|-------------|
 | `/edc:edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
-| `/edc:edc-split` | Split `full-context.md` into per-module `.context/*.md` files |
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
@@ -150,7 +142,6 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | Skill | Description |
 |-------|-------------|
 | `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
-| `$edc-split` | Split `full-context.md` into per-module `.context/*.md` files |
 | `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `$edc-audit` | Bloat, duplication, and overengineering detection |
 | `$edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
@@ -189,9 +180,8 @@ edc/
   install.sh                         # one-line installer for all agents
   plugins/edc/                       # Claude Code plugin (single source of truth)
     .claude-plugin/plugin.json
-    commands/                        # claude slash commands (5 user-facing + 1 internal)
+    commands/                        # claude slash commands (4 user-facing + 1 internal)
       edc-build.md
-      edc-split.md
       edc-update.md
       edc-audit.md
       edc-run-review.md             # user-facing: runs orchestrator
@@ -206,5 +196,4 @@ edc/
   agents/                            # agent-specific wrappers
     cursor/                          # Cursor commands + install script
     codex/                           # Codex wrapper skills + AGENTS.md + install script
-    gemini/                          # Gemini GEMINI.md + install script
 ```

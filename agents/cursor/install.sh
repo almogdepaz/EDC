@@ -14,6 +14,20 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SKILL_SRC="$REPO_ROOT/plugins/edc/skills"
 
+if [ "${1:-}" = "--context-mode" ]; then
+  mode="${2:-}"
+  case "$mode" in
+    advisory|inject)
+      echo "edc: cursor/$mode not yet implemented" >&2
+      exit 2
+      ;;
+    *)
+      echo "ERROR: --context-mode must be advisory or inject" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 if [ "$1" = "--project" ]; then
   PROJECT="${2:-.}"
   TARGET="$PROJECT/.cursor"
@@ -30,7 +44,6 @@ mkdir -p "$TARGET/skills/edc-context/resources"
 mkdir -p "$TARGET/skills/edc-review-impl"
 mkdir -p "$TARGET/skills/edc-build-impl"
 mkdir -p "$TARGET/skills/edc-update-impl"
-mkdir -p "$TARGET/skills/edc-split-impl"
 mkdir -p "$TARGET/skills/edc-audit-impl"
 mkdir -p "$TARGET/commands"
 mkdir -p "$TARGET/rules"
@@ -47,17 +60,17 @@ cp "$SKILL_SRC/edc-review-impl/reporting.md" "$TARGET/skills/edc-review-impl/"
 cp "$SKILL_SRC/edc-review-impl/patterns.md" "$TARGET/skills/edc-review-impl/"
 cp "$SKILL_SRC/edc-build-impl/SKILL.md" "$TARGET/skills/edc-build-impl/"
 cp "$SKILL_SRC/edc-update-impl/SKILL.md" "$TARGET/skills/edc-update-impl/"
-cp "$SKILL_SRC/edc-split-impl/SKILL.md" "$TARGET/skills/edc-split-impl/"
 cp "$SKILL_SRC/edc-audit-impl/SKILL.md" "$TARGET/skills/edc-audit-impl/"
 cp "$SCRIPT_DIR/.cursor/commands/edc-run-build.md" "$TARGET/commands/"
 cp "$SCRIPT_DIR/.cursor/commands/edc-run-review.md" "$TARGET/commands/"
 cp "$SCRIPT_DIR/.cursor/commands/edc-run-update.md" "$TARGET/commands/"
-cp "$SCRIPT_DIR/.cursor/commands/edc-run-split.md" "$TARGET/commands/"
 cp "$SCRIPT_DIR/.cursor/commands/edc-run-audit.md" "$TARGET/commands/"
 cp "$SCRIPT_DIR/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/"
 cp "$REPO_ROOT/scripts/edc" "$SCRIPTS_TARGET/"
 cp "$REPO_ROOT/plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+cp "$REPO_ROOT/plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
 chmod +x "$SCRIPTS_TARGET/edc"
 chmod +x "$SCRIPTS_TARGET/edc-review.sh"
+chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
 
 echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, rules at $TARGET/rules/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"

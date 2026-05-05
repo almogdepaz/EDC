@@ -75,22 +75,25 @@ TMPDIR_T4=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T4"' EXIT
 
 cd "$TMPDIR_T4"
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
 git init -q
 git config user.email "test@test.com"
 git config user.name "Test"
+git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
 
 mkdir -p .context
-# Write malformed meta.json (no lastCommit field)
-printf '{"modules":[]}' > .context/.meta.json
+# Write malformed manifest.json (no sourceCommit field)
+printf '{"schemaVersion":2,"modules":[]}' > .context/manifest.json
 
 ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0
 bash "$ORIG_DIR/$SCRIPT" --check-context 2>/tmp/t4-pipe-err.txt || result=$?
-if [ "$result" -ne 0 ] && grep -qi 'lastcommit\|lastCommit\|context' /tmp/t4-pipe-err.txt; then
-  echo "PASS: malformed meta.json causes clear error (not silent empty-string comparison)"
+if [ "$result" -ne 0 ] && grep -qi 'sourcecommit\|sourceCommit\|context' /tmp/t4-pipe-err.txt; then
+  echo "PASS: malformed manifest.json causes clear error (not silent empty-string comparison)"
 else
-  echo "FAIL: expected error on malformed meta.json, got exit $result"
+  echo "FAIL: expected error on malformed manifest.json, got exit $result"
   cat /tmp/t4-pipe-err.txt
   exit 1
 fi

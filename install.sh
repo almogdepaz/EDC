@@ -1,29 +1,82 @@
 #!/bin/bash
 # EDC — Every Day Carry Skills installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s <agent>
-# Agents: cursor, codex, gemini (claude uses marketplace)
+# Legacy usage:
+#   curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s cursor
+# Local/runtime-mode usage:
+#   bash install.sh --agent claude --context-mode advisory|inject
 
-set -e
+set -euo pipefail
 
 REPO="almogdepaz/EDC"
 BRANCH="main"
 BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
-AGENT="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LOCAL_PLUGIN_ROOT="$SCRIPT_DIR/plugins/edc"
 
-if [ -z "$AGENT" ]; then
-  echo "Usage: curl -fsSL $BASE/install.sh | bash -s <agent>"
-  echo ""
-  echo "Agents: cursor, codex, gemini"
-  echo "For Claude Code: claude plugins marketplace add $REPO && claude plugins install edc@edc"
+AGENT=""
+CONTEXT_MODE=""
+
+usage() {
+  cat <<EOF
+Usage:
+  curl -fsSL $BASE/install.sh | bash -s <agent>
+  bash install.sh --agent claude --context-mode advisory|inject
+
+Agents: claude, cursor, codex
+EOF
+}
+
+die() {
+  echo "edc: $*" >&2
   exit 1
+}
+
+not_implemented() {
+  echo "edc: $1 not yet implemented" >&2
+  exit 2
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --agent)
+      [ "$#" -ge 2 ] || die "--agent requires a value"
+      AGENT="$2"
+      shift 2
+      ;;
+    --context-mode)
+      [ "$#" -ge 2 ] || die "--context-mode requires a value"
+      CONTEXT_MODE="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --*)
+      die "unknown option: $1"
+      ;;
+    *)
+      if [ -n "$AGENT" ]; then
+        die "unexpected argument: $1"
+      fi
+      AGENT="$1"
+      shift
+      ;;
+  esac
+done
+
+[ -n "$AGENT" ] || {
+  usage
+  exit 1
+}
+
+if [ -n "$CONTEXT_MODE" ]; then
+  case "$CONTEXT_MODE" in
+    advisory|inject) ;;
+    *) die "--context-mode must be advisory or inject" ;;
+  esac
 fi
 
-# Canonical skill files.
-# IMPORTANT: when adding/removing a skill file, update BOTH lists:
-#   - this SKILLS array (used by `curl | bash` remote install)
-#   - agents/cursor/install.sh (used by local clone install)
-# The two installers intentionally enumerate files explicitly so adding a new
-# file without registering it fails loudly in both paths instead of one.
 SKILLS=(
   "plugins/edc/skills/edc-context/SKILL.md"
   "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
@@ -36,7 +89,6 @@ SKILLS=(
   "plugins/edc/skills/edc-review-impl/patterns.md"
   "plugins/edc/skills/edc-build-impl/SKILL.md"
   "plugins/edc/skills/edc-update-impl/SKILL.md"
-  "plugins/edc/skills/edc-split-impl/SKILL.md"
   "plugins/edc/skills/edc-audit-impl/SKILL.md"
 )
 
@@ -46,20 +98,150 @@ download() {
   curl -fsSL "$BASE/$src" -o "$dst"
 }
 
-# Strip prefix to get relative skill path for destination
+copy_or_download() {
+  local src="$1" dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  if [ -f "$SCRIPT_DIR/$src" ]; then
+    cp "$SCRIPT_DIR/$src" "$dst"
+  else
+    download "$src" "$dst"
+  fi
+}
+
+copy_tree_or_fail() {
+  local src="$1" dst="$2"
+  mkdir -p "$(dirname "$dst")"
+  rm -rf "$dst"
+  cp -R "$src" "$dst"
+}
+
 skill_rel() {
   echo "${1#plugins/edc/skills/}"
 }
 
+set_manifest_mode() {
+  local mode="$1"
+  local manifest=".context/manifest.json"
+  [ -f "$manifest" ] || die ".context/manifest.json not found in $(pwd)"
+  command -v jq > /dev/null 2>&1 || die "jq is required to update .context/manifest.json"
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg mode "$mode" '.policy.defaultMode = $mode' "$manifest" > "$tmp"
+  mv "$tmp" "$manifest"
+}
+
+install_terminal_cli() {
+  local scripts_target="$HOME/.edc/scripts"
+  mkdir -p "$scripts_target"
+  copy_or_download "scripts/edc"                            "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc-review.sh"      "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-doctor.sh"      "$scripts_target/edc-doctor.sh"
+  copy_or_download "plugins/edc/scripts/edc-route.sh"       "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-manifest.sh"    "$scripts_target/edc-manifest.sh"
+  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$scripts_target/edc-clean-slate.sh"
+  chmod +x \
+    "$scripts_target/edc" \
+    "$scripts_target/edc-review.sh" \
+    "$scripts_target/edc-doctor.sh" \
+    "$scripts_target/edc-route.sh" \
+    "$scripts_target/edc-manifest.sh" \
+    "$scripts_target/edc-clean-slate.sh"
+}
+
+print_path_hint() {
+  case ":$PATH:" in
+    *":$HOME/.edc/scripts:"*) ;;
+    *)
+      echo
+      echo "NOTE: $HOME/.edc/scripts is not on PATH. Add this to your shell rc to call 'edc' from anywhere:"
+      echo "  export PATH=\"\$HOME/.edc/scripts:\$PATH\""
+      ;;
+  esac
+}
+
+install_claude_runtime() {
+  local mode="$1"
+  local target="$HOME/.claude/plugins/edc"
+  local hooks_target="$target/hooks/hooks.json"
+
+  if [ -d "$LOCAL_PLUGIN_ROOT" ]; then
+    mkdir -p "$HOME/.claude/plugins"
+    copy_tree_or_fail "$LOCAL_PLUGIN_ROOT" "$target"
+  else
+    mkdir -p "$target/.claude-plugin" "$target/commands" "$target/hooks" "$target/scripts"
+    copy_or_download "plugins/edc/.claude-plugin/plugin.json" "$target/.claude-plugin/plugin.json"
+    copy_or_download "plugins/edc/commands/edc-build.md" "$target/commands/edc-build.md"
+    copy_or_download "plugins/edc/commands/edc-update.md" "$target/commands/edc-update.md"
+    copy_or_download "plugins/edc/commands/edc-audit.md" "$target/commands/edc-audit.md"
+    copy_or_download "plugins/edc/commands/edc-review.md" "$target/commands/edc-review.md"
+    copy_or_download "plugins/edc/commands/edc-run-review.md" "$target/commands/edc-run-review.md"
+    copy_or_download "plugins/edc/hooks/session-start.mjs" "$target/hooks/session-start.mjs"
+    copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
+    copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
+    copy_or_download "plugins/edc/scripts/edc-route.sh" "$target/scripts/edc-route.sh"
+    copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
+  fi
+
+  if [ "$mode" = "inject" ]; then
+    cat > "$hooks_target" <<'EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-context-inject.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+  else
+    cat > "$hooks_target" <<'EOF'
+{
+  "hooks": {}
+}
+EOF
+  fi
+
+  set_manifest_mode "$mode"
+  install_terminal_cli
+  echo "Installed EDC Claude runtime in $target ($mode mode)."
+  echo "Terminal CLI installed at $HOME/.edc/scripts/edc."
+  print_path_hint
+}
+
 case "$AGENT" in
   claude)
-    echo "For Claude Code, use the marketplace:"
-    echo "  claude plugins marketplace add $REPO"
-    echo "  claude plugins install edc@edc"
-    exit 0
+    if [ -z "$CONTEXT_MODE" ]; then
+      echo "For Claude Code, use the marketplace:"
+      echo "  claude plugins marketplace add $REPO"
+      echo "  claude plugins install edc@edc"
+      exit 0
+    fi
+    install_claude_runtime "$CONTEXT_MODE"
     ;;
 
   cursor)
+    if [ -n "$CONTEXT_MODE" ]; then
+      not_implemented "cursor/$CONTEXT_MODE"
+    fi
     TARGET="$HOME/.cursor"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Cursor..."
@@ -69,17 +251,21 @@ case "$AGENT" in
     download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
     download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
     download "agents/cursor/.cursor/commands/edc-run-update.md" "$TARGET/commands/edc-run-update.md"
-    download "agents/cursor/.cursor/commands/edc-run-split.md" "$TARGET/commands/edc-run-split.md"
     download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
     download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
     download "scripts/edc" "$SCRIPTS_TARGET/edc"
     download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
     chmod +x "$SCRIPTS_TARGET/edc"
     chmod +x "$SCRIPTS_TARGET/edc-review.sh"
+    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
     ;;
 
   codex)
+    if [ -n "$CONTEXT_MODE" ]; then
+      not_implemented "codex/$CONTEXT_MODE"
+    fi
     TARGET="$HOME/.codex/skills"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Codex..."
@@ -88,28 +274,18 @@ case "$AGENT" in
     done
     download "agents/codex/.codex/skills/edc-build/SKILL.md" "$TARGET/edc-build/SKILL.md"
     download "agents/codex/.codex/skills/edc-update/SKILL.md" "$TARGET/edc-update/SKILL.md"
-    download "agents/codex/.codex/skills/edc-split/SKILL.md" "$TARGET/edc-split/SKILL.md"
     download "agents/codex/.codex/skills/edc-audit/SKILL.md" "$TARGET/edc-audit/SKILL.md"
     download "agents/codex/.codex/skills/edc-run-review/SKILL.md" "$TARGET/edc-run-review/SKILL.md"
     download "scripts/edc" "$SCRIPTS_TARGET/edc"
     download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
+    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
     chmod +x "$SCRIPTS_TARGET/edc"
     chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-split, \$edc-audit, or \$edc-run-review."
-    ;;
-
-  gemini)
-    TARGET="$HOME/.gemini/skills"
-    echo "Installing EDC skills globally for Gemini..."
-    for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/$(skill_rel "$f")"
-    done
-    echo "Done. Skills at $TARGET/"
+    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
+    echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
     ;;
 
   *)
-    echo "Unknown agent: $AGENT"
-    echo "Supported: cursor, codex, gemini (claude uses marketplace)"
-    exit 1
+    die "unknown agent: $AGENT (supported: claude, cursor, codex)"
     ;;
 esac

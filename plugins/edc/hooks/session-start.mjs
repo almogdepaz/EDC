@@ -44,27 +44,35 @@ function formatOutput(platform, content) {
   return content;
 }
 
+// --- manifest loading ---
+
+function loadManifest(projectRoot) {
+  const manifestPath = join(projectRoot, ".context", "manifest.json");
+  if (!existsSync(manifestPath)) return null;
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
 // --- staleness check ---
 
-function checkStaleness(projectRoot) {
-  const metaPath = join(projectRoot, ".context", ".meta.json");
-  if (!existsSync(metaPath)) return null;
+function checkStaleness(projectRoot, manifest) {
+  const sourceCommit = manifest?.sourceCommit;
+  if (!sourceCommit) return null;
 
   try {
-    const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
-    const lastCommit = meta.lastCommit;
-    if (!lastCommit) return null;
-
     const head = execFileSync("git", ["rev-parse", "HEAD"], {
       cwd: projectRoot,
       timeout: 3000,
       encoding: "utf-8",
     }).trim();
 
-    if (head !== lastCommit) {
-      return { stale: true, lastCommit, headCommit: head };
+    if (head !== sourceCommit) {
+      return { stale: true, sourceCommit, headCommit: head };
     }
-    return { stale: false, lastCommit, headCommit: head };
+    return { stale: false, sourceCommit, headCommit: head };
   } catch {
     return null;
   }
@@ -72,8 +80,19 @@ function checkStaleness(projectRoot) {
 
 // --- script install ---
 // Copy edc-review.sh from plugin bundle into project's .edc/scripts/ if missing or stale.
+// Only runs inside an EDC-aware project: requires either .git/ or .context/manifest.json
+// so a stray session in ~/Downloads doesn't drop .edc/scripts/ into random dirs.
+
+function isEdcProject(projectRoot) {
+  return (
+    existsSync(join(projectRoot, ".git")) ||
+    existsSync(join(projectRoot, ".context", "manifest.json"))
+  );
+}
 
 function installOrchestratorScript(projectRoot) {
+  if (!isEdcProject(projectRoot)) return;
+
   const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
   const pluginScript = join(pluginDir, "scripts", "edc-review.sh");
   if (!existsSync(pluginScript)) return; // plugin bundle missing script — skip silently
@@ -121,11 +140,13 @@ function main() {
 
   // ensure orchestrator script is installed in project
   installOrchestratorScript(projectRoot);
-  const contextPath = join(projectRoot, ".context", "context.md");
+
+  const manifest = loadManifest(projectRoot);
+  const indexPath = join(projectRoot, ".context", "index.md");
 
   const parts = [];
 
-  if (!existsSync(contextPath)) {
+  if (!manifest) {
     parts.push(
       [
         "## EDC Context",
@@ -135,23 +156,29 @@ function main() {
       ].join("\n"),
     );
   } else {
-    // check staleness first
-    const staleness = checkStaleness(projectRoot);
+    // advisory mode: hook is a no-op
+    if (manifest.policy?.defaultMode === "advisory") {
+      return;
+    }
+
+    const staleness = checkStaleness(projectRoot, manifest);
     if (staleness?.stale) {
       parts.push(
         [
           "## EDC Staleness Warning",
           "",
-          `Context was built at commit \`${staleness.lastCommit.slice(0, 8)}\` but HEAD is \`${staleness.headCommit.slice(0, 8)}\`.`,
+          `Context was built at commit \`${staleness.sourceCommit.slice(0, 8)}\` but HEAD is \`${staleness.headCommit.slice(0, 8)}\`.`,
           "Run `/edc:edc-build` to update.",
         ].join("\n"),
       );
     }
 
-    try {
-      parts.push(readFileSync(contextPath, "utf-8"));
-    } catch {
-      // file disappeared between check and read
+    if (existsSync(indexPath)) {
+      try {
+        parts.push(readFileSync(indexPath, "utf-8"));
+      } catch {
+        // file disappeared between check and read
+      }
     }
   }
 

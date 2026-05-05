@@ -6,12 +6,12 @@ Detailed phase-by-phase workflow for code review.
 
 **FIRST ACTION — Check for existing context, then build baseline if needed:**
 
-If `.context/context.md` exists in the repository:
-1. Read `.context/context.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+If `.context/index.md` exists in the repository:
+1. Read `.context/index.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
 2. This IS your baseline — skip the full context build
 3. Map changed files to modules using the Module Map table
-4. Load `.context/{module}.md` for affected modules
-5. Load `.context/issues.md` to check if changes touch known issues
+4. Load `.context/modules/{module}.md` for affected modules
+5. Load `.context/reports/issues.md` to check if changes touch known issues
 
 If `.context/` does NOT exist but the `edc:edc-context` skill is available (NOT `audit-context-building` — that is a different plugin):
 
@@ -75,20 +75,20 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 - **LOW**: Comments, tests, UI, logging
 
 **Context-aware triage (if `.context/` exists):**
-- Check `.context/issues.md` — does this PR touch files with known issues?
-- Check module coupling in `.context/context.md` — does this change have cascade risk?
-- Elevate risk for changes touching fragility clusters documented in `.context/{module}.md`
+- Check `.context/reports/issues.md` — does this PR touch files with known issues?
+- Check module coupling in `.context/index.md` — does this change have cascade risk?
+- Elevate risk for changes touching fragility clusters documented in `.context/modules/{module}.md`
 
 ---
 
 ## Phase 0.5: C Memory Safety Fast-Path (run BEFORE deep analysis)
 
-**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
+**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/reports/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
 
 ```bash
 # Create output file immediately
-mkdir -p .context 2>/dev/null || true
-OUTPUT_FILE=".context/issues.md"
+mkdir -p .context/reports 2>/dev/null || true
+OUTPUT_FILE=".context/reports/issues.md"
 cat > "$OUTPUT_FILE" << 'EOF'
 # Security Review Findings
 <!-- findings appended below as discovered -->
@@ -128,6 +128,58 @@ grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
 For each variable assigned from these functions: (1) is the variable declared `int` or `short` (signed)? (2) is it used as a size/length argument to `malloc`/`memcpy`/array subscript without an `if (n <= 0)` guard immediately before that use? A negative `int` passed as `malloc(n)` silently widens to a huge `size_t` → REPORT as signedness confusion. Pattern to confirm: `int n = ntohs(hdr->len); malloc(n)` with no negativity check between assignment and use. **Append to output file immediately.**
 
 **After all 5 scans complete:** Finalize the output file. Even if no findings were produced by the grep scans, write a "No issues found" summary to the output file so the file exists and is non-empty. The output file MUST exist after Phase 0.5 regardless of findings.
+
+---
+
+## Phase 0.6: Variant Analysis Pass (for C/C++ files)
+
+**MANDATORY when Phase 0.5 finds any vulnerability.** After discovering ANY security issue, immediately search the entire file for variants of the same pattern class. This prevents missing closely-related bugs that share the root cause.
+
+For each finding from Phase 0.5, enumerate systematically:
+
+**If finding is buffer overflow (memcpy/strcpy variant):**
+```bash
+grep -n "memcpy\|memmove\|memset\|strcpy\|strcat\|sprintf\|snprintf" <file>
+```
+For every hit: is the destination fixed-size? Is the length bounded on ALL paths? List every call site. For each: "SAFE (length guarded)" or "UNSAFE (peer-controlled length)" — no rationalizations.
+
+**If finding is recursive stack overflow:**
+```bash
+grep -n "recurse\|<function_name>" <file>
+```
+For every recursive call site WITHIN the function: does THIS specific site have a depth check immediately before the call, or rely on a single entry-point guard? List each call site separately. "PER-SITE GUARD (safe)" or "ENTRY-ONLY GUARD (potential bypass)".
+
+**If finding is use-after-free or double-free:**
+```bash
+grep -n "free\|curl_free\|Curl_safefree" <file>
+```
+For every `free()` call: check next 30 lines for dereference. Also scan for error-handler paths that free the same pointer twice. List each free site: "SAFE (p=NULL after)" or "UNSAFE (dangling deref possible)" or "UNSAFE (double-free path)".
+
+**If finding is integer overflow into malloc:**
+```bash
+grep -n "malloc\|realloc\|calloc\|alloc" <file>
+```
+For every allocation: is the size computed from peer data? Is there an `if (a > SIZE_MAX / b)` or similar guard BEFORE the call? List each: "SAFE (overflow pre-checked)" or "UNSAFE (peer-controlled size, no guard)".
+
+**If finding is signed-to-unsigned conversion:**
+```bash
+grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
+```
+For every assignment from these functions: where is that variable next used as a size/index? Is there an `if (n <= 0)` guard immediately before? List: "SAFE (negativity checked before use)" or "UNSAFE (negative-to-huge promotion possible)".
+
+**Append a "VARIANT SWEEP" block to the output file:**
+```
+## Variant Sweep: [Pattern Class]
+
+**Searched for:** [What pattern was searched]
+**Total occurrences:** [count]
+**Safe:** [count] — [reason]
+**Unsafe:** [count or "None"]
+
+[Per-line verdict table]
+```
+
+**Proceed to Phase 1 only after the variant sweep is complete and appended to the output file.**
 
 ---
 
@@ -182,7 +234,7 @@ For each changed file:
    ```
 
 7. **Invariant compliance (if `.context/` exists):**
-   - Read `.context/{module}.md` for the affected module
+   - Read `.context/modules/{module}.md` for the affected module
    - Does the change violate any documented invariant?
    - Does it break an implicit contract with another module?
    - Does the coupling map flag cascade risk?
@@ -225,8 +277,8 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 - 50+ calls: CRITICAL
 
 **Context-aware blast radius (if `.context/` exists):**
-- Cross-module coupling section in `.context/context.md` maps cascade paths
-- `.context/{module}.md` documents which modules depend on the changed module
+- Cross-module coupling section in `.context/index.md` maps cascade paths
+- `.context/modules/{module}.md` documents which modules depend on the changed module
 - Use these instead of grep when available — they capture non-obvious coupling
 
 **Priority matrix:**

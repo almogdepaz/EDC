@@ -29,7 +29,7 @@ set -euo pipefail
 #   ./benchmark/autoresearch.sh --baseline       # recompute baseline
 # ─────────────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORK_DIR="${EDC_BENCH_WORKDIR:-/private/tmp/edc-bench}"
 CVE_CACHE="$WORK_DIR/cve-cache"
@@ -41,7 +41,7 @@ SKILL_FILES=(
     "plugins/edc/skills/edc-review-impl/adversarial.md"
 )
 
-MODEL="sonnet"
+MODEL="${EDC_BENCH_MODEL:-sonnet}"
 
 # ── Repo discovery ──────────────────────────────────────────────────────────
 
@@ -289,7 +289,7 @@ This step is pure architectural context building only — do NOT identify securi
         local t0
         t0=$(date +%s)
 
-        (cd "$run_dir" && claude -p "$prompt" \
+        (cd "$run_dir" && exec claude -p "$prompt" \
             --plugin-dir "$REPO_ROOT/plugins/edc" \
             --allowedTools "Read Glob Grep Write Skill" \
             --max-turns 30 \
@@ -299,7 +299,13 @@ This step is pure architectural context building only — do NOT identify securi
             < /dev/null \
             > "$run_dir/ctx-output.txt" 2>&1 &
         local claude_pid=$!
-        ( sleep "$timeout" && kill "$claude_pid" 2>/dev/null ) &
+        ( sleep "$timeout" \
+            && kill "$claude_pid" 2>/dev/null \
+            && pkill -TERM -P "$claude_pid" 2>/dev/null \
+            ; sleep 5 \
+            ; kill -9 "$claude_pid" 2>/dev/null \
+            ; pkill -KILL -P "$claude_pid" 2>/dev/null \
+        ) &
         local watchdog=$!
         wait "$claude_pid" 2>/dev/null || true
         kill "$watchdog" 2>/dev/null || true
@@ -372,17 +378,29 @@ Write ALL findings to .context/issues.md with:
     local t0
     t0=$(date +%s)
 
-    (cd "$run_dir" && claude -p "$prompt" \
+    # `exec` makes the subshell REPLACE itself with claude — without it, $! is
+    # the wrapping subshell PID and a kill there leaves claude reparented to
+    # init. With exec, $! IS claude's PID, so SIGTERM/SIGKILL reach claude.
+    (cd "$run_dir" && exec claude -p "$prompt" \
         --plugin-dir "$REPO_ROOT/plugins/edc" \
         --allowedTools "Read Glob Grep Write Skill" \
         --max-turns 20 \
         --model "$MODEL" \
-        --output-format text \
+        --output-format stream-json --verbose \
         --dangerously-skip-permissions) \
         < /dev/null \
         > "$run_dir/claude-output.txt" 2>&1 &
     local claude_pid=$!
-    ( sleep 600 && kill "$claude_pid" 2>/dev/null ) &
+    # SIGTERM at 600s, escalate to SIGKILL at 605s — claude can swallow SIGTERM
+    # during rate-limit retries and stream-idle backoffs. Also pkill direct
+    # children (node) in case they outlive claude.
+    ( sleep 600 \
+        && kill "$claude_pid" 2>/dev/null \
+        && pkill -TERM -P "$claude_pid" 2>/dev/null \
+        ; sleep 5 \
+        ; kill -9 "$claude_pid" 2>/dev/null \
+        ; pkill -KILL -P "$claude_pid" 2>/dev/null \
+    ) &
     local watchdog=$!
     wait "$claude_pid" 2>/dev/null || true
     kill "$watchdog" 2>/dev/null || true
@@ -390,11 +408,37 @@ Write ALL findings to .context/issues.md with:
 
     local dur=$(( $(date +%s) - t0 ))
 
+    local input_tokens=0 output_tokens=0 cache_read=0 cache_create=0 total_cost=0 num_turns=0
+    if [ -s "$run_dir/claude-output.txt" ]; then
+        local result_line
+        result_line=$(grep -m1 '"type":"result"' "$run_dir/claude-output.txt" 2>/dev/null | tail -1)
+        if [ -n "$result_line" ]; then
+            input_tokens=$(printf '%s' "$result_line" | jq -r '.usage.input_tokens // 0' 2>/dev/null || echo 0)
+            output_tokens=$(printf '%s' "$result_line" | jq -r '.usage.output_tokens // 0' 2>/dev/null || echo 0)
+            cache_read=$(printf '%s' "$result_line" | jq -r '.usage.cache_read_input_tokens // 0' 2>/dev/null || echo 0)
+            cache_create=$(printf '%s' "$result_line" | jq -r '.usage.cache_creation_input_tokens // 0' 2>/dev/null || echo 0)
+            total_cost=$(printf '%s' "$result_line" | jq -r '.total_cost_usd // 0' 2>/dev/null || echo 0)
+            num_turns=$(printf '%s' "$result_line" | jq -r '.num_turns // 0' 2>/dev/null || echo 0)
+        fi
+    fi
+
     local issues_file="$run_dir/.context/issues.md"
     [ ! -f "$issues_file" ] && issues_file="$run_dir/issues.md"
-    [ ! -f "$issues_file" ] && { cp "$run_dir/claude-output.txt" "$run_dir/.context/issues.md" 2>/dev/null || true; issues_file="$run_dir/.context/issues.md"; }
+    if [ ! -f "$issues_file" ]; then
+        grep '"type":"result"' "$run_dir/claude-output.txt" 2>/dev/null | tail -1 \
+            | jq -r '.result // empty' > "$run_dir/.context/issues.md" 2>/dev/null || true
+        [ ! -s "$run_dir/.context/issues.md" ] && cp "$run_dir/claude-output.txt" "$run_dir/.context/issues.md" 2>/dev/null || true
+        issues_file="$run_dir/.context/issues.md"
+    fi
 
-    log "  [$cve_id] done in ${dur}s"
+    if [ -n "${EDC_METRICS_FILE:-}" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$cve_id" "$dur" "$num_turns" \
+            "$input_tokens" "$output_tokens" "$cache_read" "$cache_create" "$total_cost" \
+            >> "$EDC_METRICS_FILE"
+    fi
+
+    log "  [$cve_id] done in ${dur}s (in=${input_tokens} out=${output_tokens} cost=\$${total_cost})"
 
     python3 "$SCRIPT_DIR/score.py" \
         --issues "$issues_file" \
@@ -430,6 +474,9 @@ run_benchmark() {
     local results_file="$SCOPE_DIR/results-${label}.tsv"
     echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$results_file"
 
+    local metrics_file="$SCOPE_DIR/metrics-${label}.tsv"
+    echo -e "cve\tduration_s\tnum_turns\tinput_tokens\toutput_tokens\tcache_read\tcache_create\ttotal_cost" > "$metrics_file"
+
     local bench_dir="$WORK_DIR/bench-${label}"
     rm -rf "$bench_dir"
     mkdir -p "$bench_dir"
@@ -438,12 +485,16 @@ run_benchmark() {
 
     local pids=()
     local tmp_files=()
+    local metrics_tmp_files=()
     for cve in "${cves[@]}"; do
-        local tmp
+        local tmp metrics_tmp
         tmp=$(mktemp "$SCOPE_DIR/.result-XXXXXXXX")
         tmp_files+=("$tmp")
+        metrics_tmp=$(mktemp "$SCOPE_DIR/.metrics-XXXXXXXX")
+        metrics_tmp_files+=("$metrics_tmp")
         (
             export EDC_RESULTS_FILE="$tmp"
+            export EDC_METRICS_FILE="$metrics_tmp"
             export WORK_DIR="$bench_dir"
             run_cve "$cve" || true
         ) &
@@ -456,6 +507,11 @@ run_benchmark() {
 
     for tmp in "${tmp_files[@]}"; do
         [ -s "$tmp" ] && tail -n +2 "$tmp" >> "$results_file" 2>/dev/null || true
+        rm -f "$tmp"
+    done
+
+    for tmp in "${metrics_tmp_files[@]}"; do
+        [ -s "$tmp" ] && cat "$tmp" >> "$metrics_file" 2>/dev/null || true
         rm -f "$tmp"
     done
 
@@ -788,4 +844,6 @@ main() {
     rm -f "$PIDFILE"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

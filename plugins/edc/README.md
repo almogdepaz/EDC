@@ -4,8 +4,11 @@
 
 | Command | What it does |
 |---------|--------------|
-| `/edc:edc-build` | Build deep codebase context (`.context/`) |
-| `/edc:edc-review` | Run differential security review on current branch or target |
+| `/edc:edc-build` | Build or update the v2 context tree (`AGENTS.md`, `.context/index.md`, `.context/manifest.json`, `.context/modules/*`) |
+| `/edc:edc-update` | Incrementally refresh the v2 context tree from branch diff |
+| `/edc:edc-audit` | Write `.context/reports/issues.md` and `.context/reports/complexity.md` from existing module docs |
+| `/edc:edc-run-review` | Run differential security review on the current branch or target |
+| `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
 These are the ONLY commands users should see and invoke.
 
@@ -14,25 +17,35 @@ These are the ONLY commands users should see and invoke.
 ```
 plugins/edc/
   commands/
-    edc-review.md       user-facing command (Bash-only, invokes the script)
+    edc-build.md
+    edc-update.md
+    edc-audit.md
+    edc-review.md       internal review skill entrypoint
+    edc-run-review.md   user-facing review launcher
+    edc-doctor.md
   scripts/
-    edc-review.sh       orchestrator — owns all routing, spawns claude -p subprocesses
+    edc-review.sh       orchestrator — owns all review routing, spawns agent subprocesses
+    edc-route.sh        shared path -> module router
+    edc-manifest.sh     deterministic manifest post-step
+    edc-doctor.sh       schema + coverage validator
   skills/
-    edc-build/          context building skill (invoked by script)
+    edc-build-impl/     context-building skill (invoked by wrappers)
+    edc-update-impl/    incremental context refresh skill
+    edc-audit-impl/     report generation skill
     edc-context/        deep per-file context (invoked by edc-build)
     edc-review-impl/    review methodology + patterns (consumed by script as prompt material)
-    edc-update/         incremental context update (invoked by script)
   hooks/
-    session-start.sh    injects context summary on session start
+    session-start.mjs
+    pretooluse-context-inject.mjs
 ```
 
 ## Design: script-as-orchestrator
 
-The user's claude session has ONLY `Bash` access. It runs `edc-review.sh` which:
+The user's Claude session has ONLY `Bash` access. It runs `edc-review.sh` which:
 
-1. Checks context freshness (`.context/.meta.json` vs HEAD)
+1. Checks context freshness (`.context/manifest.json.sourceCommit` vs HEAD)
 2. Spawns `claude -p` for context build/update if needed
-3. Generates per-module task files in `review/`
+3. Generates per-module task files in `review-tasks/`
 4. Spawns `claude -p` per module for review
 5. Consolidates reports into final review file
 6. Verifies all outputs exist
@@ -70,7 +83,7 @@ No target = reviews current branch against main. No flags needed for the common 
 
 ## Context lifecycle
 
-- `edc-build`: full context build, writes `.context/*.md` + `.meta.json`
+- `edc-build`: full context build, writes `AGENTS.md` plus the v2 `.context/` tree
 - `edc-update`: incremental update when HEAD advances
-- Context is stale when `.meta.json` lastCommit != HEAD
-- Reviews require fresh context — script auto-triggers build/update if needed
+- Context is stale when `.context/manifest.json.sourceCommit != HEAD`
+- Reviews require fresh context and valid routing — `edc-review.sh` auto-recovers and `edc-doctor.sh` validates the result

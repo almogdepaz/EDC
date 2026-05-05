@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 2,
+  "edcVersion": "2.0.0",
+  "generatedAt": "2026-04-30T11:35:27Z",
+  "sourceCommit": "8345997374e30b60b32ba1a2016b5cbca37a1904",
+  "repoContextFile": ".context/index.md",
+  "reports": {
+    "issues": ".context/reports/issues.md",
+    "complexity": ".context/reports/complexity.md"
+  },
+  "build": {
+    "fullContextFile": ".context/build/full-context.md",
+    "buildInfoFile": ".context/build/build.json"
+  },
+  "policy": {
+    "defaultMode": "inject",
+    "guardedTools": [
+      "read",
+      "edit",
+      "write"
+    ],
+    "discoveryGatedOnIndex": [
+      "grep",
+      "glob",
+      "find",
+      "ls"
+    ],
+    "bootstrapAlwaysReadable": [
+      ".context/**",
+      "AGENTS.md",
+      ".edc/**",
+      "LICENSE*",
+      "package.json",
+      "*.lock",
+      ".gitignore",
+      ".editorconfig"
+    ],
+    "unmatchedPathPolicy": "warn-allow"
+  },
+  "modules": [
+    {
+      "name": "runtime-cli",
+      "doc": ".context/modules/runtime-cli.md",
+      "summary": "Public shell entrypoints, install routing, review orchestration, ignore handling, content/timeout validation.",
+      "priority": 100,
+      "match": {
+        "exactFiles": [
+          "scripts/edc",
+          "scripts/edc-review.sh",
+          "install.sh",
+          ".edc/scripts/edc-review.sh",
+          ".edcignore",
+          ".gitignore",
+          "README.md"
+        ]
+      }
+    },
+    {
+      "name": "plugin-surface",
+      "doc": ".context/modules/plugin-surface.md",
+      "summary": "Claude plugin packaging, slash-command adapters, session-start and pre-edit context injection hooks.",
+      "priority": 90,
+      "match": {
+        "exactFiles": [
+          "plugins/edc/README.md"
+        ],
+        "prefixes": [
+          "plugins/edc/.claude-plugin/",
+          "plugins/edc/commands/",
+          "plugins/edc/hooks/",
+          "plugins/edc/scripts/"
+        ],
+        "globs": [
+          "plugins/edc/.claude-plugin/**",
+          "plugins/edc/commands/**",
+          "plugins/edc/hooks/**",
+          "plugins/edc/scripts/**"
+        ]
+      }
+    },
+    {
+      "name": "canonical-skills",
+      "doc": ".context/modules/canonical-skills.md",
+      "summary": "Single-source prompt corpus for build/update/audit/review skills consumed by every runtime.",
+      "priority": 80,
+      "match": {
+        "prefixes": [
+          "plugins/edc/skills/"
+        ],
+        "globs": [
+          "plugins/edc/skills/**"
+        ]
+      }
+    },
+    {
+      "name": "agent-wrappers",
+      "doc": ".context/modules/agent-wrappers.md",
+      "summary": "Cursor, Codex, and Gemini installers and thin runtime-specific wrappers and docs.",
+      "priority": 70,
+      "match": {
+        "prefixes": [
+          "agents/"
+        ],
+        "globs": [
+          "agents/**"
+        ]
+      }
+    },
+    {
+      "name": "benchmarking",
+      "doc": ".context/modules/benchmarking.md",
+      "summary": "CVE benchmark runner, scorer, prompt-tuning loop, and ground-truth corpus.",
+      "priority": 60,
+      "match": {
+        "prefixes": [
+          "benchmark/"
+        ],
+        "globs": [
+          "benchmark/**"
+        ]
+      }
+    },
+    {
+      "name": "hardening-tests",
+      "doc": ".context/modules/hardening-tests.md",
+      "summary": "Executable compatibility contract for runtime/orchestrator behavior.",
+      "priority": 50,
+      "match": {
+        "prefixes": [
+          "tests/hardening/"
+        ],
+        "globs": [
+          "tests/hardening/**"
+        ]
+      }
+    }
+  ],
+  "unmapped": {
+    "allowedGlobs": [
+      "*.md",
+      "*.json",
+      ".claude-plugin/**",
+      ".context/**",
+      ".edc/**"
+    ]
+  },
+  "coverage": {
+    "mappedFileCount": 84,
+    "unmappedFileCount": 1,
+    "ambiguousPathCount": 0
+  }
+}

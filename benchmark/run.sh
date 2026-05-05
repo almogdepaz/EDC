@@ -87,11 +87,17 @@ Be thorough. Do not skip any function."
     echo "    Running EDC analysis..."
     local start_time=$(date +%s)
 
+    local model_arg=()
+    if [ -n "${EDC_BENCH_MODEL:-}" ]; then
+        model_arg=(--model "$EDC_BENCH_MODEL")
+    fi
+
     (cd "$cve_dir" && claude -p "$prompt" \
         --plugin-dir "$SCRIPT_DIR/../plugins/edc" \
         --allowedTools "Read Grep Glob Write Bash Skill" \
         --max-turns 50 \
         --output-format text \
+        "${model_arg[@]}" \
         --dangerously-skip-permissions) \
         < /dev/null \
         > "$output_dir/claude-output.txt" 2>&1 || true

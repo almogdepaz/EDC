@@ -37,6 +37,8 @@ if ! command -v jq > /dev/null 2>&1; then
 fi
 
 MANIFEST=".context/manifest.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -600,6 +602,13 @@ auto_mode() {
     recovery="update"
   fi
 
+  # If recovering, pre-clean v1 leftovers / partial v2 builds so the build skill
+  # doesn't see ambiguous state and route to update by mistake. The clean-slate
+  # helper is idempotent — exit 0 means "nothing to do or successfully wiped".
+  if [ -n "$recovery" ] && [ -x "$CLEAN_SLATE_SH" ]; then
+    bash "$CLEAN_SLATE_SH" >&2 || true
+  fi
+
   # Recover from missing/stale context (one shot)
   case "$recovery" in
     build)
@@ -666,8 +675,48 @@ auto_mode() {
   esac
 
   if [ -n "$recovery" ]; then
-    bash "$0" --check-context > /dev/null \
-      || { echo "ERROR: context still not ready after recovery" >&2; exit 1; }
+    if ! bash "$0" --check-context > /dev/null 2>&1; then
+      # The build/update LLM ran but didn't produce a valid manifest. Most
+      # common cause: subagent invoked v1 skills and wrote v1-shaped output.
+      # Wipe and retry the build with --force exactly once before giving up.
+      if [ -x "$CLEAN_SLATE_SH" ]; then
+        echo "→ context still not ready — wiping partial output and retrying with --force..."
+        bash "$CLEAN_SLATE_SH" --force >&2 || true
+        local force_build_prompt
+        force_build_prompt=$(resolve_prompt build --force "${build_args[@]}") || exit 1
+        case "$EDC_AGENT_CLI" in
+          claude)
+            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
+              claude -p --output-format stream-json --verbose \
+                --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
+              <<< "$force_build_prompt" \
+              | stream_filter \
+              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
+            ;;
+          cursor)
+            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
+              cursor agent -p --output-format stream-json --force --trust \
+              <<< "$force_build_prompt" \
+              | stream_filter \
+              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
+            ;;
+          codex)
+            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
+              env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
+              <<< "$force_build_prompt" \
+              | stream_filter \
+              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
+            ;;
+        esac
+      fi
+      bash "$0" --check-context > /dev/null \
+        || {
+          echo "ERROR: context still not ready after recovery (manifest.json missing or invalid)." >&2
+          echo "HINT: the build agent likely invoked v1 skills (edc-split / top-level edc-context) instead of following edc-build-impl." >&2
+          echo "      check the build agent output above; you can also try: rm -rf .context AGENTS.md && edc review --base <ref>" >&2
+          exit 1
+        }
+    fi
     # Attempt 2: build tasks now that context is ready
     out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
   fi

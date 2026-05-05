@@ -32,9 +32,20 @@ file="$2"
 [ -f "$manifest" ] || { echo "manifest not found: $manifest" >&2; exit 64; }
 command -v jq >/dev/null 2>&1 || { echo "jq required" >&2; exit 64; }
 
+# One jq pre-pass: dump every match rule as TSV "tier<TAB>name<TAB>priority<TAB>pattern".
+# Bash then walks the rules in memory — avoids the O(modules*tiers) jq forks
+# the previous implementation paid per route call.
+rules=$(jq -r '
+  .modules[] |
+    .name as $n |
+    (.priority // 0) as $p |
+    ((.match.exactFiles // [])[] | "1\t\($n)\t\($p)\t\(.)"),
+    ((.match.prefixes  // [])[] | "2\t\($n)\t\($p)\t\(.)"),
+    ((.match.globs     // [])[] | "3\t\($n)\t\($p)\t\(.)")
+' "$manifest")
+
 # Pick winners from parallel arrays (names, priorities). Higher priority wins;
 # ties at top priority are reported as ambiguous on stderr (exit 2).
-# Stdin: not used. Args: name1 prio1 name2 prio2 ...
 pick_winner() {
   local -a names=()
   local -a prios=()
@@ -64,48 +75,34 @@ pick_winner() {
   return 2
 }
 
-mod_count=$(jq '.modules | length' "$manifest")
-
 # Tier 1: exactFiles
 t1_args=()
-for ((i=0; i<mod_count; i++)); do
-  hit=$(jq -r --argjson i "$i" --arg f "$file" \
-    '(.modules[$i].match.exactFiles // []) | any(. == $f)' "$manifest")
-  if [ "$hit" = "true" ]; then
-    name=$(jq -r --argjson i "$i" '.modules[$i].name' "$manifest")
-    prio=$(jq -r --argjson i "$i" '.modules[$i].priority // 0' "$manifest")
+while IFS=$'\t' read -r tier name prio pattern; do
+  [ "$tier" = "1" ] || continue
+  if [ "$pattern" = "$file" ]; then
     t1_args+=("$name" "$prio")
   fi
-done
+done <<< "$rules"
 
 if (( ${#t1_args[@]} > 0 )); then
   pick_winner "${t1_args[@]}"
   exit $?
 fi
 
-# Tier 2: longest prefix wins
+# Tier 2: longest prefix wins; tie-break by priority
 t2_names=()
 t2_prios=()
 t2_lens=()
-for ((i=0; i<mod_count; i++)); do
-  best_len=-1
-  while IFS= read -r prefix; do
-    [ -z "$prefix" ] && continue
-    case "$file" in
-      "$prefix"*)
-        len=${#prefix}
-        (( len > best_len )) && best_len=$len
-        ;;
-    esac
-  done < <(jq -r --argjson i "$i" '.modules[$i].match.prefixes // [] | .[]' "$manifest")
-  if (( best_len >= 0 )); then
-    name=$(jq -r --argjson i "$i" '.modules[$i].name' "$manifest")
-    prio=$(jq -r --argjson i "$i" '.modules[$i].priority // 0' "$manifest")
-    t2_names+=("$name")
-    t2_prios+=("$prio")
-    t2_lens+=("$best_len")
-  fi
-done
+while IFS=$'\t' read -r tier name prio pattern; do
+  [ "$tier" = "2" ] || continue
+  case "$file" in
+    "$pattern"*)
+      t2_names+=("$name")
+      t2_prios+=("$prio")
+      t2_lens+=("${#pattern}")
+      ;;
+  esac
+done <<< "$rules"
 
 if (( ${#t2_names[@]} > 0 )); then
   max_len=${t2_lens[0]}
@@ -123,23 +120,17 @@ if (( ${#t2_names[@]} > 0 )); then
 fi
 
 # Tier 3: globs (any match)
+declare -A t3_seen=()
 t3_args=()
-for ((i=0; i<mod_count; i++)); do
-  matched=0
-  while IFS= read -r glob; do
-    [ -z "$glob" ] && continue
-    # shellcheck disable=SC2053
-    if [[ "$file" == $glob ]]; then
-      matched=1
-      break
-    fi
-  done < <(jq -r --argjson i "$i" '.modules[$i].match.globs // [] | .[]' "$manifest")
-  if (( matched == 1 )); then
-    name=$(jq -r --argjson i "$i" '.modules[$i].name' "$manifest")
-    prio=$(jq -r --argjson i "$i" '.modules[$i].priority // 0' "$manifest")
+while IFS=$'\t' read -r tier name prio pattern; do
+  [ "$tier" = "3" ] || continue
+  [ -n "${t3_seen[$name]:-}" ] && continue
+  # shellcheck disable=SC2053
+  if [[ "$file" == $pattern ]]; then
+    t3_seen[$name]=1
     t3_args+=("$name" "$prio")
   fi
-done
+done <<< "$rules"
 
 if (( ${#t3_args[@]} > 0 )); then
   pick_winner "${t3_args[@]}"

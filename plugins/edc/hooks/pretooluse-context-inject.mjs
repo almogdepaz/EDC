@@ -67,14 +67,16 @@ function extractFilePaths(toolName, toolInput) {
 }
 
 function extractFilePathsFromBash(command) {
-  const paths = [];
-  const extPattern =
-    /(?:^|\s)((?:\.\/|\/|[\w.-]+\/)+[\w.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb|css|scss|html|json|yaml|yml|toml|md|sql|sh|svelte|vue))\b/g;
+  const paths = new Set();
+  // Catch any path-shaped token: optional ./ or /, then at least one
+  // dir/segment pair (extensionless OK). Matches scripts/edc, ./bin/run,
+  // plugins/edc/scripts/edc-route.sh, etc. Routing filters non-matches.
+  const pathPattern = /(?:^|[\s=:'"`])(\.{0,2}\/?[\w.-]+(?:\/[\w.-]+)+)/g;
   let match;
-  while ((match = extPattern.exec(command)) !== null) {
-    paths.push(match[1]);
+  while ((match = pathPattern.exec(command)) !== null) {
+    paths.add(match[1]);
   }
-  return paths;
+  return [...paths];
 }
 
 // --- manifest + routing ---

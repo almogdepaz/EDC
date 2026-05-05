@@ -133,17 +133,19 @@ set_manifest_mode() {
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
   mkdir -p "$scripts_target"
-  copy_or_download "scripts/edc"                         "$scripts_target/edc"
-  copy_or_download "plugins/edc/scripts/edc-review.sh"   "$scripts_target/edc-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-doctor.sh"   "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-route.sh"    "$scripts_target/edc-route.sh"
-  copy_or_download "plugins/edc/scripts/edc-manifest.sh" "$scripts_target/edc-manifest.sh"
+  copy_or_download "scripts/edc"                            "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc-review.sh"      "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-doctor.sh"      "$scripts_target/edc-doctor.sh"
+  copy_or_download "plugins/edc/scripts/edc-route.sh"       "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-manifest.sh"    "$scripts_target/edc-manifest.sh"
+  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$scripts_target/edc-clean-slate.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
     "$scripts_target/edc-doctor.sh" \
     "$scripts_target/edc-route.sh" \
-    "$scripts_target/edc-manifest.sh"
+    "$scripts_target/edc-manifest.sh" \
+    "$scripts_target/edc-clean-slate.sh"
 }
 
 print_path_hint() {
@@ -177,6 +179,7 @@ install_claude_runtime() {
     copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
     copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
     copy_or_download "plugins/edc/scripts/edc-route.sh" "$target/scripts/edc-route.sh"
+    copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
   fi
 
   if [ "$mode" = "inject" ]; then

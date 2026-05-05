@@ -7,9 +7,9 @@ description: Enables ultra-granular, line-by-line code analysis to build deep ar
 
 ## 1. Purpose
 
-This skill governs **how Claude thinks** during the context-building phase of an audit.
+This skill governs **how the agent thinks** during the context-building phase of an audit.
 
-When active, Claude will:
+When active, the agent will:
 - Perform **line-by-line / block-by-block** code analysis by default.
 - Apply **First Principles**, **5 Whys**, and **5 Hows** at micro scale.
 - Continuously link insights → functions → modules → entire system.
@@ -40,7 +40,7 @@ Do **not** use for:
 
 ## 3. How This Skill Behaves
 
-When active, Claude will:
+When active, the agent will:
 - Default to **ultra-granular analysis** of each block and line.
 - Apply micro-level First Principles, 5 Whys, and 5 Hows.
 - Build and refine a persistent global mental model.
@@ -67,7 +67,7 @@ Goal: **deep, accurate understanding**, not conclusions.
 
 ## 4. Phase 1 — Initial Orientation (Bottom-Up Scan)
 
-Before deep analysis, Claude performs a minimal mapping:
+Before deep analysis, the agent performs a minimal mapping:
 
 1. Identify major modules, components, and boundaries.
 2. Note obvious public/external entrypoints.
@@ -206,7 +206,7 @@ This example demonstrates the level of depth and structure required for all anal
 
 ### 5.4 Output Requirements
 
-When performing ultra-granular analysis, Claude MUST structure output following the format defined in [OUTPUT_REQUIREMENTS.md](resources/OUTPUT_REQUIREMENTS.md).
+When performing ultra-granular analysis, the agent MUST structure output following the format defined in [OUTPUT_REQUIREMENTS.md](resources/OUTPUT_REQUIREMENTS.md).
 
 Key requirements:
 - **Purpose** (2-3 sentences minimum)
@@ -268,7 +268,7 @@ These clusters help guide the vulnerability-hunting phase.
 ## 7. Stability & Consistency Rules
 *(Anti-Hallucination, Anti-Contradiction)*
 
-Claude must:
+The agent must:
 
 - **Never reshape evidence to fit earlier assumptions.**
   When contradicted:
@@ -293,18 +293,25 @@ Claude must:
 
 ---
 
-## 8. Subagent Usage
+## 8. Target Granularity & Subagent Usage
 
-Claude may spawn subagents for:
-- Dense or complex functions.
-- Long data-flow or control-flow chains.
+This skill governs analysis of a **single target**. The target may be a whole repository, one module, or one submodule. The invoking orchestrator decides granularity; this skill does not pick its own scope.
+
+When invoked from the v2 build orchestrator (`edc-build-impl`), this skill is spawned **per-module**: the agent's target is one module, sibling modules are accessed only through their signature index (no sibling source bodies), and the orchestrator never reads source code itself.
+
+**Mandatory split rule.** If the target exceeds the agent's working budget (heuristic: > ~30k LOC, > ~80 source files, or any single file > ~3k LOC), the agent MUST split the target into submodules and spawn nested subagents — one per submodule — instead of attempting a single pass. Reading the entire target into one context is not an option for large targets.
+
+Subagents (nested or top-level) must:
+- Run with a clean context (no parent conversation inheritance).
+- Follow the same micro-first rules defined in this skill.
+- Write per-target deep docs directly to disk at the path the orchestrator specifies.
+- Return a bounded summary (≤500 tokens) for the parent to integrate.
+
+Within a single-target run, the agent may also spawn nested subagents for:
+- Dense or complex individual functions.
+- Long data-flow or control-flow chains spanning many files within the target.
 - Cryptographic / mathematical logic.
 - Complex state machines.
-- Multi-module workflow reconstruction.
-
-Subagents must:
-- Follow the same micro-first rules.
-- Return summaries that Claude integrates into its global model.
 
 ---
 
@@ -326,7 +333,7 @@ It exists solely to build:
 
 ## 10. Non-Goals
 
-While active, Claude should NOT:
+While active, the agent should NOT:
 - Identify vulnerabilities
 - Propose fixes
 - Generate proofs-of-concept

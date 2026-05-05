@@ -80,8 +80,19 @@ function checkStaleness(projectRoot, manifest) {
 
 // --- script install ---
 // Copy edc-review.sh from plugin bundle into project's .edc/scripts/ if missing or stale.
+// Only runs inside an EDC-aware project: requires either .git/ or .context/manifest.json
+// so a stray session in ~/Downloads doesn't drop .edc/scripts/ into random dirs.
+
+function isEdcProject(projectRoot) {
+  return (
+    existsSync(join(projectRoot, ".git")) ||
+    existsSync(join(projectRoot, ".context", "manifest.json"))
+  );
+}
 
 function installOrchestratorScript(projectRoot) {
+  if (!isEdcProject(projectRoot)) return;
+
   const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
   const pluginScript = join(pluginDir, "scripts", "edc-review.sh");
   if (!existsSync(pluginScript)) return; // plugin bundle missing script — skip silently

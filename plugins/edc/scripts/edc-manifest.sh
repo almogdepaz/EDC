@@ -70,18 +70,15 @@ esac
 missing_prio=$(jq -r '[.modules[] | select(has("priority") | not) | (.name // "<unnamed>")] | join(",")' "$input")
 [ -z "$missing_prio" ] || reject "modules missing priority: $missing_prio"
 
-# Reject if deterministic fields are already populated.
-ga=$(jq -r '.generatedAt // ""' "$input")
-sc=$(jq -r '.sourceCommit // ""' "$input")
-[ -z "$ga" ] || reject "generatedAt is already populated"
-[ -z "$sc" ] || reject "sourceCommit is already populated"
-
-mfc=$(jq -r '.coverage.mappedFileCount   // 0' "$input")
-ufc=$(jq -r '.coverage.unmappedFileCount // 0' "$input")
-afc=$(jq -r '.coverage.ambiguousPathCount // 0' "$input")
-[ "$mfc" = "0" ] || reject "coverage.mappedFileCount is already populated"
-[ "$ufc" = "0" ] || reject "coverage.unmappedFileCount is already populated"
-[ "$afc" = "0" ] || reject "coverage.ambiguousPathCount is already populated"
+# Reject if deterministic fields are already populated. Use raw `has` so we
+# distinguish "field present with any value" (LLM tried to author it) from
+# "field absent" (the expected case before post-step fills it).
+jq -e 'has("generatedAt")  | not' "$input" >/dev/null \
+  || reject "generatedAt must not be authored by the LLM; the post-step fills it"
+jq -e 'has("sourceCommit") | not' "$input" >/dev/null \
+  || reject "sourceCommit must not be authored by the LLM; the post-step fills it"
+jq -e '(has("coverage") | not) or (.coverage | length == 0)' "$input" >/dev/null \
+  || reject "coverage.* must not be authored by the LLM; the post-step fills it"
 
 # Walk tracked files, route each via edc-route.sh, tally coverage.
 mapped=0

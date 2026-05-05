@@ -268,8 +268,13 @@ review_cmd() {
         agent="$2"
         shift 2
         ;;
-      --base|--ignore)
-        [ "$#" -ge 2 ] || die "$1 requires a value"
+      --base)
+        [ "$#" -ge 2 ] || die "--base requires a ref (e.g. --base main)"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --ignore)
+        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern (e.g. --ignore 'vendor/**')"
         passthrough+=("$1" "$2")
         shift 2
         ;;

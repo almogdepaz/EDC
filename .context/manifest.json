@@ -138,6 +138,7 @@
   "unmapped": {
     "allowedGlobs": [
       "*.md",
+      "*.json",
       ".claude-plugin/**",
       ".context/**",
       ".edc/**"

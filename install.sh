@@ -1,9 +1,13 @@
 #!/bin/bash
 # EDC — Every Day Carry Skills installer
-# Legacy usage:
-#   curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s cursor
-# Local/runtime-mode usage:
-#   bash install.sh --agent claude --context-mode advisory|inject
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s <agent>
+#   bash install.sh --agent <agent>
+#
+# Agents: claude, cursor, codex
+#
+# Runtime mode (advisory vs inject) is controlled by `.context/manifest.json`'s
+# `policy.defaultMode` field. Flip it with: `edc mode advisory|inject`.
 
 set -euo pipefail
 
@@ -14,15 +18,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_PLUGIN_ROOT="$SCRIPT_DIR/plugins/edc"
 
 AGENT=""
-CONTEXT_MODE=""
 
 usage() {
   cat <<EOF
 Usage:
   curl -fsSL $BASE/install.sh | bash -s <agent>
-  bash install.sh --agent claude --context-mode advisory|inject
+  bash install.sh --agent <agent>
 
 Agents: claude, cursor, codex
+
+After install, toggle runtime mode in any repo with:
+  edc mode advisory   # docs only (default), hooks no-op
+  edc mode inject     # claude PreToolUse hook auto-injects module docs
 EOF
 }
 
@@ -31,21 +38,11 @@ die() {
   exit 1
 }
 
-not_implemented() {
-  echo "edc: $1 not yet implemented" >&2
-  exit 2
-}
-
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --agent)
       [ "$#" -ge 2 ] || die "--agent requires a value"
       AGENT="$2"
-      shift 2
-      ;;
-    --context-mode)
-      [ "$#" -ge 2 ] || die "--context-mode requires a value"
-      CONTEXT_MODE="$2"
       shift 2
       ;;
     --help|-h)
@@ -69,13 +66,6 @@ done
   usage
   exit 1
 }
-
-if [ -n "$CONTEXT_MODE" ]; then
-  case "$CONTEXT_MODE" in
-    advisory|inject) ;;
-    *) die "--context-mode must be advisory or inject" ;;
-  esac
-fi
 
 SKILLS=(
   "plugins/edc/skills/edc-context/SKILL.md"
@@ -119,17 +109,6 @@ skill_rel() {
   echo "${1#plugins/edc/skills/}"
 }
 
-set_manifest_mode() {
-  local mode="$1"
-  local manifest=".context/manifest.json"
-  [ -f "$manifest" ] || die ".context/manifest.json not found in $(pwd)"
-  command -v jq > /dev/null 2>&1 || die "jq is required to update .context/manifest.json"
-  local tmp
-  tmp="$(mktemp)"
-  jq --arg mode "$mode" '.policy.defaultMode = $mode' "$manifest" > "$tmp"
-  mv "$tmp" "$manifest"
-}
-
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
   mkdir -p "$scripts_target"
@@ -160,9 +139,7 @@ print_path_hint() {
 }
 
 install_claude_runtime() {
-  local mode="$1"
   local target="$HOME/.claude/plugins/edc"
-  local hooks_target="$target/hooks/hooks.json"
 
   if [ -d "$LOCAL_PLUGIN_ROOT" ]; then
     mkdir -p "$HOME/.claude/plugins"
@@ -175,6 +152,8 @@ install_claude_runtime() {
     copy_or_download "plugins/edc/commands/edc-audit.md" "$target/commands/edc-audit.md"
     copy_or_download "plugins/edc/commands/edc-review.md" "$target/commands/edc-review.md"
     copy_or_download "plugins/edc/commands/edc-run-review.md" "$target/commands/edc-run-review.md"
+    copy_or_download "plugins/edc/commands/edc-doctor.md" "$target/commands/edc-doctor.md"
+    copy_or_download "plugins/edc/hooks/hooks.json" "$target/hooks/hooks.json"
     copy_or_download "plugins/edc/hooks/session-start.mjs" "$target/hooks/session-start.mjs"
     copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
     copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
@@ -182,66 +161,20 @@ install_claude_runtime() {
     copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
   fi
 
-  if [ "$mode" = "inject" ]; then
-    cat > "$hooks_target" <<'EOF'
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs\""
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-context-inject.mjs\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-  else
-    cat > "$hooks_target" <<'EOF'
-{
-  "hooks": {}
-}
-EOF
-  fi
-
-  set_manifest_mode "$mode"
   install_terminal_cli
-  echo "Installed EDC Claude runtime in $target ($mode mode)."
+  echo "Installed EDC Claude runtime in $target."
   echo "Terminal CLI installed at $HOME/.edc/scripts/edc."
+  echo "Runtime mode is read from .context/manifest.json (defaults to advisory)."
+  echo "Flip with: edc mode inject"
   print_path_hint
 }
 
 case "$AGENT" in
   claude)
-    if [ -z "$CONTEXT_MODE" ]; then
-      echo "For Claude Code, use the marketplace:"
-      echo "  claude plugins marketplace add $REPO"
-      echo "  claude plugins install edc@edc"
-      exit 0
-    fi
-    install_claude_runtime "$CONTEXT_MODE"
+    install_claude_runtime
     ;;
 
   cursor)
-    if [ -n "$CONTEXT_MODE" ]; then
-      not_implemented "cursor/$CONTEXT_MODE"
-    fi
     TARGET="$HOME/.cursor"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Cursor..."
@@ -263,9 +196,6 @@ case "$AGENT" in
     ;;
 
   codex)
-    if [ -n "$CONTEXT_MODE" ]; then
-      not_implemented "codex/$CONTEXT_MODE"
-    fi
     TARGET="$HOME/.codex/skills"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC skills globally for Codex..."

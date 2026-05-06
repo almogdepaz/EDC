@@ -114,7 +114,7 @@ Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*`. The determin
 }
 ```
 
-- `defaultMode`: **if `.context/manifest.json` already exists, preserve its `policy.defaultMode` value** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not silently revert that choice. If no prior manifest exists, default to `"advisory"`. `"inject"` is the only other allowed value during build authoring. Do not emit `"strict"` here — strict is a runtime install choice, not a build default.
+- `defaultMode`: **if `.context/manifest.json` already exists, preserve its `policy.defaultMode` value** — it may have been set by `edc mode advisory|inject` and rebuilds must not silently revert that choice. If no prior manifest exists, default to `"advisory"`. `"inject"` is the only other allowed value.
 - `unmatchedPathPolicy`: must be `"warn-allow"`.
 
 Do not write any other `policy.*` fields during build (no `guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`, etc.). Those are runtime install concerns.
@@ -138,7 +138,7 @@ A non-zero exit from `edc-manifest.sh` is a build failure. Do not write a hand-e
 - a short startup orientation header
 - a pointer to `.context/index.md` as the architecture overview
 - a pointer to `.context/manifest.json` as the authoritative routing/policy contract
-- a one-line statement of the installed runtime mode (advisory / inject / strict), or "not installed" if no runtime adapter is present yet
+- a one-line statement of the current runtime mode (advisory or inject), read from `.context/manifest.json`'s `policy.defaultMode`
 
 Keep `AGENTS.md` short. It is not a substitute for `.context/index.md` — it just tells agents where to look.
 

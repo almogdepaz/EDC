@@ -59,13 +59,11 @@ These are intermediate artifacts. Runtime adapters MUST NOT auto-load them.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `defaultMode` | enum: `"advisory"` \| `"inject"` | yes | Repo-default runtime mode. `advisory` means EDC only ships docs and instructions; `inject` means the harness auto-loads the matching module doc when it can. The two valid values are `advisory` and `inject`. (The `strict` mode is set at install time and is not encoded in `policy.defaultMode`.) |
-| `guardedTools` | string[] | optional | Tools that, in inject/strict installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
+| `defaultMode` | enum: `"advisory"` \| `"inject"` | yes | Repo-default runtime mode. `advisory` means EDC only ships docs and instructions; `inject` means the harness auto-loads the matching module doc when it can. Flip with `edc mode advisory\|inject`. |
+| `guardedTools` | string[] | optional | Tools that, in inject installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
 | `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `.context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
 | `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `.context/**`, `AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
 | `unmatchedPathPolicy` | enum: `"warn-allow"` | yes | Behavior for code paths that match no module. v2 only defines `"warn-allow"`: edits/writes against unmatched paths are warned and allowed; `edc doctor` flags the gap. This keeps the manifest an honest contract instead of a precondition for adding new code. |
-
-`defaultMode` lists `advisory` and `inject` because those are the values a build can sensibly default to without harness-specific install state. `strict` is a runtime install choice (selected via `edc install --context-mode strict`) and is recorded in installed runtime artifacts, not in the manifest's default.
 
 ---
 
@@ -75,7 +73,7 @@ Each entry routes a slice of the repo to a deep module doc.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `name` | string | yes | Stable module identifier. Lowercase, kebab-case. Used as the registry key for the loaded-set in inject/strict modes. |
+| `name` | string | yes | Stable module identifier. Lowercase, kebab-case. Used as the registry key for the loaded-set in inject mode. |
 | `doc` | string (path) | yes | Path to the module doc, normally `.context/modules/<name>.md`. |
 | `summary` | string | yes | One-sentence module description. |
 | `priority` | integer | yes | Tie-breaker for ambiguous matches. Higher wins. Default convention: `100`. |
@@ -189,7 +187,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     // build-time default; "advisory" or "inject" only
     "defaultMode": "advisory",
 
-    // tools gated on the matching module doc being loaded (inject/strict)
+    // tools gated on the matching module doc being loaded (inject only)
     "guardedTools": ["read", "edit", "write"],
 
     // tools gated only on .context/index.md being loaded
@@ -292,19 +290,15 @@ A file like `chia/consensus/blockchain.py` resolves at Tier 1 directly to `conse
    See [`.context/manifest.json`](.context/manifest.json) for the authoritative path→module routing contract, enforcement policy, and report locations. Runtime adapters consult this file directly; do not duplicate or paraphrase its rules.
    ```
 
-4. **Statement of the installed runtime mode.** A line declaring which mode (`advisory`, `inject`, or `strict`) is installed for this repo. If no runtime is installed yet, say so:
+4. **Statement of the runtime mode.** A line reflecting `policy.defaultMode` from `.context/manifest.json`:
    ```md
    ## Runtime Mode
 
-   Installed runtime mode: **inject**. The harness auto-loads the matching module doc from `.context/modules/<name>.md` before guarded operations.
+   Runtime mode: **inject**. The harness auto-loads the matching module doc from `.context/modules/<name>.md` before guarded operations.
    ```
-   For `strict`:
+   For `advisory`:
    ```md
-   Installed runtime mode: **strict**. Code-touching tools are gated on the matching `.context/modules/<name>.md` having been Read in this session. Discovery tools are gated on `.context/index.md`.
-   ```
-   For `advisory` or no install:
-   ```md
-   Installed runtime mode: **advisory**. EDC ships docs only; loading is best-effort. Read `.context/index.md` first, then the relevant `.context/modules/<name>.md`.
+   Runtime mode: **advisory**. EDC ships docs only; loading is best-effort. Read `.context/index.md` first, then the relevant `.context/modules/<name>.md`.
    ```
 
-`edc build` MUST emit all four sections. `edc install --context-mode <mode>` MUST rewrite the runtime-mode section in place to match the installed mode.
+`edc build` MUST emit all four sections. Flip the runtime mode at any time with `edc mode advisory|inject`; rebuilds preserve the existing value.

@@ -139,7 +139,7 @@ Issues removed: <count>
 
 ### Step 10 — Refresh `.context/manifest.json`
 
-Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). **Preserve `policy.defaultMode` from the existing `.context/manifest.json`** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not revert that choice. Likewise preserve any other install-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
+Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). **Preserve `policy.defaultMode` from the existing `.context/manifest.json`** — it may have been set by `edc mode advisory|inject` and rebuilds must not revert that choice. Likewise preserve any other operator-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
 
 Pipe the partial manifest through the deterministic generator to refresh `coverage.*` and `sourceCommit`:
 

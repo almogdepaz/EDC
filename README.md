@@ -32,7 +32,7 @@ Run these entrypoints in order on any codebase:
 
 ### Hooks (Claude Code only)
 
-The plugin installs two hooks that run automatically, designed to keep context overhead minimal:
+The plugin installs two hooks. They run automatically when `policy.defaultMode` in `.context/manifest.json` is set to `inject`; in `advisory` mode (the default) they no-op so context loading stays manual. Toggle with `edc mode inject` / `edc mode advisory`.
 
 - **SessionStart** — loads `.context/index.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
 
@@ -51,17 +51,29 @@ claude plugins marketplace add almogdepaz/edc
 claude plugins install edc@edc
 ```
 
-Alternative — install the runtime directly (bypasses the marketplace, lets you pick the context-injection mode up front):
+Alternative — install the runtime directly (bypasses the marketplace):
 
 ```bash
 # clone first, then run from the checkout
-bash install.sh --agent claude --context-mode advisory   # default: docs only, agent reads `.context/index.md` and module docs on demand
-bash install.sh --agent claude --context-mode inject     # PreToolUse hook auto-injects module docs on Edit/Write/Bash
+bash install.sh --agent claude
 ```
 
-The `--context-mode` flag writes `.policy.defaultMode` into `.context/manifest.json` and toggles the hooks file accordingly. Re-run with the other mode to flip.
+#### Runtime mode (advisory vs inject)
 
-Fresh `/edc:edc-build` runs default to `advisory`; the hooks shipped by the marketplace plugin respect that and stay inert until you flip to `inject`.
+A single field in `.context/manifest.json` controls behavior:
+
+- `policy.defaultMode: "advisory"` (default) — EDC ships docs only. The agent reads `.context/index.md` and `.context/modules/<name>.md` on demand. Hooks are wired in but no-op.
+- `policy.defaultMode: "inject"` — Claude Code's `SessionStart` hook surfaces `.context/index.md` automatically; the `PreToolUse` hook resolves the file you're editing to its module via `manifest.json` and injects `.context/modules/<name>.md` once per session.
+
+Flip it any time after a build:
+
+```bash
+edc mode               # show current mode
+edc mode inject        # turn on auto-injection
+edc mode advisory      # turn it off
+```
+
+`inject` only changes behavior for Claude Code (it's hook-driven). Cursor and Codex don't have an equivalent hook system, so the flag has no effect there.
 
 ### Cursor
 

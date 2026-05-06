@@ -9,11 +9,13 @@ usage() {
 Usage:
   edc build --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc mode advisory|inject
   edc doctor
 
 Commands:
   build   Build or update .context/ in the target repo
   review  Run the differential review pipeline (auto-builds/updates context if needed)
+  mode    Set policy.defaultMode in .context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
@@ -318,6 +320,31 @@ doctor_cmd() {
   bash "$doctor_script"
 }
 
+mode_cmd() {
+  local mode="${1:-}"
+  case "$mode" in
+    advisory|inject) ;;
+    "")
+      local current
+      current="$(read_manifest_default_mode)"
+      [ -n "$current" ] || die ".context/manifest.json not found or missing policy.defaultMode"
+      printf '%s\n' "$current"
+      return 0
+      ;;
+    *) die "edc mode: argument must be 'advisory' or 'inject' (got: $mode)" ;;
+  esac
+
+  local manifest=".context/manifest.json"
+  [ -f "$manifest" ] || die "$manifest not found (run 'edc build' first)"
+  command -v jq > /dev/null 2>&1 || die "jq is required to update $manifest"
+
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg mode "$mode" '.policy.defaultMode = $mode' "$manifest" > "$tmp"
+  mv "$tmp" "$manifest"
+  echo "policy.defaultMode set to $mode in $manifest"
+}
+
 main() {
   [ "$#" -gt 0 ] || {
     usage
@@ -333,6 +360,9 @@ main() {
       ;;
     review)
       review_cmd "$@"
+      ;;
+    mode)
+      mode_cmd "$@"
       ;;
     doctor)
       doctor_cmd "$@"

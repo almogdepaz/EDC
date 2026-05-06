@@ -44,21 +44,41 @@ The result: the agent always has the architecture overview, gets deep module con
 
 ### Claude Code
 
+Recommended — install via the plugin marketplace:
+
 ```bash
 claude plugins marketplace add almogdepaz/edc
 claude plugins install edc@edc
 ```
 
+Alternative — install the runtime directly (bypasses the marketplace, lets you pick the context-injection mode up front):
+
+```bash
+# clone first, then run from the checkout
+bash install.sh --agent claude --context-mode inject     # default: PreToolUse hook injects module docs on Edit/Write/Bash
+bash install.sh --agent claude --context-mode advisory   # no auto-injection; the agent reads context on demand
+```
+
+The `--context-mode` flag writes `.policy.defaultMode` into `.context/manifest.json` and toggles the hooks file accordingly. Re-run with the other mode to flip.
+
 ### Cursor
 
 ```bash
+# remote one-liner
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s cursor
+
+# or from a local checkout
+bash install.sh --agent cursor
 ```
 
 ### Codex
 
 ```bash
+# remote one-liner
 curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s codex
+
+# or from a local checkout
+bash install.sh --agent codex
 ```
 
 This installs the user-facing Codex skills:

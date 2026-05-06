@@ -109,12 +109,12 @@ Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*`. The determin
 
 ```json
 "policy": {
-  "defaultMode": "inject",
+  "defaultMode": "advisory",
   "unmatchedPathPolicy": "warn-allow"
 }
 ```
 
-- `defaultMode`: **if `.context/manifest.json` already exists, preserve its `policy.defaultMode` value** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not silently revert that choice. If no prior manifest exists, default to `"inject"`. `"advisory"` is the only other allowed value during build authoring. Do not emit `"strict"` here — strict is a runtime install choice, not a build default.
+- `defaultMode`: **if `.context/manifest.json` already exists, preserve its `policy.defaultMode` value** — it may have been set by `install.sh --context-mode <mode>` and rebuilds must not silently revert that choice. If no prior manifest exists, default to `"advisory"`. `"inject"` is the only other allowed value during build authoring. Do not emit `"strict"` here — strict is a runtime install choice, not a build default.
 - `unmatchedPathPolicy`: must be `"warn-allow"`.
 
 Do not write any other `policy.*` fields during build (no `guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`, etc.). Those are runtime install concerns.

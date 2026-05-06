@@ -55,11 +55,13 @@ Alternative — install the runtime directly (bypasses the marketplace, lets you
 
 ```bash
 # clone first, then run from the checkout
-bash install.sh --agent claude --context-mode inject     # default: PreToolUse hook injects module docs on Edit/Write/Bash
-bash install.sh --agent claude --context-mode advisory   # no auto-injection; the agent reads context on demand
+bash install.sh --agent claude --context-mode advisory   # default: docs only, agent reads `.context/index.md` and module docs on demand
+bash install.sh --agent claude --context-mode inject     # PreToolUse hook auto-injects module docs on Edit/Write/Bash
 ```
 
 The `--context-mode` flag writes `.policy.defaultMode` into `.context/manifest.json` and toggles the hooks file accordingly. Re-run with the other mode to flip.
+
+Fresh `/edc:edc-build` runs default to `advisory`; the hooks shipped by the marketplace plugin respect that and stay inert until you flip to `inject`.
 
 ### Cursor
 

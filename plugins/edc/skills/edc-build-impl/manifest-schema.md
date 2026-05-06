@@ -187,7 +187,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
   // enforcement and gating policy
   "policy": {
     // build-time default; "advisory" or "inject" only
-    "defaultMode": "inject",
+    "defaultMode": "advisory",
 
     // tools gated on the matching module doc being loaded (inject/strict)
     "guardedTools": ["read", "edit", "write"],

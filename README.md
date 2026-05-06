@@ -2,7 +2,7 @@
 
 Deep codebase understanding and context-aware code review for AI coding agents. Inspired by [Trail of Bits](https://github.com/trailofbits/skills)' audit methodology, generalized for any language and any codebase.
 
-Works with **Claude Code**, **Cursor**, and **Codex**.
+Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
 ## What it does
 
@@ -14,6 +14,7 @@ Run these entrypoints in order on any codebase:
 - Claude Code: `/edc:...`
 - Codex: `$edc-...`
 - Cursor: installed `edc-run-*` commands
+- pi: `/edc-...`
 
 1. `/edc:edc-build` — discovers modules, then spawns one subagent per module to deeply analyze its files (function-level: First Principles, 5 Whys, 5 Hows) in parallel. Produces:
    - `AGENTS.md` — short runtime orientation
@@ -41,7 +42,7 @@ EDC ships two modes for Claude Code, controlled by `policy.defaultMode` in `.con
 
   Net effect in inject: the agent always has the overview, gets deep module context exactly when it touches a file in that module, and never loads the full project context.
 
-Cursor and Codex don't have a hook system, so they're docs-only regardless of the flag.
+Cursor and Codex don't have a hook system, so they're docs-only regardless of the flag. Pi has an event-based extension API and supports both modes (same `.context/manifest.json` toggle as Claude Code).
 
 ## Install
 
@@ -96,6 +97,18 @@ curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | ba
 # or from a local checkout
 bash install.sh --agent codex
 ```
+
+### pi
+
+```bash
+# direct (pi clones the repo and registers the extension)
+pi install git:github.com/almogdepaz/edc
+
+# or via the unified installer
+bash install.sh --agent pi
+```
+
+Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review`. Honors `policy.defaultMode` in `.context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
 
 This installs the user-facing Codex skills:
 - `$edc-build`

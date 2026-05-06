@@ -4,6 +4,10 @@
 __pycache__/
 *.pyc
 
+# pi extension peer-deps installed by `pi install` post-clone
+node_modules/
+package-lock.json
+
 # benchmark runtime / autoresearch state
 benchmark/autoresearch-output.log
 benchmark/BLOGPOST.md
@@ -37,3 +41,4 @@ PROJECT_REVIEW_*.md
 external_context_plan.md
 review-HEAD.md
 review-tasks/
+PLAN.md

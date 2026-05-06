@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s <agent>
 #   bash install.sh --agent <agent>
 #
-# Agents: claude, cursor, codex
+# Agents: claude, cursor, codex, pi
 #
 # Runtime mode (advisory vs inject) is controlled by `.context/manifest.json`'s
 # `policy.defaultMode` field. Flip it with: `edc mode advisory|inject`.
@@ -25,7 +25,7 @@ Usage:
   curl -fsSL $BASE/install.sh | bash -s <agent>
   bash install.sh --agent <agent>
 
-Agents: claude, cursor, codex
+Agents: claude, cursor, codex, pi
 
 After install, toggle runtime mode in any repo with:
   edc mode advisory   # docs only (default), hooks no-op
@@ -215,7 +215,22 @@ case "$AGENT" in
     echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
     ;;
 
+  pi)
+    if ! command -v pi >/dev/null 2>&1; then
+      die "pi CLI not found on PATH. Install pi first: https://github.com/mariozechner/pi"
+    fi
+    if [ -d "$SCRIPT_DIR/agents/pi" ]; then
+      bash "$SCRIPT_DIR/agents/pi/install.sh" --from-source
+    else
+      echo "Installing EDC as pi extension via git..."
+      pi install "git:github.com/almogdepaz/edc"
+    fi
+    install_terminal_cli
+    echo "Done. Run /edc-build inside pi to create context. Toggle mode with 'edc mode advisory|inject'."
+    print_path_hint
+    ;;
+
   *)
-    die "unknown agent: $AGENT (supported: claude, cursor, codex)"
+    die "unknown agent: $AGENT (supported: claude, cursor, codex, pi)"
     ;;
 esac

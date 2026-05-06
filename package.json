@@ -1,0 +1,42 @@
+{
+  "name": "edc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/almogdepaz/edc",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/almogdepaz/edc.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "edc",
+    "code-review",
+    "context",
+    "claude-code",
+    "cursor",
+    "codex"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@mariozechner/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./agents/pi/index.mjs"
+    ]
+  },
+  "scripts": {
+    "test": "for t in tests/hardening/*.sh; do bash \"$t\" || exit 1; done"
+  }
+}

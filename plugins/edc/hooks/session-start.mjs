@@ -1,8 +1,9 @@
-import { readFileSync, existsSync, copyFileSync, statSync, chmodSync } from "fs";
-import { mkdirSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
+import {
+  resolvePluginRoot,
+  buildSessionStartContent,
+  installOrchestratorScript,
+} from "./lib/route.mjs";
 
 // --- I/O helpers ---
 
@@ -44,86 +45,6 @@ function formatOutput(platform, content) {
   return content;
 }
 
-// --- manifest loading ---
-
-function loadManifest(projectRoot) {
-  const manifestPath = join(projectRoot, ".context", "manifest.json");
-  if (!existsSync(manifestPath)) return null;
-  try {
-    return JSON.parse(readFileSync(manifestPath, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-// --- staleness check ---
-
-function checkStaleness(projectRoot, manifest) {
-  const sourceCommit = manifest?.sourceCommit;
-  if (!sourceCommit) return null;
-
-  try {
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: projectRoot,
-      timeout: 3000,
-      encoding: "utf-8",
-    }).trim();
-
-    if (head !== sourceCommit) {
-      return { stale: true, sourceCommit, headCommit: head };
-    }
-    return { stale: false, sourceCommit, headCommit: head };
-  } catch {
-    return null;
-  }
-}
-
-// --- script install ---
-// Copy edc-review.sh from plugin bundle into project's .edc/scripts/ if missing or stale.
-// Only runs inside an EDC-aware project: requires either .git/ or .context/manifest.json
-// so a stray session in ~/Downloads doesn't drop .edc/scripts/ into random dirs.
-
-function isEdcProject(projectRoot) {
-  return (
-    existsSync(join(projectRoot, ".git")) ||
-    existsSync(join(projectRoot, ".context", "manifest.json"))
-  );
-}
-
-function installOrchestratorScript(projectRoot) {
-  if (!isEdcProject(projectRoot)) return;
-
-  const pluginDir = dirname(dirname(fileURLToPath(import.meta.url)));
-  const pluginScript = join(pluginDir, "scripts", "edc-review.sh");
-  if (!existsSync(pluginScript)) return; // plugin bundle missing script — skip silently
-
-  const destDir = join(projectRoot, ".edc", "scripts");
-  const destScript = join(destDir, "edc-review.sh");
-
-  let shouldCopy = !existsSync(destScript);
-  if (!shouldCopy) {
-    try {
-      const srcMtime = statSync(pluginScript).mtimeMs;
-      const dstMtime = statSync(destScript).mtimeMs;
-      shouldCopy = srcMtime > dstMtime;
-    } catch {
-      shouldCopy = true;
-    }
-  }
-
-  if (shouldCopy) {
-    try {
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(pluginScript, destScript);
-      chmodSync(destScript, 0o755);
-    } catch (err) {
-      process.stderr.write(
-        `[edc] WARNING: could not install edc-review.sh: ${err.message}\n`,
-      );
-    }
-  }
-}
-
 // --- main ---
 
 function main() {
@@ -137,52 +58,15 @@ function main() {
   const input = parseInput(raw);
   const platform = detectPlatform(input);
   const projectRoot = resolveProjectRoot(input);
+  const pluginRoot = resolvePluginRoot(import.meta.url);
 
   // ensure orchestrator script is installed in project
-  installOrchestratorScript(projectRoot);
+  installOrchestratorScript(projectRoot, pluginRoot);
 
-  const manifest = loadManifest(projectRoot);
-  const indexPath = join(projectRoot, ".context", "index.md");
+  const { mode, content } = buildSessionStartContent(projectRoot);
+  if (mode === "advisory") return;
 
-  const parts = [];
-
-  if (!manifest) {
-    parts.push(
-      [
-        "## EDC Context",
-        "",
-        "No codebase context built yet. Run `/edc:edc-build` to generate deep architectural context.",
-        "This enables automatic context injection when editing files.",
-      ].join("\n"),
-    );
-  } else {
-    // advisory mode: hook is a no-op
-    if (manifest.policy?.defaultMode === "advisory") {
-      return;
-    }
-
-    const staleness = checkStaleness(projectRoot, manifest);
-    if (staleness?.stale) {
-      parts.push(
-        [
-          "## EDC Staleness Warning",
-          "",
-          `Context was built at commit \`${staleness.sourceCommit.slice(0, 8)}\` but HEAD is \`${staleness.headCommit.slice(0, 8)}\`.`,
-          "Run `/edc:edc-build` to update.",
-        ].join("\n"),
-      );
-    }
-
-    if (existsSync(indexPath)) {
-      try {
-        parts.push(readFileSync(indexPath, "utf-8"));
-      } catch {
-        // file disappeared between check and read
-      }
-    }
-  }
-
-  const output = formatOutput(platform, parts.join("\n\n"));
+  const output = formatOutput(platform, content);
   if (output) {
     process.stdout.write(output);
   }

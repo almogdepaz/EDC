@@ -38,7 +38,7 @@ rc=$?
 - DO NOT invoke `edc:edc-split` / `Skill(edc:edc-split)` / any "split" step. There is no split in v2 — module docs are written directly to `.context/modules/<name>.md` by per-module subagents in step 2 of [Full Build](#full-build).
 - DO NOT invoke `Skill(edc:edc-context)` at the orchestrator level. The `edc-context` skill is invoked ONLY inside per-module subagents spawned in step 2. A top-level invocation will produce v1-shaped output and a single-context whole-repo pass that violates the v2 contract.
 - DO NOT invoke `Skill(edc:edc-audit)` (the slash-command-style skill). The build calls `edc-audit-impl` directly in step 5.
-- DO NOT write `.context/.meta.json`, `.context/context.md`, `.context/full-context.md` at top level, or any top-level per-module markdown. Those are v1 paths. v2 paths are listed in [Full Build](#full-build).
+- DO NOT write `.context/.meta.json`, `.context/context.md`, or any top-level per-module markdown. Those are v1 paths. v2 paths are listed in [Full Build](#full-build).
 
 **CRITICAL — Clean Slate Rule:** All analysis (`edc-context`, `edc-review-impl`, `edc-audit-impl`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
@@ -58,7 +58,6 @@ AGENTS.md
     issues.md
     complexity.md
   build/
-    full-context.md
     build.json
 ```
 
@@ -78,7 +77,7 @@ Build steps:
 
    Reports live under `.context/reports/`, never at the top level of `.context/`.
 
-6. **Build provenance.** Write `.context/build/build.json` with the build metadata (build timestamp, EDC version, list of modules emitted, ignore-rule provenance, source-commit placeholder). Concatenate the per-module deep docs from step 2 into `.context/build/full-context.md` as the consolidated provenance dump. Adapters MUST NOT auto-load anything under `.context/build/`.
+6. **Build provenance.** Write `.context/build/build.json` with the build metadata (build timestamp, EDC version, list of modules emitted, ignore-rule provenance, source-commit placeholder). Adapters MUST NOT auto-load anything under `.context/build/`.
 
 7. **Manifest.** Author a partial `manifest.json` (LLM-owned fields only) and pipe it through `plugins/edc/scripts/edc-manifest.sh` to produce the final `.context/manifest.json`. See [Manifest Authoring](#manifest-authoring).
 
@@ -98,7 +97,7 @@ The schema and field-ownership rules are documented in `manifest-schema.md`. Sum
 - `edcVersion` — current EDC release semver string
 - `repoContextFile` — `.context/index.md`
 - `reports` — `{ "issues": ".context/reports/issues.md", "complexity": ".context/reports/complexity.md" }`
-- `build` — `{ "fullContextFile": ".context/build/full-context.md", "buildInfoFile": ".context/build/build.json" }`
+- `build` — `{ "buildInfoFile": ".context/build/build.json" }`
 - `policy` — see below
 - `modules[]` — one entry per module with `name`, `doc`, `summary`, `priority`, and `match` (any of `exactFiles`, `prefixes`, `globs`)
 - `unmapped.allowedGlobs` — repo paths intentionally outside any module (e.g. top-level docs, build artifact dirs)
@@ -153,7 +152,7 @@ Manual checklist (must all pass):
 - `.context/manifest.json` exists, parses as JSON, and `schemaVersion == 2`
 - every entry in `manifest.modules[].doc` resolves to a file that exists
 - `.context/reports/issues.md` and `.context/reports/complexity.md` exist
-- `.context/build/full-context.md` and `.context/build/build.json` exist
+- `.context/build/build.json` exists
 - `bash plugins/edc/scripts/edc-clean-slate.sh --check` exits `11` (no v1 leftovers, no partial-v2 state)
 
 If any check fails, the build has failed. Surface the specific failure (which file/check); do not declare success and do not leave a half-built `.context/` on disk — re-run `edc-clean-slate.sh --force` and retry, or surface the failure to the caller. A "successful" build that doesn't produce `manifest.json` is a CRITICAL bug and must be reported.

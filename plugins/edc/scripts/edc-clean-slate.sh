@@ -9,7 +9,7 @@
 # v1 indicators (any of):
 #   .context/.meta.json
 #   .context/context.md
-#   .context/full-context.md  (v1 placed it at top level; v2 puts it under build/)
+#   .context/full-context.md  (v1 placed it at top level; v2 no longer produces it)
 #   .context/issues.md        (v1 placed it at top level; v2 puts it under reports/)
 #   .context/complexity.md    (v1 top-level; v2 under reports/)
 #   any other top-level *.md file in .context/ besides index.md

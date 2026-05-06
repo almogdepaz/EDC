@@ -4,7 +4,7 @@ When performing ultra-granular analysis, Claude MUST structure output following 
 
 ## Output Destination (v2)
 
-When this skill runs as part of a v2 build, the per-module deep-context analysis is written to `.context/modules/<name>.md` — one file per module, with stable kebab-case names. The consolidated provenance dump (all raw analysis combined) goes to `.context/build/full-context.md`. Per-module docs MUST NOT be written at the top level of `.context/`.
+When this skill runs as part of a v2 build, the per-module deep-context analysis is written to `.context/modules/<name>.md` — one file per module, with stable kebab-case names. Per-module docs MUST NOT be written at the top level of `.context/`.
 
 ---
 

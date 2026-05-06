@@ -32,7 +32,7 @@ rc=$?
 
 `.context/manifest.json` and `.context/index.md` must both exist. `manifest.json` is the only routing/policy contract in the v2 layout. If either is missing after a `rc == 11` check, that is an invariant violation — fail loudly.
 
-If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `.context/` or unrelated tracked paths), the update is a no-op. Skip to Step 11 (Validate) and exit 0 — but only after confirming the layout is still healthy. Never declare success when `manifest.json` is missing or invalid.
+If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `.context/` or unrelated tracked paths), the update is a no-op. Skip to Step 10 (Validate) and exit 0 — but only after confirming the layout is still healthy. Never declare success when `manifest.json` is missing or invalid.
 
 ## Process
 
@@ -121,23 +121,7 @@ Re-read all `.context/modules/*.md` files. Check if any of these changed:
 
 If any changed, rewrite `.context/index.md` (preserving the `##` heading requirement). If not, leave it alone.
 
-### Step 9 — Update `.context/build/full-context.md`
-
-Append a section to `.context/build/full-context.md` documenting this incremental update:
-
-```
----
-## Incremental Update — <date>
-Base: <commit>
-Head: <commit>
-Changed files: <list>
-Modules re-analyzed: <list>
-Modules removed: <list>
-Issues added: <count>
-Issues removed: <count>
-```
-
-### Step 10 — Refresh `.context/manifest.json`
+### Step 9 — Refresh `.context/manifest.json`
 
 Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). **Preserve `policy.defaultMode` from the existing `.context/manifest.json`** — it may have been set by `edc mode advisory|inject` and rebuilds must not revert that choice. Likewise preserve any other operator-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
 
@@ -149,7 +133,7 @@ cat /tmp/partial-manifest.json | bash plugins/edc/scripts/edc-manifest.sh > .con
 
 A non-zero exit from `edc-manifest.sh` is an update failure — surface it instead of writing a hand-edited manifest.
 
-### Step 11 — Validate
+### Step 10 — Validate
 
 After the update, verify the v2 layout still holds:
 

@@ -48,10 +48,9 @@ Adapters MAY add extra report keys (e.g. `security`, `performance`); unknown key
 
 | Key | Path |
 |---|---|
-| `fullContextFile` | `.context/build/full-context.md` |
 | `buildInfoFile` | `.context/build/build.json` |
 
-These are intermediate artifacts. Runtime adapters MUST NOT auto-load them.
+Build provenance only. Runtime adapters MUST NOT auto-load it.
 
 ---
 
@@ -139,7 +138,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
 `edc doctor` fails when any of the following hold:
 
 1. `schemaVersion` is missing or not equal to `2`.
-2. `edcVersion`, `repoContextFile`, `reports.issues`, `reports.complexity`, `build.fullContextFile`, `build.buildInfoFile`, `policy.defaultMode`, `policy.unmatchedPathPolicy`, or `unmapped.allowedGlobs` is missing.
+2. `edcVersion`, `repoContextFile`, `reports.issues`, `reports.complexity`, `build.buildInfoFile`, `policy.defaultMode`, `policy.unmatchedPathPolicy`, or `unmapped.allowedGlobs` is missing.
 3. `policy.defaultMode` is not one of `"advisory"`, `"inject"`.
 4. `policy.unmatchedPathPolicy` is not `"warn-allow"`.
 5. `modules` is empty.
@@ -176,9 +175,8 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     "complexity": ".context/reports/complexity.md"
   },
 
-  // intermediate provenance artifacts; not auto-loaded
+  // build provenance; not auto-loaded
   "build": {
-    "fullContextFile": ".context/build/full-context.md",
     "buildInfoFile": ".context/build/build.json"
   },
 

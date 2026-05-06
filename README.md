@@ -22,7 +22,7 @@ Run these entrypoints in order on any codebase:
    - `.context/modules/<name>.md` — deep per-module analysis
    - `.context/reports/issues.md` — actionable list of all problems found
    - `.context/reports/complexity.md` — bloat, duplication, overengineering audit
-   - `.context/build/full-context.md` and `.context/build/build.json`
+   - `.context/build/build.json` — build provenance (timestamp, version, source commit, modules emitted)
 
 2. `/edc:edc-update` — incremental update from branch diff, so you don't rebuild from scratch on every PR
 

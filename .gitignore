@@ -28,7 +28,7 @@ benchmark/gepa/
 # local planning / handoff docs
 AUTORESEARCH_HANDOVER.md
 BUILD_REGRESSION_*.md
-EDC_V2_*.md
+EDC_V2_*
 GEPA_PLAN.md
 HANDOFF.md
 PHASE2_*.md

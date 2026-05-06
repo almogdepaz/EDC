@@ -15,7 +15,7 @@ Run these entrypoints in order on any codebase:
 - Codex: `$edc-...`
 - Cursor: installed `edc-run-*` commands
 
-1. `/edc:edc-build` — analyzes every function line-by-line using First Principles, 5 Whys, and 5 Hows. Produces:
+1. `/edc:edc-build` — discovers modules, then spawns one subagent per module to deeply analyze its files (function-level: First Principles, 5 Whys, 5 Hows) in parallel. Produces:
    - `AGENTS.md` — short runtime orientation
    - `.context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
    - `.context/manifest.json` — routing and policy contract
@@ -30,15 +30,18 @@ Run these entrypoints in order on any codebase:
 
 4. `/edc:edc-run-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
 
-### Hooks (Claude Code only)
+### Two runtime modes (Claude Code)
 
-The plugin installs two hooks. They run automatically when `policy.defaultMode` in `.context/manifest.json` is set to `inject`; in `advisory` mode (the default) they no-op so context loading stays manual. Toggle with `edc mode inject` / `edc mode advisory`.
+EDC ships two modes for Claude Code, controlled by `policy.defaultMode` in `.context/manifest.json`. See [Install → Claude Code](#claude-code) for how to flip them.
 
-- **SessionStart** — loads `.context/index.md` (the lightweight architecture overview) at the start of every session. The deep per-module files are intentionally not loaded here — the overview is enough to orient the agent without burning tokens on context it may never need.
+- **`advisory`** (default) — pure docs. The plugin installs hooks but they no-op. The agent reads `.context/index.md` and the relevant `.context/modules/<name>.md` on its own (slash commands prompt for it; otherwise it's the user's call). Zero token overhead per tool call.
+- **`inject`** — auto-loaded context. Two hooks fire:
+  - `SessionStart` surfaces `.context/index.md` (lightweight architecture map) on session boot
+  - `PreToolUse` resolves the file you're about to `Edit`/`Write`/`Bash` to its module via `manifest.json` and injects `.context/modules/<name>.md` once per session (deduplicated)
 
-- **PreToolUse** — before every `Edit`, `Write`, or `Bash` call, resolves the target file to its module via `.context/manifest.json`, then injects only that module's `.context/modules/<name>.md`. Each module is injected at most once per session (deduplicated), so repeated edits to the same module don't re-inject.
+  Net effect in inject: the agent always has the overview, gets deep module context exactly when it touches a file in that module, and never loads the full project context.
 
-The result: the agent always has the architecture overview, gets deep module context exactly when it needs it, and never loads the full project context.
+Cursor and Codex don't have a hook system, so they're docs-only regardless of the flag.
 
 ## Install
 
@@ -51,29 +54,28 @@ claude plugins marketplace add almogdepaz/edc
 claude plugins install edc@edc
 ```
 
-Alternative — install the runtime directly (bypasses the marketplace):
+Alternative — install the runtime directly from a clone:
 
 ```bash
-# clone first, then run from the checkout
 bash install.sh --agent claude
 ```
 
-#### Runtime mode (advisory vs inject)
+Both paths install the plugin (slash commands + hooks + skills) and the terminal CLI (`~/.edc/scripts/edc`).
 
-A single field in `.context/manifest.json` controls behavior:
+#### Picking a mode
 
-- `policy.defaultMode: "advisory"` (default) — EDC ships docs only. The agent reads `.context/index.md` and `.context/modules/<name>.md` on demand. Hooks are wired in but no-op.
-- `policy.defaultMode: "inject"` — Claude Code's `SessionStart` hook surfaces `.context/index.md` automatically; the `PreToolUse` hook resolves the file you're editing to its module via `manifest.json` and injects `.context/modules/<name>.md` once per session.
-
-Flip it any time after a build:
+After running `/edc:edc-build` once in a target repo, choose how aggressive context loading should be:
 
 ```bash
-edc mode               # show current mode
-edc mode inject        # turn on auto-injection
-edc mode advisory      # turn it off
+edc mode               # show the current mode
+edc mode advisory      # default — docs only, hooks no-op
+edc mode inject        # auto-load context via hooks
 ```
 
-`inject` only changes behavior for Claude Code (it's hook-driven). Cursor and Codex don't have an equivalent hook system, so the flag has no effect there.
+- **`advisory`** if you want minimum token overhead and prefer to drive context loading via slash commands (`/edc:edc-run-review` etc.) or by reading `.context/` files yourself.
+- **`inject`** if you want the agent to always have the architecture overview at session start and to automatically receive the relevant module doc the first time it touches a file in each module during the session.
+
+The flag is a `jq` write to `.context/manifest.json`; flip it as often as you like. Rebuilds preserve the chosen mode.
 
 ### Cursor
 
@@ -136,10 +138,18 @@ Cursor and Codex installs also place a shared terminal wrapper at `~/.edc/script
 ~/.edc/scripts/edc review --agent cursor HEAD --base main
 ~/.edc/scripts/edc review --agent codex https://github.com/owner/repo/pull/42
 ~/.edc/scripts/edc review --agent codex HEAD --base main --ignore 'generated/**'
+
+# claude runtime-mode toggle (no-op for cursor/codex)
+~/.edc/scripts/edc mode                # show current mode
+~/.edc/scripts/edc mode inject         # turn on auto-injection
+~/.edc/scripts/edc mode advisory       # turn it off
+
+# validate the .context/ layout
+~/.edc/scripts/edc doctor
 ```
 
 Notes:
-- `--agent` is mandatory.
+- `--agent` is mandatory for `build` and `review` (not for `mode` or `doctor`).
 - `build` defaults to the current directory if no path is passed.
 - `--ignore` may be repeated. If any `--ignore` flags are passed, EDC ignores `.edcignore` for that run.
 - Otherwise, if `.edcignore` exists in the repo root, EDC reads non-empty, non-comment lines from it as repo-relative glob patterns.
@@ -213,6 +223,7 @@ Without `--base`, the target's parent (`<target>^`) is used — this means you r
 ```
 edc/
   install.sh                         # one-line installer for all agents
+  scripts/edc                        # terminal CLI (build / review / mode / doctor)
   plugins/edc/                       # Claude Code plugin (single source of truth)
     .claude-plugin/plugin.json
     commands/                        # claude slash commands

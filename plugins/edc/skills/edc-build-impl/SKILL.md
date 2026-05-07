@@ -17,28 +17,22 @@ Before building or updating context, resolve ignore patterns in this order:
 
 Apply ignore rules to repo-relative file paths before selecting files or modules to analyze.
 
-## Routing
+## Routing (orchestrator-owned)
 
-Routing is decided by the filesystem, not by judgment. Run this exact check first:
+Routing is decided by `plugins/edc/scripts/edc-build.sh` BEFORE this skill is invoked. By the time this skill runs, the orchestrator has already:
 
-```bash
-bash plugins/edc/scripts/edc-clean-slate.sh --check
-rc=$?
-```
+- run `edc-clean-slate.sh --check` to inspect on-disk state
+- decided whether to spawn a full build or an incremental update
+- wiped any partial-v2 state if needed (via `edc-clean-slate.sh --force`)
+- chosen this skill because the route is "full build"
 
-- `rc == 11` (healthy v2 layout) AND `--force` NOT passed → invoke the `edc-update-impl` skill. Do not fall through to a full build.
-- `rc == 11` AND `--force` passed → run `bash plugins/edc/scripts/edc-clean-slate.sh --force` then go to [Full Build](#full-build).
-- `rc == 10` (v1 leftovers or partial v2 detected) → run `bash plugins/edc/scripts/edc-clean-slate.sh` (auto-wipe) then go to [Full Build](#full-build). DO NOT route to update — `.meta.json`, top-level `.context/context.md`, top-level per-module `.md` files, and a missing/invalid `manifest.json` are ALL v1/partial signals, never an "existing context" signal.
-- otherwise (no `.context/`) → go to [Full Build](#full-build).
-
-`manifest.json` is the only routing and policy contract in the v2 layout. Never key routing decisions on `.meta.json` or any other v1 artifact.
+**This skill always runs a full build.** Do not call `edc-clean-slate.sh`. Do not decide build-vs-update. Do not check for v1 markers — v1 is unsupported and the orchestrator already failed loudly if v1 markers were present.
 
 ### Forbidden patterns (do not do these)
 
-- DO NOT invoke `edc:edc-split` / `Skill(edc:edc-split)` / any "split" step. There is no split in v2 — module docs are written directly to `.context/modules/<name>.md` by per-module subagents in step 2 of [Full Build](#full-build).
-- DO NOT invoke `Skill(edc:edc-context)` at the orchestrator level. The `edc-context` skill is invoked ONLY inside per-module subagents spawned in step 2. A top-level invocation will produce v1-shaped output and a single-context whole-repo pass that violates the v2 contract.
+- DO NOT invoke `Skill(edc:edc-context)` at the orchestrator level. The `edc-context` skill is invoked ONLY inside per-module subagents spawned in step 2.
 - DO NOT invoke `Skill(edc:edc-audit)` (the slash-command-style skill). The build calls `edc-audit-impl` directly in step 5.
-- DO NOT write `.context/.meta.json`, `.context/context.md`, or any top-level per-module markdown. Those are v1 paths. v2 paths are listed in [Full Build](#full-build).
+- DO NOT write to v1 paths (`.context/.meta.json`, `.context/context.md`, or top-level per-module markdown). v2 paths are listed in [Full Build](#full-build).
 
 **CRITICAL — Clean Slate Rule:** All analysis (`edc-context`, `edc-review-impl`, `edc-audit-impl`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
@@ -85,7 +79,7 @@ Build steps:
 
 9. **Final validation.** Run the validator (see [Output Validation](#output-validation)). Any failure is a build failure — surface it; do not silently continue.
 
-   Cleanup of v1 leftovers happens BEFORE the build via `edc-clean-slate.sh` (see [Routing](#routing)), not at the end. By the time you reach this step, no v1 artifacts should exist; if any do, the routing step was bypassed and the build is invalid.
+   The orchestrator runs `edc-doctor.sh` after this skill returns, as an additional deterministic end-to-end check. Skill-internal validation must still pass; doctor is a backstop, not a substitute.
 
 The build is successful only when every required output above exists and the layout validates. `edc doctor` is the canonical end-to-end validator.
 
@@ -153,6 +147,5 @@ Manual checklist (must all pass):
 - every entry in `manifest.modules[].doc` resolves to a file that exists
 - `.context/reports/issues.md` and `.context/reports/complexity.md` exist
 - `.context/build/build.json` exists
-- `bash plugins/edc/scripts/edc-clean-slate.sh --check` exits `11` (no v1 leftovers, no partial-v2 state)
 
-If any check fails, the build has failed. Surface the specific failure (which file/check); do not declare success and do not leave a half-built `.context/` on disk — re-run `edc-clean-slate.sh --force` and retry, or surface the failure to the caller. A "successful" build that doesn't produce `manifest.json` is a CRITICAL bug and must be reported.
+If any check fails, the build has failed. Surface the specific failure (which file/check); do not declare success. The orchestrator will run `edc-doctor.sh` after this skill returns; a half-built layout will fail doctor and the orchestrator will surface the failure to the caller. A "successful" build that doesn't produce `manifest.json` is a CRITICAL bug and must be reported.

@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# Task 13 smoke test: end-to-end update orchestrator preflight + spawn.
+#
+# Pins the contract that scripts/edc-update.sh:
+#   - REFUSES to act when no .context/ exists (tells user to run build)
+#   - REFUSES on partial / malformed v2 (tells user to run --force build)
+#   - REFUSES on v1 layout with the migration hint
+#   - PROCEEDS on healthy v2 → spawns update subprocess → doctor validates
+#   - auto-detects --base from main/master if not provided
+#
+# Run from repo root: bash tests/hardening/t13-update-orchestrator.sh
+set -euo pipefail
+
+ORIG_DIR="$(pwd)"
+SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-update.sh"
+TMPDIR_T13=$(mktemp -d)
+MOCK_BIN="$TMPDIR_T13/bin"
+trap 'rm -rf "$TMPDIR_T13"' EXIT
+
+echo "=== T13: update orchestrator (mocked agent) ==="
+
+mkdir -p "$MOCK_BIN"
+cat > "$MOCK_BIN/claude" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+prompt=$(cat)
+LOG="${EDC_T13_LOG:?}"
+echo "spawned: $(echo "$prompt" | head -1)" >> "$LOG"
+echo "$prompt" > "$EDC_T13_LOG.prompt"
+
+if [[ "$prompt" == *"edc-update"* ]]; then
+  head=$(git rev-parse HEAD)
+  sed -i.bak 's/"sourceCommit":"[^"]*"/"sourceCommit":"'"$head"'"/' .context/manifest.json
+  rm -f .context/manifest.json.bak
+  exit 0
+fi
+
+if [[ "$prompt" == *"edc-build"* ]]; then
+  # Should never happen in T13 — update orchestrator must not spawn build.
+  echo "MOCK ERROR: update orchestrator spawned a build" >&2
+  exit 1
+fi
+
+echo "MOCK ERROR: unrecognized prompt: $prompt" >&2
+exit 1
+MOCK
+chmod +x "$MOCK_BIN/claude"
+
+setup_repo() {
+  rm -rf "$TMPDIR_T13/repo"
+  mkdir -p "$TMPDIR_T13/repo/src"
+  cd "$TMPDIR_T13/repo"
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_SYSTEM=/dev/null
+  git init -q -b main
+  git config user.email "t@t.com"
+  git config user.name "T"
+  git config commit.gpgsign false
+  echo "src" > src/main.py
+  git add src/main.py
+  git commit -q -m "init"
+  echo "" > "$TMPDIR_T13/log"
+}
+
+write_healthy_v2() {
+  mkdir -p .context/modules .context/reports .context/build
+  local commit_hash="${1:-}"
+  if [ -z "$commit_hash" ]; then
+    commit_hash=$(git rev-parse HEAD)
+  fi
+  cat > .context/manifest.json <<EOF
+{"schemaVersion":2,"sourceCommit":"$commit_hash","modules":[{"name":"root","doc":".context/modules/root.md","match":{"prefixes":["src/"]}}],"unmapped":{"allowedGlobs":["*"]},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"repoContextFile":".context/index.md","reports":{"issues":".context/reports/issues.md","complexity":".context/reports/complexity.md"},"build":{"buildInfoFile":".context/build/build.json"},"coverage":{"mappedFileCount":0,"unmappedFileCount":0,"ambiguousPathCount":0}}
+EOF
+  printf '<!-- t13 -->\n# Stub\n\n## Module Map\n\n- root\n' > .context/index.md
+  printf '<!-- t13 -->\n# root\n\n## Files\n\n- src.py\n' > .context/modules/root.md
+  printf '## Known Issues\n' > .context/reports/issues.md
+  printf '## Summary\n' > .context/reports/complexity.md
+  printf '{}' > .context/build/build.json
+  printf '# Repo\n\nSee .context/index.md\n' > AGENTS.md
+}
+
+export PATH="$MOCK_BIN:$PATH"
+export EDC_AGENT_CLI=claude
+export EDC_T13_LOG="$TMPDIR_T13/log"
+
+# ── 13a: no .context/ → REFUSE with "run edc-build" hint ────────────────────
+setup_repo
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ]; then
+  echo "FAIL (13a): expected non-zero exit on missing .context/"
+  echo "$out"; exit 1
+fi
+if echo "$out" | grep -q "no \.context/" && echo "$out" | grep -q "edc-build"; then
+  echo "PASS: no .context/ refused with build hint"
+else
+  echo "FAIL (13a): expected refusal mentioning 'no .context/' and 'edc-build'"
+  echo "$out"; exit 1
+fi
+if grep -q "spawned" "$EDC_T13_LOG"; then
+  echo "FAIL (13a): agent was spawned despite refusal"
+  cat "$EDC_T13_LOG"; exit 1
+fi
+
+# ── 13b: partial v2 (no manifest) → REFUSE with --force hint ─────────────────
+setup_repo
+mkdir -p .context/modules
+printf '# stub\n' > .context/modules/foo.md
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ]; then
+  echo "FAIL (13b): expected non-zero exit on partial v2"
+  echo "$out"; exit 1
+fi
+if echo "$out" | grep -q "partial or malformed" && echo "$out" | grep -q "force"; then
+  echo "PASS: partial v2 refused with --force hint"
+else
+  echo "FAIL (13b): expected refusal mentioning partial/malformed and --force"
+  echo "$out"; exit 1
+fi
+if grep -q "spawned" "$EDC_T13_LOG"; then
+  echo "FAIL (13b): agent was spawned despite refusal"
+  cat "$EDC_T13_LOG"; exit 1
+fi
+
+# ── 13c: v1 layout → REFUSE with migration hint ─────────────────────────────
+setup_repo
+mkdir -p .context
+printf '{}' > .context/.meta.json
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ]; then
+  echo "FAIL (13c): expected non-zero exit on v1 layout"
+  echo "$out"; exit 1
+fi
+if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf .context"; then
+  echo "PASS: v1 layout refused with migration hint"
+else
+  echo "FAIL (13c): expected migration hint"
+  echo "$out"; exit 1
+fi
+if grep -q "spawned" "$EDC_T13_LOG"; then
+  echo "FAIL (13c): agent was spawned despite refusal"
+  cat "$EDC_T13_LOG"; exit 1
+fi
+
+# ── 13d: healthy v2 → SPAWN update + auto-detect base ───────────────────────
+setup_repo
+write_healthy_v2
+echo "more" > src/extra.py && git add src/extra.py && git commit -q -m "more"
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -ne 0 ]; then
+  echo "FAIL (13d): orchestrator exited $result on healthy v2"
+  echo "$out"; exit 1
+fi
+if grep -q "spawned" "$EDC_T13_LOG"; then
+  echo "PASS: healthy v2 → update spawned"
+else
+  echo "FAIL (13d): expected agent spawn, log:"
+  cat "$EDC_T13_LOG"; exit 1
+fi
+# Verify the orchestrator passed --base (auto-detected from main).
+if grep -q -- '--base' "$EDC_T13_LOG.prompt"; then
+  echo "PASS: orchestrator auto-detected --base"
+else
+  echo "FAIL (13d): expected --base in spawned prompt"
+  cat "$EDC_T13_LOG.prompt"; exit 1
+fi
+
+# ── 13e: explicit --base passes through ──────────────────────────────────────
+setup_repo
+write_healthy_v2
+git checkout -q -b feature
+echo "explicit" > src/explicit.py && git add src/explicit.py && git commit -q -m "explicit"
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" --base main 2>&1) || result=$?
+if [ "$result" -ne 0 ]; then
+  echo "FAIL (13e): orchestrator exited $result with explicit --base"
+  echo "$out"; exit 1
+fi
+if grep -q -- '--base main' "$EDC_T13_LOG.prompt"; then
+  echo "PASS: explicit --base forwarded to skill prompt"
+else
+  echo "FAIL (13e): expected '--base main' in prompt"
+  cat "$EDC_T13_LOG.prompt"; exit 1
+fi
+
+cd "$ORIG_DIR"
+echo ""
+echo "All T13 checks passed."

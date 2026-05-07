@@ -7,8 +7,6 @@ SCRIPT="scripts/edc"
 SCRIPT_ABS="$(pwd)/scripts/edc"
 BASH_BIN="$(command -v bash)"
 ROOT_INSTALL="install.sh"
-CURSOR_INSTALL="agents/cursor/install.sh"
-CODEX_INSTALL="agents/codex/install.sh"
 
 echo "=== T7: CLI entrypoint ==="
 
@@ -46,10 +44,20 @@ make_fake_agent claude
 make_fake_agent cursor
 make_fake_agent codex
 
+# Fake bash captures `bash <orchestrator-script> [args...]` invocations,
+# bucketed by which orchestrator was invoked. Lets us assert that scripts/edc
+# delegates to the right deterministic orchestrator with the right env + args.
 cat > "$FAKE_BIN/bash" <<'EOF'
 #!/bin/sh
 set -eu
-out="${EDC_TEST_CAPTURE_DIR:?}/review"
+script_name=$(basename "$1")
+case "$script_name" in
+  edc-build.sh)  bucket=build  ;;
+  edc-review.sh) bucket=review ;;
+  edc-audit.sh)  bucket=audit  ;;
+  *)             bucket=other  ;;
+esac
+out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
 mkdir -p "$out"
 printf '%s\n' "${EDC_AGENT_CLI:-}" > "$out/agent"
 printf '%s\n' "$1" > "$out/script"
@@ -102,105 +110,42 @@ else
   exit 1
 fi
 
-# ── 7c: claude build dispatches slash command prompt ──────────────────────────
-rm -rf "$CAPTURE/claude"
-run_cli build "$PROJECT" --agent claude --force --ignore generated/**
+# ── 7c: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args ──
+#
+# Per-agent CLI dispatch (claude -p / cursor agent -p / codex exec) lives in
+# edc-spawn.sh and is exercised end-to-end by t6/t7-codex with real mocks.
+# Here we only check that scripts/edc routes to the orchestrator correctly.
 
-if [ "$(cat "$CAPTURE/claude/cwd")" = "$PROJECT" ]; then
-  echo "PASS: claude build runs in target project"
-else
-  echo "FAIL: claude build cwd mismatch"
-  exit 1
-fi
+for agent in claude cursor codex; do
+  rm -rf "$CAPTURE/build"
+  run_cli build "$PROJECT" --agent "$agent" --force --ignore generated/**
 
-if grep -Fx -- '-p' "$CAPTURE/claude/args" >/dev/null \
-  && grep -Fx -- '--allowed-tools' "$CAPTURE/claude/args" >/dev/null; then
-  echo "PASS: claude build passes expected CLI flags"
-else
-  echo "FAIL: claude build flags missing"
-  cat "$CAPTURE/claude/args"
-  exit 1
-fi
+  if [ "$(cat "$CAPTURE/build/agent")" != "$agent" ]; then
+    echo "FAIL: $agent build did not export EDC_AGENT_CLI=$agent"
+    cat "$CAPTURE/build/agent"
+    exit 1
+  fi
 
-if grep -q '^/edc:edc-build --force --ignore generated/\*\*$' "$CAPTURE/claude/stdin"; then
-  echo "PASS: claude build prompt uses slash command wrapper"
-else
-  echo "FAIL: claude build prompt incorrect"
-  cat "$CAPTURE/claude/stdin"
-  exit 1
-fi
+  case "$(cat "$CAPTURE/build/script")" in
+    */edc-build.sh) ;;
+    *)
+      echo "FAIL: $agent build did not invoke edc-build.sh"
+      cat "$CAPTURE/build/script"
+      exit 1
+      ;;
+  esac
 
-# ── 7d: cursor build dispatches installed skill content ───────────────────────
-mkdir -p "$FAKE_HOME/.cursor/skills/edc-build-impl"
-cat > "$FAKE_HOME/.cursor/skills/edc-build-impl/SKILL.md" <<'EOF'
-CURSOR_BUILD_SKILL
-EOF
-
-rm -rf "$CAPTURE/cursor"
-run_cli build --agent cursor "$PROJECT" --focus parser --ignore generated/**
-
-if [ "$(cat "$CAPTURE/cursor/cwd")" = "$PROJECT" ]; then
-  echo "PASS: cursor build runs in target project"
-else
-  echo "FAIL: cursor build cwd mismatch"
-  exit 1
-fi
-
-if grep -Fx -- 'agent' "$CAPTURE/cursor/args" >/dev/null \
-  && grep -Fx -- '-p' "$CAPTURE/cursor/args" >/dev/null \
-  && grep -Fx -- '--force' "$CAPTURE/cursor/args" >/dev/null \
-  && grep -Fx -- '--trust' "$CAPTURE/cursor/args" >/dev/null; then
-  echo "PASS: cursor build passes expected CLI flags"
-else
-  echo "FAIL: cursor build flags missing"
-  cat "$CAPTURE/cursor/args"
-  exit 1
-fi
-
-if grep -q 'use these CLI arguments: --focus parser --ignore generated/\*\*' "$CAPTURE/cursor/stdin" \
-  && grep -q 'name: edc-build-impl' "$CAPTURE/cursor/stdin"; then
-  echo "PASS: cursor build prompt includes args and skill content"
-else
-  echo "FAIL: cursor build prompt incorrect"
-  cat "$CAPTURE/cursor/stdin"
-  exit 1
-fi
-
-# ── 7e: codex build dispatches installed skill content ────────────────────────
-mkdir -p "$FAKE_HOME/.codex/skills/edc-build-impl"
-cat > "$FAKE_HOME/.codex/skills/edc-build-impl/SKILL.md" <<'EOF'
-CODEX_BUILD_SKILL
-EOF
-
-rm -rf "$CAPTURE/codex"
-run_cli build --agent codex "$PROJECT" --force --ignore generated/**
-
-if [ "$(cat "$CAPTURE/codex/cwd")" = "$PROJECT" ]; then
-  echo "PASS: codex build runs in target project"
-else
-  echo "FAIL: codex build cwd mismatch"
-  exit 1
-fi
-
-if grep -Fx -- 'exec' "$CAPTURE/codex/args" >/dev/null \
-  && grep -Fx -- '--sandbox' "$CAPTURE/codex/args" >/dev/null \
-  && grep -Fx -- 'workspace-write' "$CAPTURE/codex/args" >/dev/null \
-  && grep -Fx -- '-' "$CAPTURE/codex/args" >/dev/null; then
-  echo "PASS: codex build passes expected CLI flags"
-else
-  echo "FAIL: codex build flags missing"
-  cat "$CAPTURE/codex/args"
-  exit 1
-fi
-
-if grep -q 'use these CLI arguments: --force --ignore generated/\*\*' "$CAPTURE/codex/stdin" \
-  && grep -q 'name: edc-build-impl' "$CAPTURE/codex/stdin"; then
-  echo "PASS: codex build prompt includes args and skill content"
-else
-  echo "FAIL: codex build prompt incorrect"
-  cat "$CAPTURE/codex/stdin"
-  exit 1
-fi
+  if grep -Fx -- '--force' "$CAPTURE/build/args" >/dev/null \
+    && grep -Fx -- '--ignore' "$CAPTURE/build/args" >/dev/null \
+    && grep -Fx -- 'generated/**' "$CAPTURE/build/args" >/dev/null; then
+    : # ok
+  else
+    echo "FAIL: $agent build did not forward --force / --ignore"
+    cat "$CAPTURE/build/args"
+    exit 1
+  fi
+done
+echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex)"
 
 # ── 7f: review delegates to local orchestrator with EDC_AGENT_CLI ─────────────
 mkdir -p "$PROJECT/.edc/scripts"
@@ -252,13 +197,13 @@ else
   exit 1
 fi
 
-# ── 7g: install scripts copy the shared CLI ───────────────────────────────────
-if grep -q 'scripts/edc' "$ROOT_INSTALL" \
-  && grep -q 'cp "\$REPO_ROOT/scripts/edc"' "$CURSOR_INSTALL" \
-  && grep -q 'cp "\$REPO_ROOT/scripts/edc"' "$CODEX_INSTALL"; then
-  echo "PASS: install scripts copy the shared CLI"
+# ── 7g: root install ships shared CLI + auto-generates cursor/codex wrappers ─
+if grep -q 'install_terminal_cli' "$ROOT_INSTALL" \
+  && grep -q 'write_cursor_commands' "$ROOT_INSTALL" \
+  && grep -q 'write_codex_skills' "$ROOT_INSTALL"; then
+  echo "PASS: install ships shared CLI + generates cursor/codex wrappers"
 else
-  echo "FAIL: install scripts do not copy the shared CLI"
+  echo "FAIL: install missing terminal-cli or wrapper-generation hooks"
   exit 1
 fi
 

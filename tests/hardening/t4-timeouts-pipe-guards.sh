@@ -4,6 +4,10 @@
 set -euo pipefail
 
 SCRIPT="scripts/edc-review.sh"
+# Per-phase run_with_timeout wraps now live in edc-spawn.sh; the build/update
+# spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
+SPAWN="plugins/edc/scripts/edc-spawn.sh"
+RECOVER="plugins/edc/scripts/edc-recover-context.sh"
 
 echo "=== T4: Timeouts + pipe guards ==="
 
@@ -15,24 +19,31 @@ else
   exit 1
 fi
 
-# ── 4b: every agent phase (build/update/review) wrapped with run_with_timeout ─
-# Matches both literal seconds (`run_with_timeout 60`) and env-default form
-# (`run_with_timeout "${EDC_*_TIMEOUT:-N}"`).
-wrapped=$(grep -cE '^\s+run_with_timeout ("\$\{EDC_[A-Z_]+_TIMEOUT:-[0-9]+\}"|[0-9]+)' "$SCRIPT")
+# ── 4b: agent spawns wrapped with run_with_timeout ──────────────────────────────
+# Matches both literal seconds and env-default form (`run_with_timeout "$timeout_secs"`
+# in the helper, where $timeout_secs is set by the caller from EDC_*_TIMEOUT envs).
+# In edc-spawn.sh each per-CLI branch wraps with run_with_timeout.
+wrapped=$(grep -cE '^\s+run_with_timeout' "$SPAWN")
 if [ "$wrapped" -ge 3 ]; then
-  echo "PASS: agent phases wrapped with run_with_timeout ($wrapped)"
+  echo "PASS: agent spawns wrapped with run_with_timeout ($wrapped per-CLI branches)"
 else
-  echo "FAIL: expected >=3 wrapped calls (build/update/review), found $wrapped"
+  echo "FAIL: expected >=3 wrapped per-CLI branches in $SPAWN, found $wrapped"
   exit 1
 fi
 
 # ── 4c: per-phase timeouts configurable via env vars with defaults ────────────
+# Callers pass EDC_*_TIMEOUT defaults to edc_spawn. EDC_BUILD/UPDATE_TIMEOUT
+# live in the recover helper (used by every orchestrator); EDC_REVIEW_TIMEOUT
+# stays in the review orchestrator (review-specific phase).
 missing=""
-for var in EDC_BUILD_TIMEOUT EDC_UPDATE_TIMEOUT EDC_REVIEW_TIMEOUT; do
-  if ! grep -qE "run_with_timeout \"\\\$\\{$var:-[0-9]+\\}\"" "$SCRIPT"; then
+for var in EDC_BUILD_TIMEOUT EDC_UPDATE_TIMEOUT; do
+  if ! grep -qE "\\\$\\{$var:-[0-9]+\\}" "$RECOVER"; then
     missing="$missing $var"
   fi
 done
+if ! grep -qE "\\\$\\{EDC_REVIEW_TIMEOUT:-[0-9]+\\}" "$SCRIPT"; then
+  missing="$missing EDC_REVIEW_TIMEOUT"
+fi
 if [ -z "$missing" ]; then
   echo "PASS: EDC_{BUILD,UPDATE,REVIEW}_TIMEOUT env overrides with defaults present"
 else
@@ -49,7 +60,9 @@ elif command -v gtimeout > /dev/null 2>&1; then
 else
   TIMEOUT_BIN=""
 fi
-eval "$(awk '/^run_with_timeout\(\)/{found=1} found{print} /^\}$/{if(found){exit}}' "$SCRIPT")"
+# run_with_timeout lives in edc-runtime.sh (shared by all orchestrators).
+RUNTIME="plugins/edc/scripts/edc-runtime.sh"
+eval "$(awk '/^run_with_timeout\(\)/{found=1} found{print} /^\}$/{if(found){exit}}' "$RUNTIME")"
 
 result=$(run_with_timeout 5 "test-phase" echo "hello from timeout")
 if [ "$result" = "hello from timeout" ]; then

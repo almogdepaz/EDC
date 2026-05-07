@@ -11,7 +11,7 @@ Analyze the codebase for overengineering, bloat, and duplication using the `.con
 
 ## Prerequisites
 
-`.context/modules/` must exist with module files and `.context/manifest.json` must exist. If not, tell the user to invoke the `edc-build-impl` skill first.
+This skill runs only inside an audit subprocess spawned by `plugins/edc/scripts/edc-audit.sh`. The orchestrator gates on `.context/manifest.json` freshness and auto-recovers (build/update) before invoking this skill, so when this skill runs you can assume `.context/modules/` and `.context/manifest.json` exist and reflect HEAD. If they don't, that's an orchestrator bug — fail loudly rather than trying to repair the layout from inside the skill.
 
 ## Process
 

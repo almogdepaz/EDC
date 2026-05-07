@@ -17,22 +17,17 @@ Before computing changed files, resolve ignore patterns in this order:
 
 Apply ignore rules to repo-relative file paths before mapping changed files to modules.
 
-## Prerequisites
+## Preconditions (orchestrator-owned)
 
-Run this exact precondition check first:
+This skill is invoked by `plugins/edc/scripts/edc-update.sh` AFTER the orchestrator has gated the on-disk state. By the time this skill runs you can assume:
 
-```bash
-bash plugins/edc/scripts/edc-clean-slate.sh --check
-rc=$?
-```
+- `.context/manifest.json` exists, parses as JSON, and `schemaVersion == 2`
+- `.context/index.md` exists
+- v1 markers (`.context/.meta.json`, top-level `context.md` etc.) are NOT present
 
-- `rc == 11` → preconditions met, proceed.
-- `rc == 10` → v1 leftovers or partial v2 detected. ABORT this skill and route back to `edc-build-impl` for a full build (the build skill's [Routing](../edc-build-impl/SKILL.md#routing) section will handle the wipe). Do not attempt an incremental update on top of a broken layout — it will silently no-op and leave the user with an unusable context.
-- `rc == 0` with no `.context/` → no context exists. ABORT and tell the caller to invoke `edc-build-impl` first.
+If any of those assumptions are violated when this skill runs, that's an orchestrator bug — fail loudly rather than trying to repair the layout from inside the skill. Do NOT call `edc-clean-slate.sh` from this skill.
 
-`.context/manifest.json` and `.context/index.md` must both exist. `manifest.json` is the only routing/policy contract in the v2 layout. If either is missing after a `rc == 11` check, that is an invariant violation — fail loudly.
-
-If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `.context/` or unrelated tracked paths), the update is a no-op. Skip to Step 10 (Validate) and exit 0 — but only after confirming the layout is still healthy. Never declare success when `manifest.json` is missing or invalid.
+If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `.context/` or unrelated tracked paths), the update is a no-op. Skip to Step 10 (Validate) and exit 0. Never declare success when `manifest.json` is missing or invalid — the orchestrator's `edc-doctor.sh` post-check will catch that, but a clean exit from this skill on a broken layout is itself a bug.
 
 ## Process
 

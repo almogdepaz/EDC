@@ -1,28 +1,34 @@
 #!/usr/bin/env bash
-# edc-clean-slate: detect v1 / partial-v2 artifacts and wipe .context/ for a fresh v2 build.
+# edc-clean-slate: detect partial-v2 build state and wipe .context/ for a fresh build.
+#
+# v2-only. Earlier revisions detected legacy v1 layouts (.meta.json,
+# top-level context.md, etc.) and auto-wiped them. v1 is no longer
+# supported; if v1 markers are present this script fails with a
+# copy-pasteable migration message instead of silently wiping.
 #
 # Modes:
-#   --check       exit 0 if .context/ is clean v2 or empty; exit 10 if v1/partial leftovers exist; exit 11 if .context/ valid v2.
+#   --check       exit 11 if healthy v2 / exit 0 if no .context/ /
+#                 exit 10 if partial or malformed v2 / exit 12 if v1 layout.
 #   --force       unconditionally wipe .context/ (and AGENTS.md if present).
-#   (default)     wipe only if v1/partial leftovers detected; preserve a healthy v2 layout.
-#
-# v1 indicators (any of):
-#   .context/.meta.json
-#   .context/context.md
-#   .context/full-context.md  (v1 placed it at top level; v2 no longer produces it)
-#   .context/issues.md        (v1 placed it at top level; v2 puts it under reports/)
-#   .context/complexity.md    (v1 top-level; v2 under reports/)
-#   any other top-level *.md file in .context/ besides index.md
+#   (default)     wipe only if partial v2 detected. Refuse to wipe v1 layouts.
 #
 # Partial-v2 indicators (any of):
 #   .context/ exists but .context/manifest.json missing
 #   .context/manifest.json exists but doesn't parse, or schemaVersion != 2
 #
+# v1 indicators (any of) → script refuses to act, prints migration hint:
+#   .context/.meta.json
+#   .context/context.md
+#   .context/full-context.md
+#   .context/issues.md     (v1 top-level; v2 puts it under reports/)
+#   .context/complexity.md (v1 top-level; v2 under reports/)
+#
 # Exit codes:
 #   0   action taken (wiped) or nothing-to-do
-#   10  --check: leftovers present (caller should treat as "needs full rebuild")
+#   10  --check: partial / malformed v2 (caller should wipe + rebuild)
 #   11  --check: layout is healthy v2
-#   2   bash version too low / setup error
+#   12  --check or auto: v1 layout detected; user must manually wipe
+#   2   bash version too low / usage error
 [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
   echo "edc-clean-slate: requires bash >= 4.0" >&2
   exit 2
@@ -42,22 +48,28 @@ case "${1:-}" in
   *) echo "usage: edc-clean-slate.sh [--check|--force]" >&2; exit 2 ;;
 esac
 
-has_v1_leftovers() {
+has_v1_markers() {
   [ -d "$CTX" ] || return 1
   [ -f "$CTX/.meta.json" ] && return 0
   [ -f "$CTX/context.md" ] && return 0
   [ -f "$CTX/full-context.md" ] && return 0
   [ -f "$CTX/issues.md" ] && return 0
   [ -f "$CTX/complexity.md" ] && return 0
-  # any top-level .md other than index.md
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    case "$(basename "$f")" in
-      index.md) ;;
-      *) return 0 ;;
-    esac
-  done < <(find "$CTX" -maxdepth 1 -name '*.md' -type f 2>/dev/null)
   return 1
+}
+
+print_v1_migration_hint() {
+  cat >&2 <<'EOF'
+ERROR: legacy v1 .context/ layout detected.
+
+v1 is no longer supported. To migrate, run:
+
+  rm -rf .context AGENTS.md
+  /edc:edc-build      # or: edc build --agent <claude|cursor|codex>
+
+This will produce a fresh v2 layout (.context/index.md, .context/manifest.json,
+.context/modules/<name>.md, .context/reports/{issues,complexity}.md).
+EOF
 }
 
 has_partial_v2() {
@@ -79,7 +91,6 @@ is_healthy_v2() {
   [ -f "$MANIFEST" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 1
-  ! has_v1_leftovers
 }
 
 wipe() {
@@ -94,11 +105,11 @@ case "$mode" in
   check)
     if [ ! -d "$CTX" ]; then
       # no context dir = clean enough for a full build
-      exit 11
+      exit 0
     fi
-    if has_v1_leftovers; then
-      echo "edc-clean-slate: v1 leftovers detected" >&2
-      exit 10
+    if has_v1_markers; then
+      print_v1_migration_hint
+      exit 12
     fi
     if has_partial_v2; then
       echo "edc-clean-slate: partial v2 build detected" >&2
@@ -111,14 +122,17 @@ case "$mode" in
     exit 10
     ;;
   force)
+    if has_v1_markers; then
+      print_v1_migration_hint
+      exit 12
+    fi
     wipe
     exit 0
     ;;
   auto)
-    if has_v1_leftovers; then
-      echo "edc-clean-slate: v1 leftovers — wiping for fresh v2 build" >&2
-      wipe
-      exit 0
+    if has_v1_markers; then
+      print_v1_migration_hint
+      exit 12
     fi
     if has_partial_v2; then
       echo "edc-clean-slate: partial v2 build — wiping for fresh v2 build" >&2

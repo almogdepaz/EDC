@@ -3,7 +3,9 @@
 # Run from repo root: bash tests/hardening/t1-tool-lockdown.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc-review.sh"
+# All agent-CLI spawns now live in the shared helper edc-spawn.sh, sourced by
+# every orchestrator. The lockdown contract pins claude -p invocations there.
+SCRIPT="plugins/edc/scripts/edc-spawn.sh"
 EXPECTED_TOOLS='--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob"'
 
 echo "=== T1: Subprocess tool lockdown ==="

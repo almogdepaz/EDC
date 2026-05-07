@@ -112,19 +112,106 @@ skill_rel() {
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
   mkdir -p "$scripts_target"
-  copy_or_download "scripts/edc"                            "$scripts_target/edc"
-  copy_or_download "plugins/edc/scripts/edc-review.sh"      "$scripts_target/edc-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-doctor.sh"      "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-route.sh"       "$scripts_target/edc-route.sh"
-  copy_or_download "plugins/edc/scripts/edc-manifest.sh"    "$scripts_target/edc-manifest.sh"
-  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$scripts_target/edc-clean-slate.sh"
+  copy_or_download "scripts/edc"                              "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
+  copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
+  copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
+  copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
+  copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
+  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
+  copy_or_download "plugins/edc/scripts/edc-runtime.sh"       "$scripts_target/edc-runtime.sh"
+  copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
+  copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$scripts_target/edc-resolve-prompt.sh"
+  copy_or_download "plugins/edc/scripts/edc-spawn.sh"         "$scripts_target/edc-spawn.sh"
+  copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
+    "$scripts_target/edc-build.sh" \
+    "$scripts_target/edc-update.sh" \
+    "$scripts_target/edc-audit.sh" \
     "$scripts_target/edc-doctor.sh" \
     "$scripts_target/edc-route.sh" \
     "$scripts_target/edc-manifest.sh" \
-    "$scripts_target/edc-clean-slate.sh"
+    "$scripts_target/edc-clean-slate.sh" \
+    "$scripts_target/edc-runtime.sh" \
+    "$scripts_target/edc-assert-fresh.sh" \
+    "$scripts_target/edc-resolve-prompt.sh" \
+    "$scripts_target/edc-spawn.sh" \
+    "$scripts_target/edc-recover-context.sh"
+}
+
+# write_cursor_commands <cursor-target>
+# Generates four thin slash-command wrappers under <target>/commands/. Each
+# wrapper is a Bash-only shim that exports EDC_AGENT_CLI=cursor and shells to
+# the matching ~/.edc/scripts/edc-*.sh orchestrator. No source-file checked
+# into the repo — the wrapper template lives here, the only place it can
+# diverge from the contract is install.sh itself.
+write_cursor_commands() {
+  local target="$1"
+  mkdir -p "$target/commands"
+  for action in build update audit review; do
+    cat > "$target/commands/edc-$action.md" <<EOF
+---
+description: edc $action via deterministic orchestrator (auto-installed by install.sh)
+---
+
+**Arguments:** \$ARGUMENTS
+
+The orchestrator owns the full pipeline. Your only job is to invoke it and
+surface its output.
+
+\`\`\`bash
+set -- \$ARGUMENTS
+export EDC_AGENT_CLI=cursor
+if [ -f ".edc/scripts/edc-$action.sh" ]; then
+  bash .edc/scripts/edc-$action.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+else
+  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  exit 1
+fi
+\`\`\`
+
+If the script exits non-zero, surface its error verbatim and stop.
+EOF
+  done
+}
+
+# write_codex_skills <codex-skills-target>
+# Codex equivalent of write_cursor_commands. Writes <target>/edc-<action>/SKILL.md
+# wrappers that delegate to ~/.edc/scripts/edc-*.sh with EDC_AGENT_CLI=codex.
+write_codex_skills() {
+  local target="$1"
+  for action in build update audit review; do
+    mkdir -p "$target/edc-$action"
+    cat > "$target/edc-$action/SKILL.md" <<EOF
+---
+name: edc-$action
+description: edc $action via deterministic orchestrator (auto-installed by install.sh)
+---
+
+The orchestrator owns the full pipeline. Invoke it via the target's bash
+shell and surface its output. Pass through any user arguments verbatim.
+
+\`\`\`bash
+export EDC_AGENT_CLI=codex
+if [ -f ".edc/scripts/edc-$action.sh" ]; then
+  bash .edc/scripts/edc-$action.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+else
+  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  exit 1
+fi
+\`\`\`
+
+If the script exits non-zero, surface its error verbatim and stop.
+EOF
+  done
 }
 
 print_path_hint() {
@@ -157,8 +244,16 @@ install_claude_runtime() {
     copy_or_download "plugins/edc/hooks/session-start.mjs" "$target/hooks/session-start.mjs"
     copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
     copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
+    copy_or_download "plugins/edc/scripts/edc-build.sh" "$target/scripts/edc-build.sh"
+    copy_or_download "plugins/edc/scripts/edc-update.sh" "$target/scripts/edc-update.sh"
+    copy_or_download "plugins/edc/scripts/edc-audit.sh" "$target/scripts/edc-audit.sh"
     copy_or_download "plugins/edc/scripts/edc-route.sh" "$target/scripts/edc-route.sh"
     copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
+    copy_or_download "plugins/edc/scripts/edc-runtime.sh" "$target/scripts/edc-runtime.sh"
+    copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh" "$target/scripts/edc-assert-fresh.sh"
+    copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$target/scripts/edc-resolve-prompt.sh"
+    copy_or_download "plugins/edc/scripts/edc-spawn.sh" "$target/scripts/edc-spawn.sh"
+    copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$target/scripts/edc-recover-context.sh"
   fi
 
   install_terminal_cli
@@ -181,18 +276,10 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/skills/$(skill_rel "$f")"
     done
-    download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
-    download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
-    download "agents/cursor/.cursor/commands/edc-run-update.md" "$TARGET/commands/edc-run-update.md"
-    download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
-    download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
-    download "scripts/edc" "$SCRIPTS_TARGET/edc"
-    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
-    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
-    chmod +x "$SCRIPTS_TARGET/edc"
-    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
+    install_terminal_cli
+    write_cursor_commands "$TARGET"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
+    print_path_hint
     ;;
 
   codex)
@@ -202,17 +289,10 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/$(skill_rel "$f")"
     done
-    download "agents/codex/.codex/skills/edc-build/SKILL.md" "$TARGET/edc-build/SKILL.md"
-    download "agents/codex/.codex/skills/edc-update/SKILL.md" "$TARGET/edc-update/SKILL.md"
-    download "agents/codex/.codex/skills/edc-audit/SKILL.md" "$TARGET/edc-audit/SKILL.md"
-    download "agents/codex/.codex/skills/edc-run-review/SKILL.md" "$TARGET/edc-run-review/SKILL.md"
-    download "scripts/edc" "$SCRIPTS_TARGET/edc"
-    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
-    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
-    chmod +x "$SCRIPTS_TARGET/edc"
-    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
+    install_terminal_cli
+    write_codex_skills "$TARGET"
     echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
+    print_path_hint
     ;;
 
   pi)

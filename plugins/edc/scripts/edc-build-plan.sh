@@ -23,6 +23,10 @@ reject() { echo "edc-build-plan: $1" >&2; exit 1; }
 
 command -v jq >/dev/null 2>&1 || { echo "edc-build-plan: jq required" >&2; exit 64; }
 
+_edc_build_plan_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=edc-paths.sh
+. "$_edc_build_plan_dir/edc-paths.sh"
+
 changed_filter=""
 
 while [[ $# -gt 0 ]]; do
@@ -77,6 +81,7 @@ changed_arg="$changed_filter"
 
 jq -r \
   --arg changed "$changed_arg" \
+  --arg modules_dir "$EDC_MODULES_DIR" \
   '
   # Convert module name to kebab-case (lowercase, spaces/underscores to hyphens)
   def kebab: gsub("[_ ]+"; "-") | ascii_downcase;
@@ -95,15 +100,16 @@ jq -r \
         "kind": "module-context",
         "module": .name,
         "paths": .paths,
-        "out": (".context/modules/" + (.name | kebab) + ".md"),
+        "out": ($modules_dir + "/" + (.name | kebab) + ".md"),
         "prompt": (
           "Build deep architectural context for module `" + .name + "`. " +
           "Files in scope: `" + (.paths | join(", ")) + "`. " +
           "Invoke the `edc-context` skill on these files. " +
           "You may read sibling-module source if it materially improves this module'\''s context. " +
-          "Write the deep doc directly to `.context/modules/" + (.name | kebab) + ".md`. " +
+          "Write the deep doc directly to `" + $modules_dir + "/" + (.name | kebab) + ".md`. " +
           "Return a ≤500-token summary for the orchestrator."
         )
       })
     }
   ' "$input"
+

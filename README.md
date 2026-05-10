@@ -18,12 +18,12 @@ Run these entrypoints in order on any codebase:
 
 1. `/edc:edc-build` — discovers modules, then spawns one subagent per module to deeply analyze its files (function-level: First Principles, 5 Whys, 5 Hows) in parallel. Produces:
    - `AGENTS.md` — short runtime orientation
-   - `.context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
-   - `.context/manifest.json` — routing and policy contract
-   - `.context/modules/<name>.md` — deep per-module analysis
-   - `.context/reports/issues.md` — actionable list of all problems found
-   - `.context/reports/complexity.md` — bloat, duplication, overengineering audit
-   - `.context/build/build.json` — build provenance (timestamp, version, source commit, modules emitted)
+   - `edc-context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
+   - `edc-context/manifest.json` — routing and policy contract
+   - `edc-context/modules/<name>.md` — deep per-module analysis
+   - `edc-context/reports/issues.md` — actionable list of all problems found
+   - `edc-context/reports/complexity.md` — bloat, duplication, overengineering audit
+   - `edc-context/build/build.json` — build provenance (timestamp, version, source commit, modules emitted)
 
 2. `/edc:edc-update` — incremental update from branch diff, so you don't rebuild from scratch on every PR
 
@@ -33,16 +33,16 @@ Run these entrypoints in order on any codebase:
 
 ### Two runtime modes (Claude Code)
 
-EDC ships two modes for Claude Code, controlled by `policy.defaultMode` in `.context/manifest.json`. See [Install → Claude Code](#claude-code) for how to flip them.
+EDC ships two modes for Claude Code, controlled by `policy.defaultMode` in `edc-context/manifest.json`. See [Install → Claude Code](#claude-code) for how to flip them.
 
-- **`advisory`** (default) — pure docs. The plugin installs hooks but they no-op. The agent reads `.context/index.md` and the relevant `.context/modules/<name>.md` on its own (slash commands prompt for it; otherwise it's the user's call). Zero token overhead per tool call.
+- **`advisory`** (default) — pure docs. The plugin installs hooks but they no-op. The agent reads `edc-context/index.md` and the relevant `edc-context/modules/<name>.md` on its own (slash commands prompt for it; otherwise it's the user's call). Zero token overhead per tool call.
 - **`inject`** — auto-loaded context. Two hooks fire:
-  - `SessionStart` surfaces `.context/index.md` (lightweight architecture map) on session boot
-  - `PreToolUse` resolves the file you're about to `Edit`/`Write`/`Bash` to its module via `manifest.json` and injects `.context/modules/<name>.md` once per session (deduplicated)
+  - `SessionStart` surfaces `edc-context/index.md` (lightweight architecture map) on session boot
+  - `PreToolUse` resolves the file you're about to `Edit`/`Write`/`Bash` to its module via `manifest.json` and injects `edc-context/modules/<name>.md` once per session (deduplicated)
 
   Net effect in inject: the agent always has the overview, gets deep module context exactly when it touches a file in that module, and never loads the full project context.
 
-Cursor and Codex don't have a hook system, so they're docs-only regardless of the flag. Pi has an event-based extension API and supports both modes (same `.context/manifest.json` toggle as Claude Code).
+Cursor and Codex don't have a hook system, so they're docs-only regardless of the flag. Pi has an event-based extension API and supports both modes (same `edc-context/manifest.json` toggle as Claude Code).
 
 ## Install
 
@@ -73,10 +73,10 @@ edc mode advisory      # default — docs only, hooks no-op
 edc mode inject        # auto-load context via hooks
 ```
 
-- **`advisory`** if you want minimum token overhead and prefer to drive context loading via slash commands (`/edc:edc-run-review` etc.) or by reading `.context/` files yourself.
+- **`advisory`** if you want minimum token overhead and prefer to drive context loading via slash commands (`/edc:edc-run-review` etc.) or by reading `edc-context/` files yourself.
 - **`inject`** if you want the agent to always have the architecture overview at session start and to automatically receive the relevant module doc the first time it touches a file in each module during the session.
 
-The flag is a `jq` write to `.context/manifest.json`; flip it as often as you like. Rebuilds preserve the chosen mode.
+The flag is a `jq` write to `edc-context/manifest.json`; flip it as often as you like. Rebuilds preserve the chosen mode.
 
 ### Cursor
 
@@ -108,7 +108,7 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review`. Honors `policy.defaultMode` in `.context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
+Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review`. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
 
 This installs the user-facing Codex skills:
 - `$edc-build`
@@ -157,7 +157,7 @@ Cursor and Codex installs also place a shared terminal wrapper at `~/.edc/script
 ~/.edc/scripts/edc mode inject         # turn on auto-injection
 ~/.edc/scripts/edc mode advisory       # turn it off
 
-# validate the .context/ layout
+# validate the edc-context/ layout
 ~/.edc/scripts/edc doctor
 ```
 
@@ -166,20 +166,38 @@ Notes:
 - `build` defaults to the current directory if no path is passed.
 - `--ignore` may be repeated. If any `--ignore` flags are passed, EDC ignores `.edcignore` for that run.
 - Otherwise, if `.edcignore` exists in the repo root, EDC reads non-empty, non-comment lines from it as repo-relative glob patterns.
-- `review` delegates to `edc-review.sh`, so it automatically builds or updates `.context/` first when context is missing or stale.
-- Claude build requires the EDC Claude plugin/commands to already be installed because it invokes `/edc:edc-build`.
+- `review` delegates to `edc-review.sh`, so it automatically builds or updates `edc-context/` first when context is missing or stale.
+
+## Two Independent Install Paths
+
+The terminal CLI and the claude plugin are independent. You can install
+either, both, or neither — they don't depend on each other.
+
+- **CLI only** (`bash install.sh --agent claude`): installs `~/.edc/scripts/`
+  + `~/.edc/skills/`. The `edc` command works in any repo. Subprocess agents
+  (claude/cursor/codex) are spawned by the orchestrator and given the skill
+  content directly via stdin — no slash-command system required.
+- **Claude plugin** (`claude plugin marketplace add almogdepaz/wolfpack-plugins
+  && claude plugin install edc@edc`): adds slash commands
+  (`/edc:edc-build`, etc.) and session/pre-edit hooks for use *inside*
+  interactive claude. The plugin still calls into `~/.edc/scripts/` for the
+  heavy orchestrator logic, so you'll want the CLI installed as well if you
+  use the plugin's `/edc-run-review` command.
+- **Both**: install both for full coverage. The CLI handles `edc review`
+  from the terminal, the plugin handles slash commands inside an interactive
+  claude session.
 
 ## Gitignore
 
 EDC writes scratch state into your repo. Add these to your target repo's `.gitignore`:
 
 ```
-.context/
+edc-context/
 review-tasks/
 review-*.md
 ```
 
-- `.context/` — per-module deep context written by `edc-build`/`edc-update`
+- `edc-context/` — per-module deep context written by `edc-build`/`edc-update`
 - `review-tasks/` — per-module task files and reports from `edc-review`
 - `review-*.md` — consolidated review output
 
@@ -193,7 +211,7 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
 | `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
 | `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
-| `/edc:edc-doctor` | Diagnoses `.context/` layout, flags v1 leftovers / partial v2 state |
+| `/edc:edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
 ### Codex skill equivalents
 
@@ -245,7 +263,7 @@ edc/
       edc-audit.md
       edc-run-review.md              # user-facing: runs orchestrator
       edc-review.md                  # internal: invoked by orchestrator subprocess
-      edc-doctor.md                  # diagnose `.context/` layout
+      edc-doctor.md                  # diagnose `edc-context/` layout
     skills/                          # canonical skill content
       edc-context/                   # per-module deep analysis (TOB-derived)
       edc-build-impl/                # full-build orchestrator (v2 module fanout)
@@ -255,8 +273,8 @@ edc/
     scripts/                         # shell helpers invoked by skills
       edc-build-plan.sh              # deterministic per-module task planner (jq)
       edc-clean-slate.sh             # detects v1 leftovers, wipes for clean v2 build
-      edc-doctor.sh                  # diagnoses `.context/` layout health
-      edc-manifest.sh                # reads/writes `.context/manifest.json`
+      edc-doctor.sh                  # diagnoses `edc-context/` layout health
+      edc-manifest.sh                # reads/writes `edc-context/manifest.json`
       edc-route.sh                   # resolves a path to its module via manifest
       edc-review.sh                  # shared review orchestrator (Codex/Cursor entrypoint)
     hooks/                           # automatic context injection

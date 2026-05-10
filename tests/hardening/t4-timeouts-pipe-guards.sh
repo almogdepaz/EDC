@@ -96,9 +96,9 @@ git config user.name "Test"
 git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
 
-mkdir -p .context
+mkdir -p edc-context
 # Write malformed manifest.json (no sourceCommit field)
-printf '{"schemaVersion":2,"modules":[]}' > .context/manifest.json
+printf '{"schemaVersion":2,"modules":[]}' > edc-context/manifest.json
 
 ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0

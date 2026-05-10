@@ -8,14 +8,15 @@
 # Deterministic control plane for /edc:edc-build.
 #
 # Routes between full build and incremental update based on the on-disk
-# state of .context/, decided by `edc-clean-slate.sh --check`. The LLM
-# never decides "is this an update or a build" — that's a shell decision.
+# state of the context dir, decided by `edc-clean-slate.sh --check`.
+# The LLM never decides "is this an update or a build" — that's a
+# shell decision.
 #
 # Routing matrix (state × --force):
 #
 #   state                    no --force        --force
 #   ─────────────────────    ─────────────     ─────────────────────
-#   no .context/             full build        full build
+#   no context dir           full build        full build
 #   healthy v2               UPDATE            wipe + full build
 #   partial / malformed v2   wipe + build      wipe + build
 #   v1 layout                FAIL with hint    FAIL with hint
@@ -41,8 +42,6 @@ if ! command -v git > /dev/null 2>&1; then
   exit 2
 fi
 
-MANIFEST=".context/manifest.json"
-
 # Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
 # real script location, not the invocation path.
 _edc_resolve_script_dir() {
@@ -56,6 +55,9 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
 
@@ -94,7 +96,7 @@ decide_route() {
   local rc=0
   bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
   case "$rc" in
-    0)  # no .context/
+    0)  # no context dir
       echo "build"
       return 0
       ;;

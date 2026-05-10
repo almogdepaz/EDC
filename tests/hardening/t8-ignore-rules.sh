@@ -30,11 +30,11 @@ git add src/keep.txt generated/skip.txt
 git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
 
-mkdir -p .context
-cat > .context/manifest.json <<EOF
+mkdir -p edc-context
+cat > edc-context/manifest.json <<EOF
 {"schemaVersion":2,"sourceCommit":"$HEAD_SHA","modules":[]}
 EOF
-printf '## Module Map\n\n- root\n' > .context/index.md
+printf '## Module Map\n\n- root\n' > edc-context/index.md
 
 # ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
 printf 'generated/**\n' > .edcignore

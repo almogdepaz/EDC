@@ -5,11 +5,11 @@
  *   - registers slash commands (/edc-build, /edc-update, /edc-audit,
  *     /edc-run-review, /edc-doctor, /edc-review)
  *   - on session_start: installs the orchestrator script into the project
- *     and surfaces .context/index.md (in inject mode)
+ *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
  *
- * Mode is controlled by .context/manifest.json's `policy.defaultMode`
+ * Mode is controlled by edc-context/manifest.json's `policy.defaultMode`
  * ("advisory" | "inject"), same as for Claude Code.
  *
  * Loaded via the repo-root package.json:
@@ -39,7 +39,7 @@ const COMMANDS = [
   },
   {
     name: "edc-update",
-    description: "Incrementally update .context/ from branch changes",
+    description: "Incrementally update edc-context/ from branch changes",
     file: "edc-update.md",
   },
   {

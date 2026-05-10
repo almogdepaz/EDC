@@ -2,7 +2,7 @@
 # Task 13 smoke test: end-to-end update orchestrator preflight + spawn.
 #
 # Pins the contract that scripts/edc-update.sh:
-#   - REFUSES to act when no .context/ exists (tells user to run build)
+#   - REFUSES to act when no edc-context/ exists (tells user to run build)
 #   - REFUSES on partial / malformed v2 (tells user to run --force build)
 #   - REFUSES on v1 layout with the migration hint
 #   - PROCEEDS on healthy v2 → spawns update subprocess → doctor validates
@@ -30,8 +30,8 @@ echo "$prompt" > "$EDC_T13_LOG.prompt"
 
 if [[ "$prompt" == *"edc-update"* ]]; then
   head=$(git rev-parse HEAD)
-  sed -i.bak 's/"sourceCommit":"[^"]*"/"sourceCommit":"'"$head"'"/' .context/manifest.json
-  rm -f .context/manifest.json.bak
+  sed -i.bak 's/"sourceCommit":"[^"]*"/"sourceCommit":"'"$head"'"/' edc-context/manifest.json
+  rm -f edc-context/manifest.json.bak
   exit 0
 fi
 
@@ -63,38 +63,38 @@ setup_repo() {
 }
 
 write_healthy_v2() {
-  mkdir -p .context/modules .context/reports .context/build
+  mkdir -p edc-context/modules edc-context/reports edc-context/build
   local commit_hash="${1:-}"
   if [ -z "$commit_hash" ]; then
     commit_hash=$(git rev-parse HEAD)
   fi
-  cat > .context/manifest.json <<EOF
-{"schemaVersion":2,"sourceCommit":"$commit_hash","modules":[{"name":"root","doc":".context/modules/root.md","match":{"prefixes":["src/"]}}],"unmapped":{"allowedGlobs":["*"]},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"repoContextFile":".context/index.md","reports":{"issues":".context/reports/issues.md","complexity":".context/reports/complexity.md"},"build":{"buildInfoFile":".context/build/build.json"},"coverage":{"mappedFileCount":0,"unmappedFileCount":0,"ambiguousPathCount":0}}
+  cat > edc-context/manifest.json <<EOF
+{"schemaVersion":2,"sourceCommit":"$commit_hash","modules":[{"name":"root","doc":"edc-context/modules/root.md","match":{"prefixes":["src/"]}}],"unmapped":{"allowedGlobs":["*"]},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"coverage":{"mappedFileCount":0,"unmappedFileCount":0,"ambiguousPathCount":0}}
 EOF
-  printf '<!-- t13 -->\n# Stub\n\n## Module Map\n\n- root\n' > .context/index.md
-  printf '<!-- t13 -->\n# root\n\n## Files\n\n- src.py\n' > .context/modules/root.md
-  printf '## Known Issues\n' > .context/reports/issues.md
-  printf '## Summary\n' > .context/reports/complexity.md
-  printf '{}' > .context/build/build.json
-  printf '# Repo\n\nSee .context/index.md\n' > AGENTS.md
+  printf '<!-- t13 -->\n# Stub\n\n## Module Map\n\n- root\n' > edc-context/index.md
+  printf '<!-- t13 -->\n# root\n\n## Files\n\n- src.py\n' > edc-context/modules/root.md
+  printf '## Known Issues\n' > edc-context/reports/issues.md
+  printf '## Summary\n' > edc-context/reports/complexity.md
+  printf '{}' > edc-context/build/build.json
+  printf '# Repo\n\nSee edc-context/index.md\n' > AGENTS.md
 }
 
 export PATH="$MOCK_BIN:$PATH"
 export EDC_AGENT_CLI=claude
 export EDC_T13_LOG="$TMPDIR_T13/log"
 
-# ── 13a: no .context/ → REFUSE with "run edc-build" hint ────────────────────
+# ── 13a: no edc-context/ → REFUSE with "run edc-build" hint ────────────────────
 setup_repo
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
-  echo "FAIL (13a): expected non-zero exit on missing .context/"
+  echo "FAIL (13a): expected non-zero exit on missing edc-context/"
   echo "$out"; exit 1
 fi
-if echo "$out" | grep -q "no \.context/" && echo "$out" | grep -q "edc-build"; then
-  echo "PASS: no .context/ refused with build hint"
+if echo "$out" | grep -q "no edc-context/" && echo "$out" | grep -q "edc-build"; then
+  echo "PASS: no edc-context/ refused with build hint"
 else
-  echo "FAIL (13a): expected refusal mentioning 'no .context/' and 'edc-build'"
+  echo "FAIL (13a): expected refusal mentioning 'no edc-context/' and 'edc-build'"
   echo "$out"; exit 1
 fi
 if grep -q "spawned" "$EDC_T13_LOG"; then
@@ -104,8 +104,8 @@ fi
 
 # ── 13b: partial v2 (no manifest) → REFUSE with --force hint ─────────────────
 setup_repo
-mkdir -p .context/modules
-printf '# stub\n' > .context/modules/foo.md
+mkdir -p edc-context/modules
+printf '# stub\n' > edc-context/modules/foo.md
 echo "" > "$EDC_T13_LOG"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
@@ -126,8 +126,8 @@ fi
 
 # ── 13c: v1 layout → REFUSE with migration hint ─────────────────────────────
 setup_repo
-mkdir -p .context
-printf '{}' > .context/.meta.json
+mkdir -p edc-context
+printf '{}' > edc-context/.meta.json
 echo "" > "$EDC_T13_LOG"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
@@ -135,7 +135,7 @@ if [ "$result" -eq 0 ]; then
   echo "FAIL (13c): expected non-zero exit on v1 layout"
   echo "$out"; exit 1
 fi
-if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf .context"; then
+if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context"; then
   echo "PASS: v1 layout refused with migration hint"
 else
   echo "FAIL (13c): expected migration hint"

@@ -32,4 +32,4 @@ If the script exits non-zero, surface its error message verbatim and stop.
 Do not retry. Do not attempt the work inline — you cannot, you only have Bash.
 
 The script prints the report paths on success. Tell the user where to find
-`.context/reports/complexity.md` and `.context/reports/issues.md`.
+`edc-context/reports/complexity.md` and `edc-context/reports/issues.md`.

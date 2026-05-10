@@ -28,7 +28,7 @@ After install, pi exposes:
 
 | Command | Purpose |
 |---|---|
-| `/edc-build` | Build deep architectural context (`.context/`) |
+| `/edc-build` | Build deep architectural context (`edc-context/`) |
 | `/edc-update` | Incrementally update context from branch diff |
 | `/edc-audit` | Overengineering / bloat / duplication audit |
 | `/edc-run-review` | Differential code review against a base ref |
@@ -39,10 +39,10 @@ The command bodies are read verbatim from `plugins/edc/commands/*.md`, so behavi
 
 ## Modes
 
-EDC has two runtime modes, controlled by `.context/manifest.json` `policy.defaultMode`:
+EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.defaultMode`:
 
 - **`advisory`** (default) — pure docs. Hooks no-op. Zero per-tool token overhead.
-- **`inject`** — `session_start` surfaces `.context/index.md`; `tool_call` (bash/edit/write) auto-injects the relevant `.context/modules/<name>.md` once per session.
+- **`inject`** — `session_start` surfaces `edc-context/index.md`; `tool_call` (bash/edit/write) auto-injects the relevant `edc-context/modules/<name>.md` once per session.
 
 Toggle:
 

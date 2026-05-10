@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # edc-assert-fresh: shared freshness gate for any orchestrator that needs to
-# verify .context/ is present, structurally valid, and built at HEAD.
+# verify the context dir is present, structurally valid, and built at HEAD.
 #
 # Dual-use:
 #   1. exec'd directly: `bash edc-assert-fresh.sh` → exit 0 if fresh, non-zero
@@ -10,7 +10,8 @@
 #      without spawning a subshell.
 #
 # Sourcing convention: the caller may pre-set the MANIFEST variable (e.g.
-# review's orchestrator does). If unset, defaults to .context/manifest.json.
+# review's orchestrator does). If unset, defaults to $EDC_MANIFEST from
+# edc-paths.sh (auto-sourced if not already loaded).
 #
 # Exit codes (when exec'd):
 #   0  context is fresh and valid
@@ -19,7 +20,14 @@
 
 set -uo pipefail
 
-: "${MANIFEST:=.context/manifest.json}"
+# Auto-source edc-paths.sh if caller didn't.
+if [ -z "${EDC_CONTEXT_DIR:-}" ]; then
+  _edc_assert_fresh_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # shellcheck source=edc-paths.sh
+  . "$_edc_assert_fresh_dir/edc-paths.sh"
+fi
+
+: "${MANIFEST:=$EDC_MANIFEST}"
 
 read_manifest_source_commit() {
   local val
@@ -47,7 +55,7 @@ assert_context_fresh() {
   fi
   # content validation: index.md must have at least one ## heading (edc-build
   # emits module map, invariants, trust boundaries as ## sections)
-  local ctx=".context/index.md"
+  local ctx="$EDC_INDEX"
   if [ ! -f "$ctx" ]; then
     echo "ERROR: context file missing ($ctx) — run /edc:edc-build" >&2
     return 1

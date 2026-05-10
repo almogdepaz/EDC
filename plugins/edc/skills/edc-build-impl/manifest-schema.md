@@ -1,6 +1,6 @@
 # `manifest.json` Schema Reference (v2)
 
-`/.context/manifest.json` is the authoritative machine-readable routing and policy contract for an EDC-built repo. It replaces the v1 `.context/.meta.json` and is the only document runtime adapters consult to map repo paths to module docs and to decide enforcement behavior.
+`/edc-context/manifest.json` is the authoritative machine-readable routing and policy contract for an EDC-built repo. It replaces the v1 `edc-context/.meta.json` and is the only document runtime adapters consult to map repo paths to module docs and to decide enforcement behavior.
 
 This document is the canonical schema spec. `edc build`, `edc update`, and `edc doctor` MUST honor it. Runtime adapters (Claude hooks, Pi extensions, Cursor/Codex/Gemini wrappers) MUST treat it as the single source of truth.
 
@@ -14,9 +14,9 @@ This document is the canonical schema spec. `edc build`, `edc update`, and `edc 
 | `edcVersion` | string (semver) | yes | LLM | EDC release that produced the manifest, e.g. `"2.0.0"`. |
 | `generatedAt` | string (ISO-8601 UTC) | yes | post-step | Timestamp filled deterministically after the build LLM step. |
 | `sourceCommit` | string (full git SHA) | yes | post-step | `git rev-parse HEAD` at build time, filled deterministically after the LLM step. |
-| `repoContextFile` | string (path) | yes | LLM | Path to the startup overview, normally `.context/index.md`. |
-| `reports` | object | yes | LLM | Map of report name → path under `.context/reports/`. |
-| `build` | object | yes | LLM | Provenance and intermediate artifact paths under `.context/build/`. |
+| `repoContextFile` | string (path) | yes | LLM | Path to the startup overview, normally `edc-context/index.md`. |
+| `reports` | object | yes | LLM | Map of report name → path under `edc-context/reports/`. |
+| `build` | object | yes | LLM | Provenance and intermediate artifact paths under `edc-context/build/`. |
 | `policy` | object | yes | LLM | Enforcement and gating configuration (see [Policy](#policy)). |
 | `modules` | array | yes | LLM | Ordered list of module routing entries (see [Modules](#modules)). |
 | `unmapped` | object | yes | LLM | Globs of repo paths that are intentionally not owned by any module. |
@@ -39,8 +39,8 @@ Map of canonical report name to file path. Standard keys:
 
 | Key | Path |
 |---|---|
-| `issues` | `.context/reports/issues.md` |
-| `complexity` | `.context/reports/complexity.md` |
+| `issues` | `edc-context/reports/issues.md` |
+| `complexity` | `edc-context/reports/complexity.md` |
 
 Adapters MAY add extra report keys (e.g. `security`, `performance`); unknown keys MUST be preserved by `edc update`.
 
@@ -48,7 +48,7 @@ Adapters MAY add extra report keys (e.g. `security`, `performance`); unknown key
 
 | Key | Path |
 |---|---|
-| `buildInfoFile` | `.context/build/build.json` |
+| `buildInfoFile` | `edc-context/build/build.json` |
 
 Build provenance only. Runtime adapters MUST NOT auto-load it.
 
@@ -60,8 +60,8 @@ Build provenance only. Runtime adapters MUST NOT auto-load it.
 |---|---|---|---|
 | `defaultMode` | enum: `"advisory"` \| `"inject"` | yes | Repo-default runtime mode. `advisory` means EDC only ships docs and instructions; `inject` means the harness auto-loads the matching module doc when it can. Flip with `edc mode advisory\|inject`. |
 | `guardedTools` | string[] | optional | Tools that, in inject installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
-| `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `.context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
-| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `.context/**`, `AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
+| `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `edc-context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
+| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
 | `unmatchedPathPolicy` | enum: `"warn-allow"` | yes | Behavior for code paths that match no module. v2 only defines `"warn-allow"`: edits/writes against unmatched paths are warned and allowed; `edc doctor` flags the gap. This keeps the manifest an honest contract instead of a precondition for adding new code. |
 
 ---
@@ -73,7 +73,7 @@ Each entry routes a slice of the repo to a deep module doc.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Stable module identifier. Lowercase, kebab-case. Used as the registry key for the loaded-set in inject mode. |
-| `doc` | string (path) | yes | Path to the module doc, normally `.context/modules/<name>.md`. |
+| `doc` | string (path) | yes | Path to the module doc, normally `edc-context/modules/<name>.md`. |
 | `summary` | string | yes | One-sentence module description. |
 | `priority` | integer | yes | Tie-breaker for ambiguous matches. Higher wins. Default convention: `100`. |
 | `match` | object | yes | Path-matching predicates (see below). |
@@ -167,17 +167,17 @@ Filled by the post-step. All counts cover the set of repo files included in `git
   "sourceCommit": "18b6a1b6803c4fbb3b1d6fa05b4d2c0c5f3e9a11",
 
   // startup overview agents load first
-  "repoContextFile": ".context/index.md",
+  "repoContextFile": "edc-context/index.md",
 
-  // canonical reports under .context/reports/
+  // canonical reports under edc-context/reports/
   "reports": {
-    "issues": ".context/reports/issues.md",
-    "complexity": ".context/reports/complexity.md"
+    "issues": "edc-context/reports/issues.md",
+    "complexity": "edc-context/reports/complexity.md"
   },
 
   // build provenance; not auto-loaded
   "build": {
-    "buildInfoFile": ".context/build/build.json"
+    "buildInfoFile": "edc-context/build/build.json"
   },
 
   // enforcement and gating policy
@@ -188,12 +188,12 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     // tools gated on the matching module doc being loaded (inject only)
     "guardedTools": ["read", "edit", "write"],
 
-    // tools gated only on .context/index.md being loaded
+    // tools gated only on edc-context/index.md being loaded
     "discoveryGatedOnIndex": ["grep", "glob", "find", "ls"],
 
     // always-readable bootstrap paths (no gate)
     "bootstrapAlwaysReadable": [
-      ".context/**",
+      "edc-context/**",
       "AGENTS.md",
       ".edc/**",
       "LICENSE*",
@@ -212,7 +212,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
   "modules": [
     {
       "name": "consensus",
-      "doc": ".context/modules/consensus.md",
+      "doc": "edc-context/modules/consensus.md",
       "summary": "Chain state, block validation, fork choice, difficulty math.",
       "priority": 100,
       "match": {
@@ -226,7 +226,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     },
     {
       "name": "consensus-tests",
-      "doc": ".context/modules/consensus-tests.md",
+      "doc": "edc-context/modules/consensus-tests.md",
       "summary": "Consensus-layer test suite.",
       // higher priority wins ties at the same tier
       "priority": 110,
@@ -274,29 +274,29 @@ A file like `chia/consensus/blockchain.py` resolves at Tier 1 directly to `conse
    This repo ships deep architectural context generated by EDC. Read this file at session start before touching code.
    ```
 
-2. **Link to `.context/index.md` overview.** A pointer to the startup overview, with a single sentence about what it contains:
+2. **Link to `edc-context/index.md` overview.** A pointer to the startup overview, with a single sentence about what it contains:
    ```md
    ## Overview
 
-   See [`.context/index.md`](.context/index.md) for the architecture overview, actor map, key flows, global invariants, and module table.
+   See [`edc-context/index.md`](edc-context/index.md) for the architecture overview, actor map, key flows, global invariants, and module table.
    ```
 
-3. **Link to `.context/manifest.json` routing contract.** A pointer to the manifest as the authoritative routing and policy contract:
+3. **Link to `edc-context/manifest.json` routing contract.** A pointer to the manifest as the authoritative routing and policy contract:
    ```md
    ## Routing Contract
 
-   See [`.context/manifest.json`](.context/manifest.json) for the authoritative path→module routing contract, enforcement policy, and report locations. Runtime adapters consult this file directly; do not duplicate or paraphrase its rules.
+   See [`edc-context/manifest.json`](edc-context/manifest.json) for the authoritative path→module routing contract, enforcement policy, and report locations. Runtime adapters consult this file directly; do not duplicate or paraphrase its rules.
    ```
 
-4. **Statement of the runtime mode.** A line reflecting `policy.defaultMode` from `.context/manifest.json`:
+4. **Statement of the runtime mode.** A line reflecting `policy.defaultMode` from `edc-context/manifest.json`:
    ```md
    ## Runtime Mode
 
-   Runtime mode: **inject**. The harness auto-loads the matching module doc from `.context/modules/<name>.md` before guarded operations.
+   Runtime mode: **inject**. The harness auto-loads the matching module doc from `edc-context/modules/<name>.md` before guarded operations.
    ```
    For `advisory`:
    ```md
-   Runtime mode: **advisory**. EDC ships docs only; loading is best-effort. Read `.context/index.md` first, then the relevant `.context/modules/<name>.md`.
+   Runtime mode: **advisory**. EDC ships docs only; loading is best-effort. Read `edc-context/index.md` first, then the relevant `edc-context/modules/<name>.md`.
    ```
 
 `edc build` MUST emit all four sections. Flip the runtime mode at any time with `edc mode advisory|inject`; rebuilds preserve the existing value.

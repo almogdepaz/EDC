@@ -12,7 +12,7 @@
 #   2. parse args (--base, --ignore, --context-mode)
 #   3. preflight gate via edc-clean-slate.sh --check:
 #        11 (healthy v2)            → proceed
-#        0  (no .context/)          → REFUSE: "run edc-build first"
+#        0  (no context dir)         → REFUSE: "run edc-build first"
 #        10 (partial / malformed)   → REFUSE: "run edc-build to rebuild"
 #        12 (v1 layout)             → already printed migration hint, exit
 #   4. auto-detect base if --base not given (git merge-base with main/master)
@@ -37,8 +37,6 @@ if ! command -v git > /dev/null 2>&1; then
   exit 2
 fi
 
-MANIFEST=".context/manifest.json"
-
 _edc_resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do
@@ -50,6 +48,9 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
 
@@ -90,9 +91,9 @@ preflight_check() {
     11) # healthy v2 — good to go
       return 0
       ;;
-    0)  # no .context/
-      cat >&2 <<'EOF'
-ERROR: no .context/ to update.
+    0)  # no context dir
+      cat >&2 <<EOF
+ERROR: no ${EDC_CONTEXT_DIR}/ to update.
 
 Run a full build first:
 
@@ -101,8 +102,8 @@ EOF
       return 1
       ;;
     10) # partial / malformed v2
-      cat >&2 <<'EOF'
-ERROR: partial or malformed .context/ layout detected.
+      cat >&2 <<EOF
+ERROR: partial or malformed ${EDC_CONTEXT_DIR}/ layout detected.
 
 This usually means a previous build was interrupted or wrote v1-shaped output.
 Run a full rebuild to fix it:

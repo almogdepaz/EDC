@@ -23,6 +23,12 @@ import { fileURLToPath } from "url";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
+import {
+  EDC_CONTEXT_DIR,
+  EDC_MANIFEST_REL,
+  EDC_INDEX_REL,
+  EDC_MODULES_DIR_REL,
+} from "./paths.mjs";
 
 // --- plugin layout ---
 
@@ -55,7 +61,7 @@ export function resolvePluginRoot(metaUrl) {
 // --- manifest ---
 
 export function loadManifest(projectRoot) {
-  const manifestPath = join(projectRoot, ".context", "manifest.json");
+  const manifestPath = join(projectRoot, EDC_MANIFEST_REL);
   if (!existsSync(manifestPath)) return null;
   try {
     return JSON.parse(readFileSync(manifestPath, "utf-8"));
@@ -65,7 +71,7 @@ export function loadManifest(projectRoot) {
 }
 
 export function manifestPath(projectRoot) {
-  return join(projectRoot, ".context", "manifest.json");
+  return join(projectRoot, EDC_MANIFEST_REL);
 }
 
 // --- staleness ---
@@ -149,7 +155,7 @@ export function routeFile(manifestPathArg, filePath, pluginRoot) {
 export function moduleDocPath(manifest, moduleName) {
   const mod = (manifest.modules || []).find((m) => m.name === moduleName);
   if (!mod) return null;
-  return mod.doc || `.context/modules/${moduleName}.md`;
+  return mod.doc || `${EDC_MODULES_DIR_REL}/${moduleName}.md`;
 }
 
 // --- dedup ---
@@ -195,7 +201,7 @@ export function isDuplicate(sessionId, moduleName) {
 export function isEdcProject(projectRoot) {
   return (
     existsSync(join(projectRoot, ".git")) ||
-    existsSync(join(projectRoot, ".context", "manifest.json"))
+    existsSync(join(projectRoot, EDC_MANIFEST_REL))
   );
 }
 
@@ -246,7 +252,7 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
  */
 export function buildSessionStartContent(projectRoot) {
   const manifest = loadManifest(projectRoot);
-  const indexPath = join(projectRoot, ".context", "index.md");
+  const indexPath = join(projectRoot, EDC_INDEX_REL);
 
   if (!manifest) {
     return {

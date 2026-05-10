@@ -1,6 +1,6 @@
 ---
 name: edc:edc-update
-description: Incrementally updates .context/ files based on branch changes
+description: Incrementally updates edc-context/ files based on branch changes
 argument-hint: "[--base <ref>] [--ignore <glob>]..."
 allowed-tools:
   - Bash
@@ -11,7 +11,7 @@ allowed-tools:
 **Arguments:** $ARGUMENTS
 
 The orchestrator script runs the full pipeline self-driven: it gates on
-`.context/` health (refusing to update partial/v1/missing layouts with a
+`edc-context/` health (refusing to update partial/v1/missing layouts with a
 copy-pasteable hint), spawns the update subprocess via `EDC_AGENT_CLI`,
 and validates the result with `edc-doctor.sh`. Your only job is to
 invoke it and surface its output. You have no other tools.

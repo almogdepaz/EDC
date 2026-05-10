@@ -21,11 +21,11 @@ touch dummy.txt && git add dummy.txt && git commit -q -m "init"
 HEAD=$(git rev-parse HEAD)
 
 # ── 3a: assert_context_fresh rejects index.md without ## headings ─────────────
-mkdir -p .context
-cat > .context/manifest.json <<EOF
+mkdir -p edc-context
+cat > edc-context/manifest.json <<EOF
 {"schemaVersion": 2, "sourceCommit": "$HEAD", "modules": []}
 EOF
-printf 'plain text with no headings at all\n' > .context/index.md
+printf 'plain text with no headings at all\n' > edc-context/index.md
 
 result=0
 bash "$(cd - > /dev/null && pwd)/$SCRIPT" --check-context 2>/tmp/t3-stderr.txt || result=$?
@@ -38,7 +38,7 @@ else
 fi
 
 # ── 3b: consolidate rejects report without ## headings ────────────────────────
-printf '## Module Map\nlegit context\n' > .context/index.md
+printf '## Module Map\nlegit context\n' > edc-context/index.md
 
 mkdir -p review-tasks
 cat > review-tasks/manifest.json <<'MANIFEST'
@@ -47,7 +47,7 @@ cat > review-tasks/manifest.json <<'MANIFEST'
   "baseline": "",
   "head": "HEAD",
   "modules": [
-    { "name": "foo", "doc": ".context/modules/foo.md", "files": ["foo/bar.js"] }
+    { "name": "foo", "doc": "edc-context/modules/foo.md", "files": ["foo/bar.js"] }
   ]
 }
 MANIFEST
@@ -80,11 +80,11 @@ else
 fi
 
 # ── 3d: manifest declares v2 schema ───────────────────────────────────────────
-if jq -e '.schemaVersion == 2' .context/manifest.json > /dev/null; then
-  echo "PASS: .context/manifest.json schemaVersion == 2"
+if jq -e '.schemaVersion == 2' edc-context/manifest.json > /dev/null; then
+  echo "PASS: edc-context/manifest.json schemaVersion == 2"
 else
-  echo "FAIL: .context/manifest.json schemaVersion != 2"
-  cat .context/manifest.json
+  echo "FAIL: edc-context/manifest.json schemaVersion != 2"
+  cat edc-context/manifest.json
   exit 1
 fi
 

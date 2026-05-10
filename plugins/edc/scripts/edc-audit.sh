@@ -13,7 +13,7 @@
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
 #   4. spawn ONE audit subprocess via edc_spawn (claude/cursor/codex)
-#   5. validate output: .context/reports/{complexity,issues}.md must exist
+#   5. validate output: <reports-dir>/{complexity,issues}.md must exist
 #      and contain at least one ## heading
 #   6. exit 0 with paths printed, non-zero with reason
 #
@@ -29,8 +29,6 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 2
 fi
 
-MANIFEST=".context/manifest.json"
-
 # Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
 # real script location, not the invocation path.
 _edc_resolve_script_dir() {
@@ -44,6 +42,9 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 
 # ── agent CLI selection ──────────────────────────────────────────────────────
@@ -68,8 +69,8 @@ CODEX_EXEC_HOME_OWNED=0
 # ── validate audit output ────────────────────────────────────────────────────
 
 assert_audit_reports_valid() {
-  local complexity=".context/reports/complexity.md"
-  local issues=".context/reports/issues.md"
+  local complexity="$EDC_COMPLEXITY"
+  local issues="$EDC_ISSUES"
   local rc=0
   for f in "$complexity" "$issues"; do
     if [ ! -f "$f" ]; then
@@ -136,7 +137,7 @@ audit_main() {
       ;;
   esac
 
-  # Gate on freshness; recover if needed. After this returns, .context/ is fresh.
+  # Gate on freshness; recover if needed. After this returns, $EDC_CONTEXT_DIR is fresh.
   recover_context_if_needed "${ignore_args[@]}" \
     || exit 1
 
@@ -151,8 +152,8 @@ audit_main() {
   assert_audit_reports_valid || exit 1
 
   echo "Audit reports:"
-  echo "  .context/reports/complexity.md"
-  echo "  .context/reports/issues.md"
+  echo "  $EDC_COMPLEXITY"
+  echo "  $EDC_ISSUES"
   exit 0
 }
 

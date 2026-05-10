@@ -61,19 +61,19 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Build a minimal fake ctx environment with a real .context/manifest.json so
+# Build a minimal fake ctx environment with a real edc-context/manifest.json so
 # buildToolCallInjection has something to chew on.
-mkdir -p "$TMP/.context/modules"
-cat > "$TMP/.context/manifest.json" <<'EOF'
+mkdir -p "$TMP/edc-context/modules"
+cat > "$TMP/edc-context/manifest.json" <<'EOF'
 {
   "schemaVersion": 2,
   "policy": { "defaultMode": "inject" },
   "modules": [
-    { "name": "src-mod", "priority": 50, "match": { "prefixes": ["src/"] }, "doc": ".context/modules/src-mod.md" }
+    { "name": "src-mod", "priority": 50, "match": { "prefixes": ["src/"] }, "doc": "edc-context/modules/src-mod.md" }
   ]
 }
 EOF
-echo "# src-mod docs" > "$TMP/.context/modules/src-mod.md"
+echo "# src-mod docs" > "$TMP/edc-context/modules/src-mod.md"
 
 # Unique session id per test run so the file-based dedup (rooted in os.tmpdir())
 # doesn't poison a re-run.

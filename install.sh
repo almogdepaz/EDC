@@ -6,7 +6,7 @@
 #
 # Agents: claude, cursor, codex, pi
 #
-# Runtime mode (advisory vs inject) is controlled by `.context/manifest.json`'s
+# Runtime mode (advisory vs inject) is controlled by `edc-context/manifest.json`'s
 # `policy.defaultMode` field. Flip it with: `edc mode advisory|inject`.
 
 set -euo pipefail
@@ -126,6 +126,8 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$scripts_target/edc-resolve-prompt.sh"
   copy_or_download "plugins/edc/scripts/edc-spawn.sh"         "$scripts_target/edc-spawn.sh"
   copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
+  copy_or_download "plugins/edc/scripts/edc-paths.sh"          "$scripts_target/edc-paths.sh"
+  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"     "$scripts_target/edc-build-plan.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
@@ -140,7 +142,9 @@ install_terminal_cli() {
     "$scripts_target/edc-assert-fresh.sh" \
     "$scripts_target/edc-resolve-prompt.sh" \
     "$scripts_target/edc-spawn.sh" \
-    "$scripts_target/edc-recover-context.sh"
+    "$scripts_target/edc-recover-context.sh" \
+    "$scripts_target/edc-build-plan.sh"
+  # edc-paths.sh is sourced, not exec'd — no chmod needed
 }
 
 # write_cursor_commands <cursor-target>
@@ -225,42 +229,63 @@ print_path_hint() {
   esac
 }
 
+# print_cli_hint <agent>
+# Shows the terminal-CLI commands the user can run from any shell once
+# ~/.edc/scripts is on PATH. <agent> is one of claude/cursor/codex/pi and
+# is used to fill in the --agent flag for the example commands.
+print_cli_hint() {
+  local agent="$1"
+  echo
+  echo "Terminal CLI (run from any repo, after PATH is set):"
+  case "$agent" in
+    pi)
+      # pi has its own slash-command surface and is not yet supported as an
+      # --agent value for the orchestrators (claude/cursor/codex only).
+      echo "  edc doctor                 # validate context"
+      echo "  edc mode advisory|inject   # toggle runtime mode in edc-context/manifest.json"
+      echo
+      echo "Build/review/audit from pi: use the slash commands inside pi:"
+      echo "  /edc-build, /edc-update, /edc-audit, /edc-run-review, /edc-doctor"
+      ;;
+    *)
+      echo "  edc build  --agent $agent             # build or update edc-context/"
+      echo "  edc update --agent $agent             # force incremental update"
+      echo "  edc review --agent $agent --base main # differential review of current branch"
+      echo "  edc audit  --agent $agent             # complexity / bloat audit"
+      echo "  edc doctor                            # validate context"
+      echo "  edc mode advisory|inject              # toggle runtime mode"
+      ;;
+  esac
+}
+
+# install_edc_skills <skills-target>
+# Drop SKILL.md (+ supporting files) into <target>/<skill-name>/. Used by
+# the claude CLI install path so resolve_prompt's claude branch can find
+# skills under ~/.edc/skills/ without depending on the claude plugin.
+install_edc_skills() {
+  local target="$1"
+  local f rel
+  for f in "${SKILLS[@]}"; do
+    rel=$(skill_rel "$f")
+    copy_or_download "$f" "$target/$rel"
+  done
+}
+
 install_claude_runtime() {
-  local target="$HOME/.claude/plugins/edc"
-
-  if [ -d "$LOCAL_PLUGIN_ROOT" ]; then
-    mkdir -p "$HOME/.claude/plugins"
-    copy_tree_or_fail "$LOCAL_PLUGIN_ROOT" "$target"
-  else
-    mkdir -p "$target/.claude-plugin" "$target/commands" "$target/hooks" "$target/scripts"
-    copy_or_download "plugins/edc/.claude-plugin/plugin.json" "$target/.claude-plugin/plugin.json"
-    copy_or_download "plugins/edc/commands/edc-build.md" "$target/commands/edc-build.md"
-    copy_or_download "plugins/edc/commands/edc-update.md" "$target/commands/edc-update.md"
-    copy_or_download "plugins/edc/commands/edc-audit.md" "$target/commands/edc-audit.md"
-    copy_or_download "plugins/edc/commands/edc-review.md" "$target/commands/edc-review.md"
-    copy_or_download "plugins/edc/commands/edc-run-review.md" "$target/commands/edc-run-review.md"
-    copy_or_download "plugins/edc/commands/edc-doctor.md" "$target/commands/edc-doctor.md"
-    copy_or_download "plugins/edc/hooks/hooks.json" "$target/hooks/hooks.json"
-    copy_or_download "plugins/edc/hooks/session-start.mjs" "$target/hooks/session-start.mjs"
-    copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
-    copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
-    copy_or_download "plugins/edc/scripts/edc-build.sh" "$target/scripts/edc-build.sh"
-    copy_or_download "plugins/edc/scripts/edc-update.sh" "$target/scripts/edc-update.sh"
-    copy_or_download "plugins/edc/scripts/edc-audit.sh" "$target/scripts/edc-audit.sh"
-    copy_or_download "plugins/edc/scripts/edc-route.sh" "$target/scripts/edc-route.sh"
-    copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
-    copy_or_download "plugins/edc/scripts/edc-runtime.sh" "$target/scripts/edc-runtime.sh"
-    copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh" "$target/scripts/edc-assert-fresh.sh"
-    copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$target/scripts/edc-resolve-prompt.sh"
-    copy_or_download "plugins/edc/scripts/edc-spawn.sh" "$target/scripts/edc-spawn.sh"
-    copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$target/scripts/edc-recover-context.sh"
-  fi
-
   install_terminal_cli
-  echo "Installed EDC Claude runtime in $target."
-  echo "Terminal CLI installed at $HOME/.edc/scripts/edc."
-  echo "Runtime mode is read from .context/manifest.json (defaults to advisory)."
+  install_edc_skills "$HOME/.edc/skills"
+  echo "Installed EDC terminal CLI at $HOME/.edc/scripts/edc."
+  echo "Installed EDC skill bundle at $HOME/.edc/skills/."
+  echo
+  echo "This installs the standalone CLI only. The CLI works without the claude plugin."
+  echo
+  echo "For slash commands (/edc:edc-build, hooks) inside interactive claude, ALSO run:"
+  echo "  claude plugin marketplace add almogdepaz/wolfpack-plugins"
+  echo "  claude plugin install edc@edc"
+  echo
+  echo "Runtime mode is read from edc-context/manifest.json (defaults to advisory)."
   echo "Flip with: edc mode inject"
+  print_cli_hint claude
   print_path_hint
 }
 
@@ -279,6 +304,7 @@ case "$AGENT" in
     install_terminal_cli
     write_cursor_commands "$TARGET"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
+    print_cli_hint cursor
     print_path_hint
     ;;
 
@@ -292,6 +318,7 @@ case "$AGENT" in
     install_terminal_cli
     write_codex_skills "$TARGET"
     echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
+    print_cli_hint codex
     print_path_hint
     ;;
 
@@ -307,6 +334,7 @@ case "$AGENT" in
     fi
     install_terminal_cli
     echo "Done. Run /edc-build inside pi to create context. Toggle mode with 'edc mode advisory|inject'."
+    print_cli_hint pi
     print_path_hint
     ;;
 

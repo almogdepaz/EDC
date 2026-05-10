@@ -13,7 +13,7 @@
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
 #   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 #                                                     task-generation only (emit TASK lines, no subprocess spawning)
-#   edc-review.sh --check-context                      assert .context/manifest.json fresh (no diff, no task gen)
+#   edc-review.sh --check-context                      assert <EDC_CONTEXT_DIR>/manifest.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
@@ -36,7 +36,6 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 2
 fi
 
-MANIFEST=".context/manifest.json"
 # Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
 # edc-clean-slate.sh) are found relative to the real script location, not the
 # invocation path. scripts/edc-review.sh is a symlink to
@@ -53,7 +52,11 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
+ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -342,7 +345,7 @@ auto_mode() {
   done
 
   # Gate on freshness; recover (build/update + force-retry) if needed. After
-  # this returns, .context/manifest.json is fresh or we've exited non-zero.
+  # this returns, $EDC_MANIFEST is fresh or we've exited non-zero.
   recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
     || exit 1
 
@@ -417,14 +420,14 @@ build_mode() {
 
   if [ ! -f "$MANIFEST" ]; then
     echo "CONTEXT_MISSING"
-    echo "No .context/manifest.json found. Run edc-build before reviewing."
+    echo "No $MANIFEST found. Run edc-build before reviewing."
     exit 1
   fi
 
   # Structural check: index.md must exist and contain ## headings. Absent or
   # stubbed index.md means edc-build never finished (or wrote junk) — treat as
   # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
-  local ctx=".context/index.md"
+  local ctx="$EDC_INDEX"
   if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
     echo "CONTEXT_MISSING"
     echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
@@ -460,9 +463,9 @@ build_mode() {
   fi
 
   # Filter out tool-internal paths. These are edc scratch state — reviewing
-  # them would make the tool eat its own tail (review .context/, review-tasks/,
-  # or prior review-*.md files as if they were source).
-  files=$(echo "$files" | grep -Ev '^(\.context/|review-tasks/|review-[^/]+\.md$)' || true)
+  # them would make the tool eat its own tail (review the context dir,
+  # review-tasks/, or prior review-*.md files as if they were source).
+  files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-tasks/|review-[^/]+\.md$)" || true)
   files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
 
   if [ -z "$files" ]; then
@@ -471,15 +474,122 @@ build_mode() {
     exit 2
   fi
 
-  # Step 3: group by top-level dir
+  # Step 3: group by module via $EDC_MANIFEST routing.
+  # Use edc-route.sh — single source of truth, same logic the hooks use.
+  # Files with no module match go into a synthetic "unmapped" bucket and
+  # are surfaced according to policy.unmatchedPathPolicy. Ambiguous routing
+  # is a hard error (manifest bug, refuse to silently pick a winner).
+  if [ ! -x "$ROUTE_SH" ] && [ ! -f "$ROUTE_SH" ]; then
+    echo "ERROR: edc-route.sh not found at $ROUTE_SH" >&2
+    exit 2
+  fi
+
+  local unmatched_policy
+  unmatched_policy=$(jq -r '.policy.unmatchedPathPolicy // "warn-allow"' "$MANIFEST")
+  case "$unmatched_policy" in
+    warn-allow|allow|fail) ;;
+    *)
+      echo "ERROR: invalid policy.unmatchedPathPolicy in $MANIFEST: '$unmatched_policy'" >&2
+      echo "HINT: must be one of: warn-allow, allow, fail" >&2
+      exit 2
+      ;;
+  esac
+
+  # Pre-compile allowedGlobs so we can suppress per-file warnings for paths
+  # the manifest already declared as expected-unmapped (README, package.json,
+  # docs/*, etc).
+  local -a allowed_globs=()
+  while IFS= read -r g; do
+    [ -n "$g" ] && allowed_globs+=("$g")
+  done < <(jq -r '.unmapped.allowedGlobs // [] | .[]' "$MANIFEST")
+
+  _is_expected_unmapped() {
+    local path="$1" g
+    for g in "${allowed_globs[@]}"; do
+      # shellcheck disable=SC2053
+      [[ "$path" == $g ]] && return 0
+    done
+    return 1
+  }
+
   declare -A MODULE_FILES
+  local ambiguous_count=0 unmapped_count=0 mapped_count=0
+  local -a unmapped_unexpected=()
+  local -a ambiguous_lines=()
+
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    local dir
-    dir=$(dirname "$file" | cut -d'/' -f1)
-    [ "$dir" = "." ] && dir="root"
-    MODULE_FILES["$dir"]+="${file}"$'\n'
+    local module route_err route_rc=0
+    route_err=$(mktemp)
+    module=$(bash "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
+
+    case "$route_rc" in
+      0)
+        MODULE_FILES["$module"]+="${file}"$'\n'
+        mapped_count=$((mapped_count + 1))
+        ;;
+      1)
+        # No module match — group into "unmapped". Track unexpected ones for
+        # policy enforcement.
+        MODULE_FILES["unmapped"]+="${file}"$'\n'
+        unmapped_count=$((unmapped_count + 1))
+        if ! _is_expected_unmapped "$file"; then
+          unmapped_unexpected+=("$file")
+        fi
+        ;;
+      2)
+        ambiguous_count=$((ambiguous_count + 1))
+        ambiguous_lines+=("$file: $(cat "$route_err")")
+        ;;
+      *)
+        echo "ERROR: edc-route.sh failed (rc=$route_rc) for path: $file" >&2
+        cat "$route_err" >&2
+        rm -f "$route_err"
+        exit 2
+        ;;
+    esac
+    rm -f "$route_err"
   done <<< "$files"
+
+  # Ambiguous routing is always fatal — manifest bug, not a runtime concern.
+  if [ "$ambiguous_count" -gt 0 ]; then
+    echo "ERROR: $ambiguous_count file(s) match multiple modules at top priority:" >&2
+    local line
+    for line in "${ambiguous_lines[@]}"; do
+      echo "  $line" >&2
+    done
+    echo "HINT: edit $MANIFEST — bump priority on the intended" >&2
+    echo "      module or tighten its match.{exactFiles,prefixes,globs} rules" >&2
+    exit 2
+  fi
+
+  # Unmapped policy enforcement.
+  if [ "${#unmapped_unexpected[@]}" -gt 0 ]; then
+    case "$unmatched_policy" in
+      fail)
+        echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (policy=fail):" >&2
+        local f
+        for f in "${unmapped_unexpected[@]}"; do
+          echo "  $f" >&2
+        done
+        echo "HINT: add a module rule in $MANIFEST or list the path" >&2
+        echo "      in unmapped.allowedGlobs, then re-run." >&2
+        exit 2
+        ;;
+      warn-allow)
+        echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (will review under 'unmapped'):" >&2
+        local f
+        for f in "${unmapped_unexpected[@]}"; do
+          echo "  $f" >&2
+        done
+        ;;
+      allow)
+        : # silent — counted in summary below only
+        ;;
+    esac
+  fi
+
+  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count modules=${#MODULE_FILES[@]}" >&2
 
   # Step 4: write review-tasks/
   rm -rf review-tasks
@@ -498,7 +608,11 @@ build_mode() {
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      echo -n "    { \"name\": \"$module\", \"doc\": \".context/modules/${module}.md\", \"files\": ["
+      # The synthetic "unmapped" bucket has no per-module doc; emit empty
+      # doc field so the review subagent skips the per-module read step.
+      local module_doc="${EDC_MODULES_DIR}/${module}.md"
+      [ "$module" = "unmapped" ] && module_doc=""
+      echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
         | grep -v '^$' \
@@ -516,10 +630,16 @@ build_mode() {
 
   # per-module task files
   while IFS= read -r module; do
-    local file_list baseline_line
+    local file_list baseline_line module_context_line
     file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
+
+    if [ "$module" = "unmapped" ]; then
+      module_context_line="3. NOTE: these files are not mapped to any module in ${EDC_MANIFEST}. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths."
+    else
+      module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists — deep per-module context, invariants, call graphs"
+    fi
 
     cat > "review-tasks/${module}.md" <<TASK
 # Review Task: \`${module}\`
@@ -532,9 +652,9 @@ ${file_list}
 
 ## Instructions
 
-1. Read \`.context/index.md\` — module map, invariants, trust boundaries
-2. Read \`.context/reports/issues.md\` if it exists — cross-reference known issues against the files above
-3. Read \`.context/modules/${module}.md\` if it exists — deep per-module context, invariants, call graphs
+1. Read \`${EDC_INDEX}\` — module map, invariants, trust boundaries
+2. Read \`${EDC_ISSUES}\` if it exists — cross-reference known issues against the files above
+${module_context_line}
 4. Use the edc-review skill to perform the full review on the files listed above
 5. Write your report to \`review-tasks/report-${module}.md\`
 

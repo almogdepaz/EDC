@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # edc-recover-context: shared context recovery state machine.
 #
-# Sourced (not exec'd) by orchestrators that need fresh .context/ before
+# Sourced (not exec'd) by orchestrators that need fresh context dir before
 # proceeding. Defines `recover_context_if_needed` which:
 #
 #   1. If context already fresh (via assert_context_fresh) → return 0 immediately.
@@ -29,9 +29,13 @@
 # If present, args before `--` go to build only, args after to update only.
 # Review-style callers that want --base on update only use the `--` form.
 
-# Auto-source resolve_prompt if caller didn't.
+# Auto-source paths and resolve_prompt if caller didn't.
+_edc_recover_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${EDC_CONTEXT_DIR:-}" ]; then
+  # shellcheck source=edc-paths.sh
+  . "$_edc_recover_dir/edc-paths.sh"
+fi
 if ! command -v resolve_prompt >/dev/null 2>&1; then
-  _edc_recover_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # shellcheck source=edc-resolve-prompt.sh
   . "$_edc_recover_dir/edc-resolve-prompt.sh"
 fi
@@ -42,7 +46,7 @@ _edc_classify_context_state() {
   if [ ! -f "$MANIFEST" ]; then
     echo "MISSING"; return 0
   fi
-  local ctx=".context/index.md"
+  local ctx="$EDC_INDEX"
   if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
     echo "MISSING"; return 0
   fi
@@ -135,6 +139,6 @@ recover_context_if_needed() {
   echo "ERROR: context still not ready after recovery (manifest.json missing or invalid)." >&2
   echo "HINT: the build agent likely failed to produce a valid v2 layout." >&2
   echo "      check the build agent output above; you can also try:" >&2
-  echo "      rm -rf .context AGENTS.md && edc build --agent <agent>" >&2
+  echo "      rm -rf $EDC_CONTEXT_DIR AGENTS.md && edc build --agent <agent>" >&2
   return 1
 }

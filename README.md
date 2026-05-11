@@ -6,32 +6,35 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
 ## What it does
 
-**EDC builds deep architectural context, then uses it to catch things a blind diff review would miss.**
+EDC builds a persistent map of a codebase — module boundaries, per-module deep analysis, invariants, trust boundaries — then uses that map to do context-aware reviews and audits that a blind diff review would miss.
 
-### Build pipeline
+All commands write to / read from `edc-context/` at the repo root. You only need to **build** once; everything else is on-demand.
 
-Run these entrypoints in order on any codebase:
-- Claude Code: `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-audit`, `/edc:edc-run-review`, `/edc:edc-doctor`
-- Cursor: `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-review`
-- Codex: `$edc-build`, `$edc-update`, `$edc-audit`, `$edc-review`
-- pi: `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review`
+### Commands
 
-All four agents also get a shared terminal CLI at `~/.edc/scripts/edc` (`edc build|update|review|audit|mode|doctor`).
+| Command | When to run it |
+|---------|----------------|
+| **build** | Once per repo (and after big refactors). Discovers modules and spawns one subagent per module to deeply analyze its files in parallel. Writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short `AGENTS.md` orientation. |
+| **update** | Before review/audit if HEAD has moved. Incremental refresh from the branch diff so you don't rebuild from scratch on every PR. (review and audit auto-run this if context is stale.) |
+| **review** | On a PR / branch / commit / diff file. Context-aware differential review: blast radius, adversarial modeling, invariant checking. Outputs a structured report. |
+| **audit** | Anytime. Compares context expectations against actual code to flag overengineering, bloat, and duplication. |
+| **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 
-1. **build** — discovers modules, then spawns one subagent per module to deeply analyze its files (function-level: First Principles, 5 Whys, 5 Hows) in parallel. Produces:
-   - `AGENTS.md` — short runtime orientation
-   - `edc-context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
-   - `edc-context/manifest.json` — routing and policy contract
-   - `edc-context/modules/<name>.md` — deep per-module analysis
-   - `edc-context/reports/issues.md` — actionable list of all problems found
-   - `edc-context/reports/complexity.md` — bloat, duplication, overengineering audit
-   - `edc-context/build/build.json` — build provenance (timestamp, version, source commit, modules emitted)
+### Run it
 
-2. **update** — incremental update from branch diff, so you don't rebuild from scratch on every PR
+From any terminal, in the target repo:
 
-3. **audit** — identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
+```bash
+edc build  --agent claude              # build edc-context/ (once per repo)
+edc update --agent claude              # incremental refresh after HEAD moves
+edc review --agent claude --base main  # differential review of current branch
+edc audit  --agent claude              # complexity / bloat / duplication audit
+edc doctor                             # validate edc-context/ layout
+```
 
-4. **review** — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
+`--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout. `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale.
+
+Each agent also exposes the same actions as native slash commands (e.g. `/edc:edc-run-review` in Claude Code, `/edc-review` in Cursor, `$edc-review` in Codex) — they all shell out to the same orchestrators under `~/.edc/scripts/`. See [Terminal CLI](#terminal-cli) below for the full flag reference.
 
 ### Two runtime modes (Claude Code)
 

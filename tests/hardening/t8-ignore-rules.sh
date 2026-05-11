@@ -3,7 +3,7 @@
 # Run from repo root: bash tests/hardening/t8-ignore-rules.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc-review.sh"
+SCRIPT="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 TMPDIR_T8=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T8"' EXIT

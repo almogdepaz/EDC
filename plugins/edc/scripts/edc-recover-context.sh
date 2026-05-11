@@ -29,15 +29,12 @@
 # If present, args before `--` go to build only, args after to update only.
 # Review-style callers that want --base on update only use the `--` form.
 
-# Auto-source paths and resolve_prompt if caller didn't.
+# Auto-source edc-lib.sh (paths + runtime + spawn + prompt resolution)
+# if caller didn't.
 _edc_recover_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -z "${EDC_CONTEXT_DIR:-}" ]; then
-  # shellcheck source=edc-paths.sh
-  . "$_edc_recover_dir/edc-paths.sh"
-fi
-if ! command -v resolve_prompt >/dev/null 2>&1; then
-  # shellcheck source=edc-resolve-prompt.sh
-  . "$_edc_recover_dir/edc-resolve-prompt.sh"
+if [ -z "${EDC_CONTEXT_DIR:-}" ] || ! command -v resolve_prompt >/dev/null 2>&1; then
+  # shellcheck source=edc-lib.sh
+  . "$_edc_recover_dir/edc-lib.sh"
 fi
 
 # Internal: classify why context is not fresh.

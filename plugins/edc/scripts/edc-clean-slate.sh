@@ -37,8 +37,8 @@
 set -uo pipefail
 
 _edc_clean_slate_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=edc-paths.sh
-. "$_edc_clean_slate_dir/edc-paths.sh"
+# shellcheck source=edc-lib.sh
+. "$_edc_clean_slate_dir/edc-lib.sh"
 
 CTX="$EDC_CONTEXT_DIR"
 MANIFEST="$EDC_MANIFEST"

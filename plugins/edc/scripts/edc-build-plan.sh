@@ -24,8 +24,8 @@ reject() { echo "edc-build-plan: $1" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "edc-build-plan: jq required" >&2; exit 64; }
 
 _edc_build_plan_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=edc-paths.sh
-. "$_edc_build_plan_dir/edc-paths.sh"
+# shellcheck source=edc-lib.sh
+. "$_edc_build_plan_dir/edc-lib.sh"
 
 changed_filter=""
 

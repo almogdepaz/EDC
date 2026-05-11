@@ -3,10 +3,10 @@
 # Run from repo root: bash tests/hardening/t2-stream-filter.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc-review.sh"
-# Subprocess spawning + per-CLI flags moved to edc-spawn.sh; check both files
+SCRIPT="plugins/edc/scripts/edc-review.sh"
+# Subprocess spawning + per-CLI flags moved to edc-lib.sh; check both files
 # for stream-json contract.
-SPAWN="plugins/edc/scripts/edc-spawn.sh"
+SPAWN="plugins/edc/scripts/edc-lib.sh"
 
 echo "=== T2: Stream-json visibility ==="
 
@@ -29,7 +29,7 @@ else
 fi
 
 # 2. stream_filter: source the function and feed synthetic NDJSON
-RUNTIME="plugins/edc/scripts/edc-runtime.sh"
+RUNTIME="plugins/edc/scripts/edc-lib.sh"
 source_and_test() {
   # Source only the stream_filter function from the runtime helper.
   eval "$(awk '/^stream_filter\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$RUNTIME")"
@@ -67,7 +67,7 @@ source_and_test() {
 source_and_test
 
 # 3. Verify every claude -p invocation uses --output-format stream-json --verbose
-# (exclude comment lines). Spawns live in edc-spawn.sh.
+# (exclude comment lines). Spawns live in edc-lib.sh.
 total=$(grep -cE '^\s+claude -p' "$SPAWN")
 locked=$(grep -v '^#' "$SPAWN" | grep -c -- '--output-format stream-json --verbose')
 echo "claude -p invocations: $total; with stream-json: $locked"

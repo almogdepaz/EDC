@@ -80,7 +80,7 @@ else
 fi
 
 # 17.2: routing works without edc-route.sh on disk (no shell exec).
-# Stage a copy of the plugin tree without scripts/edc-route.sh, then route.
+# Stage a copy of the plugin tree without plugins/edc/scripts/edc-route.sh, then route.
 STAGE="$TMP/stage"
 mkdir -p "$STAGE/plugins/edc/hooks/lib"
 cp plugins/edc/hooks/lib/route.mjs   "$STAGE/plugins/edc/hooks/lib/"

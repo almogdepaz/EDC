@@ -11,7 +11,7 @@
 #
 # Sourcing convention: the caller may pre-set the MANIFEST variable (e.g.
 # review's orchestrator does). If unset, defaults to $EDC_MANIFEST from
-# edc-paths.sh (auto-sourced if not already loaded).
+# edc-lib.sh (auto-sourced if not already loaded).
 #
 # Exit codes (when exec'd):
 #   0  context is fresh and valid
@@ -20,11 +20,11 @@
 
 set -uo pipefail
 
-# Auto-source edc-paths.sh if caller didn't.
+# Auto-source edc-lib.sh if caller didn't.
 if [ -z "${EDC_CONTEXT_DIR:-}" ]; then
   _edc_assert_fresh_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # shellcheck source=edc-paths.sh
-  . "$_edc_assert_fresh_dir/edc-paths.sh"
+  # shellcheck source=edc-lib.sh
+  . "$_edc_assert_fresh_dir/edc-lib.sh"
 fi
 
 : "${MANIFEST:=$EDC_MANIFEST}"

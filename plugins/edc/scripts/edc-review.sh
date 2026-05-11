@@ -38,9 +38,8 @@ fi
 
 # Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
 # edc-clean-slate.sh) are found relative to the real script location, not the
-# invocation path. scripts/edc-review.sh is a symlink to
-# plugins/edc/scripts/edc-review.sh; without symlink resolution the helpers
-# would be looked up under scripts/, where they don't exist.
+# invocation path. Defensive — the installer copies (not symlinks) into
+# ~/.edc/scripts/, but users may symlink manually.
 _edc_resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do
@@ -52,8 +51,8 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
-# shellcheck source=edc-paths.sh
-. "$SCRIPT_DIR/edc-paths.sh"
+# shellcheck source=edc-lib.sh
+. "$SCRIPT_DIR/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
@@ -69,26 +68,19 @@ EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
 CODEX_EXEC_HOME=""
 CODEX_EXEC_HOME_OWNED=0
 
-# Shared subprocess runtime (TIMEOUT_BIN, run_with_timeout, stream_filter,
-# codex home helpers). Sourced by every orchestrator to avoid drift.
-# shellcheck source=edc-runtime.sh
-. "$SCRIPT_DIR/edc-runtime.sh"
-
 final_review_filename() {
   # derive consolidated review filename from a target string
   local target="$1"
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
-# read_manifest_source_commit + assert_context_fresh come from the shared
-# helper. Sourced (not exec'd) so the functions run in this shell.
+# read_manifest_source_commit + assert_context_fresh come from edc-assert-fresh.sh.
+# recover_context_if_needed (freshness gate + spawn build/update + force-retry)
+# comes from edc-recover-context.sh. Both sourced (not exec'd) so functions
+# run in this shell. edc_spawn, run_with_timeout, stream_filter,
+# resolve_prompt, and the EDC_* path vars come from edc-lib.sh, sourced above.
 # shellcheck source=edc-assert-fresh.sh
 . "$SCRIPT_DIR/edc-assert-fresh.sh"
-# edc_spawn (per-CLI subprocess dispatch with timeout + stream filter) lives
-# in a shared helper used by every orchestrator.
-# shellcheck source=edc-spawn.sh
-. "$SCRIPT_DIR/edc-spawn.sh"
-# recover_context_if_needed (freshness gate + spawn build/update + force-retry).
 # shellcheck source=edc-recover-context.sh
 . "$SCRIPT_DIR/edc-recover-context.sh"
 

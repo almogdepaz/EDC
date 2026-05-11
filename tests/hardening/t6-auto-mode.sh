@@ -44,7 +44,7 @@ prompt=$(cat)
 # NOTE: prompt classification order matters. The update skill content
 # contains the string "edc-build" (it references the build flow), so check
 # edc-update FIRST. The review prompt contains "TASK FILE: <path>" as a
-# header line embedded by edc-resolve-prompt.sh.
+# header line embedded by edc-lib.sh (PROMPT section).
 if [[ "$prompt" == *"edc-update-impl"* ]] || [[ "$prompt" == *"# Update Context (v2)"* ]]; then
   printf '%s' "$prompt" > .mock-update-prompt
   head=$(git rev-parse HEAD)

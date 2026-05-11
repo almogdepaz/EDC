@@ -3,26 +3,27 @@
 # Run from repo root: bash tests/hardening/t4-timeouts-pipe-guards.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc-review.sh"
-# Per-phase run_with_timeout wraps now live in edc-spawn.sh; the build/update
+SCRIPT="plugins/edc/scripts/edc-review.sh"
+# Per-phase run_with_timeout wraps now live in edc-lib.sh (SPAWN section); the build/update
 # spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
-SPAWN="plugins/edc/scripts/edc-spawn.sh"
+SPAWN="plugins/edc/scripts/edc-lib.sh"
 RECOVER="plugins/edc/scripts/edc-recover-context.sh"
 
 echo "=== T4: Timeouts + pipe guards ==="
 
 # ── 4a: TIMEOUT_BIN detection logic present ───────────────────────────────────
-if grep -q 'TIMEOUT_BIN' "$SCRIPT" && grep -q 'run_with_timeout' "$SCRIPT"; then
+# TIMEOUT_BIN + run_with_timeout live in edc-lib.sh now; orchestrators only call them.
+if grep -q 'TIMEOUT_BIN' "$SPAWN" && grep -q 'run_with_timeout' "$SPAWN"; then
   echo "PASS: TIMEOUT_BIN detection and run_with_timeout present"
 else
-  echo "FAIL: timeout infrastructure missing from script"
+  echo "FAIL: timeout infrastructure missing from $SPAWN"
   exit 1
 fi
 
 # ── 4b: agent spawns wrapped with run_with_timeout ──────────────────────────────
 # Matches both literal seconds and env-default form (`run_with_timeout "$timeout_secs"`
 # in the helper, where $timeout_secs is set by the caller from EDC_*_TIMEOUT envs).
-# In edc-spawn.sh each per-CLI branch wraps with run_with_timeout.
+# In edc-lib.sh each per-CLI branch wraps with run_with_timeout.
 wrapped=$(grep -cE '^\s+run_with_timeout' "$SPAWN")
 if [ "$wrapped" -ge 3 ]; then
   echo "PASS: agent spawns wrapped with run_with_timeout ($wrapped per-CLI branches)"
@@ -60,8 +61,8 @@ elif command -v gtimeout > /dev/null 2>&1; then
 else
   TIMEOUT_BIN=""
 fi
-# run_with_timeout lives in edc-runtime.sh (shared by all orchestrators).
-RUNTIME="plugins/edc/scripts/edc-runtime.sh"
+# run_with_timeout lives in edc-lib.sh (shared by all orchestrators).
+RUNTIME="plugins/edc/scripts/edc-lib.sh"
 eval "$(awk '/^run_with_timeout\(\)/{found=1} found{print} /^\}$/{if(found){exit}}' "$RUNTIME")"
 
 result=$(run_with_timeout 5 "test-phase" echo "hello from timeout")

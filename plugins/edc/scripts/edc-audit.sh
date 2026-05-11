@@ -42,8 +42,8 @@ _edc_resolve_script_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR="$(_edc_resolve_script_dir)"
-# shellcheck source=edc-paths.sh
-. "$SCRIPT_DIR/edc-paths.sh"
+# shellcheck source=edc-lib.sh
+. "$SCRIPT_DIR/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 
@@ -55,14 +55,8 @@ CODEX_EXEC_HOME_OWNED=0
 
 # ── shared helpers ───────────────────────────────────────────────────────────
 
-# shellcheck source=edc-runtime.sh
-. "$SCRIPT_DIR/edc-runtime.sh"
 # shellcheck source=edc-assert-fresh.sh
 . "$SCRIPT_DIR/edc-assert-fresh.sh"
-# shellcheck source=edc-resolve-prompt.sh
-. "$SCRIPT_DIR/edc-resolve-prompt.sh"
-# shellcheck source=edc-spawn.sh
-. "$SCRIPT_DIR/edc-spawn.sh"
 # shellcheck source=edc-recover-context.sh
 . "$SCRIPT_DIR/edc-recover-context.sh"
 

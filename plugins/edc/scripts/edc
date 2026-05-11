@@ -2,7 +2,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -53,15 +52,15 @@ require_command() {
   esac
 }
 
-# Locate a helper script via the standard 3-tier lookup:
-#   1. in-repo dev path (when running from a checkout)
+# Locate a helper script via the standard lookup:
+#   1. sibling of this script (works for in-repo dev AND installed at ~/.edc/scripts)
 #   2. project-local install (.edc/scripts/<name>)
 #   3. user install ($HOME/.edc/scripts/<name>)
-# Args: <script-name>  <repo-relative-path>
+# Args: <script-name>
 find_script() {
-  local name="$1" repo_path="$2" candidate
+  local name="$1" candidate
   for candidate in \
-    "$REPO_ROOT/$repo_path" \
+    "$SCRIPT_DIR/$name" \
     ".edc/scripts/$name" \
     "$HOME/.edc/scripts/$name"
   do
@@ -151,7 +150,7 @@ build_cmd() {
   [ -d "$target" ] || die "build target directory not found: $target"
 
   local build_script
-  build_script="$(cd "$target" && find_script edc-build.sh plugins/edc/scripts/edc-build.sh)" \
+  build_script="$(cd "$target" && find_script edc-build.sh)" \
     || die "edc-build.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-build.sh"
 
   (
@@ -209,7 +208,7 @@ review_cmd() {
   require_command "$agent"
 
   local review_script
-  review_script="$(find_script edc-review.sh scripts/edc-review.sh)" \
+  review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
   EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
@@ -258,7 +257,7 @@ audit_cmd() {
   require_command "$agent"
 
   local audit_script
-  audit_script="$(find_script edc-audit.sh plugins/edc/scripts/edc-audit.sh)" \
+  audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
   EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$audit_script" "${passthrough[@]}"
@@ -312,7 +311,7 @@ update_cmd() {
   require_command "$agent"
 
   local update_script
-  update_script="$(find_script edc-update.sh plugins/edc/scripts/edc-update.sh)" \
+  update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
   EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$update_script" "${passthrough[@]}"
@@ -320,7 +319,7 @@ update_cmd() {
 
 doctor_cmd() {
   local doctor_script
-  doctor_script="$(find_script edc-doctor.sh plugins/edc/scripts/edc-doctor.sh)" \
+  doctor_script="$(find_script edc-doctor.sh)" \
     || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
   bash "$doctor_script"
 }

@@ -11,7 +11,7 @@ Universal entrypoint for any agent working in this repository.
 
 ## Runtime Mode
 
-Current `policy.defaultMode`: **advisory** (read from `edc-context/manifest.json`). Hooks surface context as advice; they do not block tool calls. Switch with `edc mode inject|advisory --agent <agent>`.
+Current `policy.defaultMode`: **advisory** (read from `edc-context/manifest.json`). Hooks surface context as advice; they do not block tool calls. Switch with `edc mode advisory|inject`.
 
 ## Notes
 

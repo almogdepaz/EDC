@@ -3,8 +3,8 @@
 # Run from repo root: bash tests/hardening/t7-cli-entrypoint.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc"
-SCRIPT_ABS="$(pwd)/scripts/edc"
+SCRIPT="plugins/edc/scripts/edc"
+SCRIPT_ABS="$(pwd)/plugins/edc/scripts/edc"
 BASH_BIN="$(command -v bash)"
 ROOT_INSTALL="install.sh"
 
@@ -45,7 +45,7 @@ make_fake_agent cursor
 make_fake_agent codex
 
 # Fake bash captures `bash <orchestrator-script> [args...]` invocations,
-# bucketed by which orchestrator was invoked. Lets us assert that scripts/edc
+# bucketed by which orchestrator was invoked. Lets us assert that plugins/edc/scripts/edc
 # delegates to the right deterministic orchestrator with the right env + args.
 cat > "$FAKE_BIN/bash" <<'EOF'
 #!/bin/sh
@@ -75,7 +75,6 @@ run_cli() {
 
 eval "$(awk '/^find_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_ABS")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── 7a: --agent mandatory for build ───────────────────────────────────────────
 set +e
@@ -115,7 +114,7 @@ fi
 #
 # Per-agent CLI dispatch (claude -p / cursor agent -p / codex exec) lives in
 # edc-spawn.sh and is exercised end-to-end by t6/t7-codex with real mocks.
-# Here we only check that scripts/edc routes to the orchestrator correctly.
+# Here we only check that plugins/edc/scripts/edc routes to the orchestrator correctly.
 
 for agent in claude cursor codex; do
   rm -rf "$CAPTURE/build"
@@ -157,11 +156,11 @@ echo "stale project copy"
 EOF
 chmod +x "$PROJECT/.edc/scripts/edc-review.sh"
 
-# The wrapper should prefer the checked-in repo/global script over a stale
+# The wrapper should prefer the sibling script next to itself over a stale
 # project-local .edc/scripts copy when invoked from the repo checkout.
-selected_review_script="$(cd "$PROJECT" && find_script edc-review.sh scripts/edc-review.sh)"
-if [ "$selected_review_script" = "$REPO_ROOT/scripts/edc-review.sh" ]; then
-  echo "PASS: wrapper prefers repo edc-review.sh over stale project copy"
+selected_review_script="$(cd "$PROJECT" && find_script edc-review.sh)"
+if [ "$selected_review_script" = "$SCRIPT_DIR/edc-review.sh" ]; then
+  echo "PASS: wrapper prefers sibling edc-review.sh over stale project copy"
 else
   echo "FAIL: wrapper selected stale project .edc/scripts/edc-review.sh"
   echo "$selected_review_script"

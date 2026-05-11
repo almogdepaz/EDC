@@ -7,8 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=edc-paths.sh
-. "$SCRIPT_DIR/edc-paths.sh"
+# shellcheck source=edc-lib.sh
+. "$SCRIPT_DIR/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 INDEX="$EDC_INDEX"
 ROOT_AGENTS="AGENTS.md"

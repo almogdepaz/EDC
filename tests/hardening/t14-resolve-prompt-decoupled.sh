@@ -11,7 +11,7 @@
 # Run from repo root: bash tests/hardening/t14-resolve-prompt-decoupled.sh
 set -uo pipefail
 
-SCRIPT="plugins/edc/scripts/edc-resolve-prompt.sh"
+SCRIPT="plugins/edc/scripts/edc-lib.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
 # shellcheck source=lib/check.sh

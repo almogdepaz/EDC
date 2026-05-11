@@ -3,7 +3,7 @@
 # Run from repo root: bash tests/hardening/t3-content-validation.sh
 set -euo pipefail
 
-SCRIPT="scripts/edc-review.sh"
+SCRIPT="plugins/edc/scripts/edc-review.sh"
 TMPDIR_T3=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T3"' EXIT
 

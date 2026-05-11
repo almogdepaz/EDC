@@ -6,30 +6,53 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
 ## What it does
 
-**EDC builds deep architectural context, then uses it to catch things a blind diff review would miss.**
+EDC builds a persistent map of a codebase — module boundaries, per-module deep analysis, invariants, trust boundaries — then uses that map to do context-aware reviews and audits that a blind diff review would miss.
 
-### Build pipeline
+All commands write to / read from `edc-context/` at the repo root. You only need to **build** once; everything else is on-demand.
 
-Run these entrypoints in order on any codebase:
-- Claude Code: `/edc:...`
-- Codex: `$edc-...`
-- Cursor: installed `edc-run-*` commands
-- pi: `/edc-...`
+### Commands
 
-1. `/edc:edc-build` — discovers modules, then spawns one subagent per module to deeply analyze its files (function-level: First Principles, 5 Whys, 5 Hows) in parallel. Produces:
-   - `AGENTS.md` — short runtime orientation
-   - `edc-context/index.md` — brief architecture map (actors, flows, invariants, trust boundaries)
-   - `edc-context/manifest.json` — routing and policy contract
-   - `edc-context/modules/<name>.md` — deep per-module analysis
-   - `edc-context/reports/issues.md` — actionable list of all problems found
-   - `edc-context/reports/complexity.md` — bloat, duplication, overengineering audit
-   - `edc-context/build/build.json` — build provenance (timestamp, version, source commit, modules emitted)
+| Command | When to run it |
+|---------|----------------|
+| **build** | Once per repo (and after big refactors). Discovers modules and spawns one subagent per module to deeply analyze its files in parallel. Writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short `AGENTS.md` orientation. |
+| **update** | Before review/audit if HEAD has moved. Incremental refresh from the branch diff so you don't rebuild from scratch on every PR. (review and audit auto-run this if context is stale.) |
+| **review** | On a PR / branch / commit / diff file. Context-aware differential review: blast radius, adversarial modeling, invariant checking. Outputs a structured report. |
+| **audit** | Anytime. Compares context expectations against actual code to flag overengineering, bloat, and duplication. |
+| **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 
-2. `/edc:edc-update` — incremental update from branch diff, so you don't rebuild from scratch on every PR
+### Run it
 
-3. `/edc:edc-audit` — identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
+Every installer (claude, cursor, codex, pi) places a shared terminal wrapper at `~/.edc/scripts/edc` alongside the orchestrator scripts. From any terminal, in the target repo:
 
-4. `/edc:edc-run-review` — context-aware differential review: blast radius, adversarial modeling, invariant checking, structured report
+```bash
+# build or update context in the current repo
+edc build  --agent claude
+edc build  --agent cursor --force
+edc build  --agent codex --focus orchestrator
+edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
+edc update --agent claude              # incremental refresh after HEAD moves
+
+# run the review pipeline in the current repo
+edc review --agent claude --base main
+edc review --agent cursor HEAD --base main
+edc review --agent codex https://github.com/owner/repo/pull/42
+edc review --agent codex HEAD --base main --ignore 'generated/**'
+
+# complexity / bloat / duplication audit
+edc audit  --agent claude
+
+# claude runtime-mode toggle (no-op for cursor/codex)
+edc mode                # show current mode
+edc mode inject         # turn on auto-injection
+edc mode advisory       # turn it off
+
+# validate the edc-context/ layout
+edc doctor
+```
+
+`--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout, and is mandatory for `build` / `update` / `review` / `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale. `build` defaults to the current directory if no path is passed. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+
+Each agent also exposes the same actions as native slash commands (e.g. `/edc:edc-run-review` in Claude Code, `/edc-review` in Cursor, `$edc-review` in Codex) — they all shell out to the same orchestrators under `~/.edc/scripts/`.
 
 ### Two runtime modes (Claude Code)
 
@@ -51,8 +74,8 @@ Cursor and Codex don't have a hook system, so they're docs-only regardless of th
 Recommended — install via the plugin marketplace:
 
 ```bash
-claude plugins marketplace add almogdepaz/edc
-claude plugins install edc@edc
+claude plugin marketplace add almogdepaz/edc
+claude plugin install edc@edc
 ```
 
 Alternative — install the runtime directly from a clone:
@@ -108,15 +131,9 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review`. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
+Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review` inside pi. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
 
-This installs the user-facing Codex skills:
-- `$edc-build`
-- `$edc-update`
-- `$edc-audit`
-- `$edc-run-review`
-
-It also installs the shared orchestrator at `~/.edc/scripts/edc-review.sh`.
+All installers (claude, cursor, codex, pi) also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|review|audit|update|mode|doctor` works from any shell.
 
 #### Codex auth with the orchestrator
 
@@ -135,39 +152,6 @@ export EDC_CODEX_HOME="$HOME/.codex"
 When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim (and does not
 clean it up).
 
-## Terminal CLI
-
-Cursor and Codex installs also place a shared terminal wrapper at `~/.edc/scripts/edc`.
-
-```bash
-# build or update context in the current repo
-~/.edc/scripts/edc build --agent claude
-~/.edc/scripts/edc build --agent cursor --force
-~/.edc/scripts/edc build --agent codex --focus orchestrator
-~/.edc/scripts/edc build --agent codex --ignore 'vendor/**' --ignore 'dist/**'
-
-# run the review pipeline in the current repo
-~/.edc/scripts/edc review --agent claude --base main
-~/.edc/scripts/edc review --agent cursor HEAD --base main
-~/.edc/scripts/edc review --agent codex https://github.com/owner/repo/pull/42
-~/.edc/scripts/edc review --agent codex HEAD --base main --ignore 'generated/**'
-
-# claude runtime-mode toggle (no-op for cursor/codex)
-~/.edc/scripts/edc mode                # show current mode
-~/.edc/scripts/edc mode inject         # turn on auto-injection
-~/.edc/scripts/edc mode advisory       # turn it off
-
-# validate the edc-context/ layout
-~/.edc/scripts/edc doctor
-```
-
-Notes:
-- `--agent` is mandatory for `build` and `review` (not for `mode` or `doctor`).
-- `build` defaults to the current directory if no path is passed.
-- `--ignore` may be repeated. If any `--ignore` flags are passed, EDC ignores `.edcignore` for that run.
-- Otherwise, if `.edcignore` exists in the repo root, EDC reads non-empty, non-comment lines from it as repo-relative glob patterns.
-- `review` delegates to `edc-review.sh`, so it automatically builds or updates `edc-context/` first when context is missing or stale.
-
 ## Two Independent Install Paths
 
 The terminal CLI and the claude plugin are independent. You can install
@@ -177,12 +161,12 @@ either, both, or neither — they don't depend on each other.
   + `~/.edc/skills/`. The `edc` command works in any repo. Subprocess agents
   (claude/cursor/codex) are spawned by the orchestrator and given the skill
   content directly via stdin — no slash-command system required.
-- **Claude plugin** (`claude plugin marketplace add almogdepaz/wolfpack-plugins
+- **Claude plugin** (`claude plugin marketplace add almogdepaz/edc
   && claude plugin install edc@edc`): adds slash commands
   (`/edc:edc-build`, etc.) and session/pre-edit hooks for use *inside*
   interactive claude. The plugin still calls into `~/.edc/scripts/` for the
   heavy orchestrator logic, so you'll want the CLI installed as well if you
-  use the plugin's `/edc-run-review` command.
+  use the plugin's `/edc:edc-run-review` command.
 - **Both**: install both for full coverage. The CLI handles `edc review`
   from the terminal, the plugin handles slash commands inside an interactive
   claude session.
@@ -213,14 +197,16 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
 | `/edc:edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
-### Codex skill equivalents
+### Cursor / Codex skill equivalents
 
-| Skill | Description |
-|-------|-------------|
-| `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
-| `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
-| `$edc-audit` | Bloat, duplication, and overengineering detection |
-| `$edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+Cursor and Codex install the same four wrappers (just without the `edc:` prefix and without `doctor`/`review` internals):
+
+| Cursor command | Codex skill | Description |
+|----------------|-------------|-------------|
+| `/edc-build` | `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
+| `/edc-update` | `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
+| `/edc-audit` | `$edc-audit` | Bloat, duplication, and overengineering detection |
+| `/edc-review` | `$edc-review` | Differential review using context (PR URL, commit SHA, or diff path) |
 
 ### `/edc:edc-run-review` invocation examples
 
@@ -253,35 +239,44 @@ Without `--base`, the target's parent (`<target>^`) is used — this means you r
 
 ```
 edc/
-  install.sh                         # one-line installer for all agents
-  scripts/edc                        # terminal CLI (build / review / mode / doctor)
-  plugins/edc/                       # Claude Code plugin (single source of truth)
+  install.sh                           # one-line installer for all agents
+  AGENTS.md                            # universal agent entrypoint (orientation)
+  .claude-plugin/marketplace.json      # claude plugin marketplace manifest
+  plugins/edc/                         # claude plugin + shared orchestrator (single source of truth)
     .claude-plugin/plugin.json
-    commands/                        # claude slash commands
+    commands/                          # claude slash commands
       edc-build.md
       edc-update.md
       edc-audit.md
-      edc-run-review.md              # user-facing: runs orchestrator
-      edc-review.md                  # internal: invoked by orchestrator subprocess
-      edc-doctor.md                  # diagnose `edc-context/` layout
-    skills/                          # canonical skill content
-      edc-context/                   # per-module deep analysis (TOB-derived)
-      edc-build-impl/                # full-build orchestrator (v2 module fanout)
-      edc-update-impl/               # incremental update from branch diff
-      edc-audit-impl/                # bloat / duplication / overengineering audit
-      edc-review-impl/               # differential review (TOB-derived)
-    scripts/                         # shell helpers invoked by skills
-      edc-build-plan.sh              # deterministic per-module task planner (jq)
-      edc-clean-slate.sh             # detects v1 leftovers, wipes for clean v2 build
-      edc-doctor.sh                  # diagnoses `edc-context/` layout health
-      edc-manifest.sh                # reads/writes `edc-context/manifest.json`
-      edc-route.sh                   # resolves a path to its module via manifest
-      edc-review.sh                  # shared review orchestrator (Codex/Cursor entrypoint)
-    hooks/                           # automatic context injection
+      edc-run-review.md                # user-facing: spawns orchestrator
+      edc-review.md                    # internal: per-module review subprocess
+      edc-doctor.md                    # diagnose edc-context/ layout
+    skills/                            # canonical skill content (also installed for cursor/codex)
+      edc-context/                     # per-module deep analysis (TOB-derived)
+      edc-build-impl/                  # full-build orchestrator (v2 module fanout)
+      edc-update-impl/                 # incremental update from branch diff
+      edc-audit-impl/                  # bloat / duplication / overengineering audit
+      edc-review-impl/                 # differential review (TOB-derived)
+    scripts/                           # everything that ships to ~/.edc/scripts/
+      edc                              # terminal CLI (build / update / review / audit / mode / doctor)
+      edc-build.sh, edc-update.sh, edc-audit.sh, edc-review.sh   # action orchestrators
+      edc-doctor.sh                    # context-tree validator
+      edc-lib.sh                       # sourced helpers (paths, runtime, spawn, prompt resolution)
+      edc-route.sh, edc-manifest.sh    # path -> module routing + manifest IO
+      edc-assert-fresh.sh              # freshness gate (sourceCommit vs HEAD)
+      edc-clean-slate.sh               # detects v1 leftovers, wipes for clean v2 build
+      edc-recover-context.sh           # auto-rebuild/update when context is stale
+      edc-build-plan.sh                # deterministic per-module task planner (jq)
+    hooks/                             # claude-only: automatic context injection (advisory|inject)
       hooks.json
-      session-start.mjs              # surfaces context on session start
-      pretooluse-context-inject.mjs  # injects module context before edits
-  agents/                            # agent-specific wrappers
-    cursor/                          # Cursor commands + install script
-    codex/                           # Codex wrapper skills + AGENTS.md + install script
+      session-start.mjs                # surfaces edc-context/index.md on session start
+      pretooluse-context-inject.mjs    # injects module context before Edit/Write/Bash
+      lib/                             # shared mjs helpers (paths, platform, route)
+  agents/
+    pi/                                # pi extension (index.mjs + install script)
 ```
+
+Cursor and Codex have no in-repo source files. Their slash-command wrappers are
+emitted directly by `install.sh` (see `write_cursor_commands` / `write_codex_skills`)
+into `~/.cursor/commands/` and `~/.codex/skills/` respectively, and delegate to
+the orchestrators under `~/.edc/scripts/`.

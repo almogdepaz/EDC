@@ -1,8 +1,8 @@
 // edc/hooks/lib/paths.mjs — single source of truth for the context dir
-// layout, mirror of plugins/edc/scripts/edc-paths.sh.
+// layout, mirror of the PATHS section in plugins/edc/scripts/edc-lib.sh.
 //
 // To make this configurable later (env var, manifest field, CLI flag)
-// edit the defaults here AND in edc-paths.sh; everything else routes
+// edit the defaults here AND in edc-lib.sh; everything else routes
 // through these constants.
 
 export const EDC_CONTEXT_DIR = "edc-context";

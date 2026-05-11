@@ -105,7 +105,7 @@ skill_rel() {
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
   mkdir -p "$scripts_target"
-  copy_or_download "scripts/edc"                              "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc"                 "$scripts_target/edc"
   copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
   copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
   copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
@@ -114,13 +114,10 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
   copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
   copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
-  copy_or_download "plugins/edc/scripts/edc-runtime.sh"       "$scripts_target/edc-runtime.sh"
+  copy_or_download "plugins/edc/scripts/edc-lib.sh"           "$scripts_target/edc-lib.sh"
   copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
-  copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$scripts_target/edc-resolve-prompt.sh"
-  copy_or_download "plugins/edc/scripts/edc-spawn.sh"         "$scripts_target/edc-spawn.sh"
   copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
-  copy_or_download "plugins/edc/scripts/edc-paths.sh"          "$scripts_target/edc-paths.sh"
-  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"     "$scripts_target/edc-build-plan.sh"
+  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"    "$scripts_target/edc-build-plan.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
@@ -131,13 +128,10 @@ install_terminal_cli() {
     "$scripts_target/edc-route.sh" \
     "$scripts_target/edc-manifest.sh" \
     "$scripts_target/edc-clean-slate.sh" \
-    "$scripts_target/edc-runtime.sh" \
     "$scripts_target/edc-assert-fresh.sh" \
-    "$scripts_target/edc-resolve-prompt.sh" \
-    "$scripts_target/edc-spawn.sh" \
     "$scripts_target/edc-recover-context.sh" \
     "$scripts_target/edc-build-plan.sh"
-  # edc-paths.sh is sourced, not exec'd — no chmod needed
+  # edc-lib.sh is sourced, not exec'd — no chmod needed
 }
 
 # write_cursor_commands <cursor-target>
@@ -273,7 +267,7 @@ install_claude_runtime() {
   echo "This installs the standalone CLI only. The CLI works without the claude plugin."
   echo
   echo "For slash commands (/edc:edc-build, hooks) inside interactive claude, ALSO run:"
-  echo "  claude plugin marketplace add almogdepaz/wolfpack-plugins"
+  echo "  claude plugin marketplace add almogdepaz/edc"
   echo "  claude plugin install edc@edc"
   echo
   echo "Runtime mode is read from edc-context/manifest.json (defaults to advisory)."

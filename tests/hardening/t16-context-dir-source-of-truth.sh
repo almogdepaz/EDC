@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # t16-context-dir-source-of-truth: pin that the context directory layout
-# routes through edc-paths.sh / paths.mjs, with no stray `.context/`
+# routes through edc-lib.sh (PATHS section) / paths.mjs, with no stray `.context/`
 # literals in production shell or hook code.
 #
 # Skill markdown is allowed to contain literal `edc-context/` because
@@ -16,27 +16,29 @@ check_init
 
 echo "=== T16: context dir source-of-truth ==="
 
-# ── 16.1: edc-paths.sh exists and exports the canonical vars ────────────────
-PATHS_SH="plugins/edc/scripts/edc-paths.sh"
-if [ -f "$PATHS_SH" ]; then
-  check "16.1a: $PATHS_SH exists" 1
+# ── 16.1: edc-lib.sh exists and the PATHS section exports the canonical vars ─
+LIB_SH="plugins/edc/scripts/edc-lib.sh"
+if [ -f "$LIB_SH" ]; then
+  check "16.1a: $LIB_SH exists" 1
 else
-  check "16.1a: $PATHS_SH exists" 0
+  check "16.1a: $LIB_SH exists" 0
 fi
 
-if [ -f "$PATHS_SH" ]; then
+if [ -f "$LIB_SH" ]; then
   if (
     set +u
-    . "$PATHS_SH"
+    CODEX_EXEC_HOME=""
+    CODEX_EXEC_HOME_OWNED=0
+    . "$LIB_SH"
     [ "${EDC_CONTEXT_DIR:-}" = "edc-context" ] && \
     [ "${EDC_MANIFEST:-}" = "edc-context/manifest.json" ] && \
     [ "${EDC_INDEX:-}" = "edc-context/index.md" ] && \
     [ "${EDC_MODULES_DIR:-}" = "edc-context/modules" ] && \
     [ "${EDC_REPORTS_DIR:-}" = "edc-context/reports" ]
   ); then
-    check "16.1b: edc-paths.sh exports canonical defaults" 1
+    check "16.1b: edc-lib.sh PATHS section exports canonical defaults" 1
   else
-    check "16.1b: edc-paths.sh exports canonical defaults" 0
+    check "16.1b: edc-lib.sh PATHS section exports canonical defaults" 0
   fi
 fi
 
@@ -73,21 +75,22 @@ else
   echo "$stray_mjs" | sed 's/^/    /'
 fi
 
-# ── 16.5: orchestrator scripts source edc-paths.sh ──────────────────────────
+# ── 16.5: orchestrator scripts source edc-lib.sh (or edc-paths.sh for the
+#          few helpers that still load only the PATHS subset) ───────────────
 expected_sources=(
   edc-review.sh edc-clean-slate.sh edc-audit.sh edc-build.sh edc-update.sh
   edc-assert-fresh.sh edc-recover-context.sh edc-doctor.sh edc-build-plan.sh
 )
 missing_source=()
 for s in "${expected_sources[@]}"; do
-  if ! grep -q "edc-paths.sh" "plugins/edc/scripts/$s" 2>/dev/null; then
+  if ! grep -qE "edc-(lib|paths)\.sh" "plugins/edc/scripts/$s" 2>/dev/null; then
     missing_source+=("$s")
   fi
 done
 if [ "${#missing_source[@]}" -eq 0 ]; then
-  check "16.5: all production orchestrators reference edc-paths.sh" 1
+  check "16.5: all production orchestrators reference edc-lib.sh / edc-paths.sh" 1
 else
-  check "16.5: all production orchestrators reference edc-paths.sh" 0
+  check "16.5: all production orchestrators reference edc-lib.sh / edc-paths.sh" 0
   echo "  missing reference in: ${missing_source[*]}"
 fi
 

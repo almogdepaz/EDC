@@ -1,1 +1,0 @@
-../plugins/edc/scripts/edc-review.sh

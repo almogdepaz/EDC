@@ -92,15 +92,8 @@ function renderCommandPrompt(file, args) {
   return body.replace(/\$ARGUMENTS/g, args || "");
 }
 
-/** Per-runtime cache of injected modules per pi session id. */
-function makeSessionDedup() {
-  return new Map(); // sessionId -> Set<moduleName>
-}
-
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
 export default async function edcExtension(pi) {
-  const dedup = makeSessionDedup();
-
   // -- skills ---------------------------------------------------------------
   pi.on("resources_discover", async () => {
     const skillsDir = join(PLUGIN_ROOT, "skills");
@@ -146,27 +139,16 @@ export default async function edcExtension(pi) {
     });
     if (!injection) return;
 
-    // Local in-process dedup (in addition to the file-based dedup in
-    // buildToolCallInjection) — prevents double injection if pi reloads
-    // the extension within the same session.
-    let seen = dedup.get(sessionId);
-    if (!seen) {
-      seen = new Set();
-      dedup.set(sessionId, seen);
-    }
-    if (seen.has(injection.moduleName)) return;
-    seen.add(injection.moduleName);
+    // Dedup is handled by buildToolCallInjection via a tmpfile keyed on
+    // session id (see plugins/edc/hooks/lib/route.mjs::isDuplicate). The
+    // file persists across extension reloads within a session, so a separate
+    // in-process layer adds no coverage.
 
     pi.sendMessage({
       customType: "edc-context-inject",
       content: injection.content,
       display: `[edc] injected module "${injection.moduleName}" for ${injection.normalizedPath}`,
     });
-  });
-
-  // -- session shutdown: clear in-process dedup ----------------------------
-  pi.on("session_shutdown", async () => {
-    dedup.clear();
   });
 
   // -- slash commands -------------------------------------------------------

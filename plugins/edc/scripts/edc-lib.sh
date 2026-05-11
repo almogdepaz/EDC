@@ -312,8 +312,7 @@ Whenever the skill tells you to invoke or reference a script under
 
 The scripts to substitute include (at least):
 edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-route.sh,
-edc-discover-modules.sh (optional — may not exist; fall back as the skill
-describes), edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
+edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
 
 Do not rewrite the skill text. Do not fail the build because
 \`plugins/edc/scripts/\` is empty — that is expected; use the absolute path

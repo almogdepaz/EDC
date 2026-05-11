@@ -57,7 +57,7 @@ edc-context/
 
 Build steps:
 
-1. **Module discovery (orientation pass).** Identify module boundaries before any deep analysis. If `plugins/edc/scripts/edc-discover-modules.sh` is present, invoke it and treat its JSON output as authoritative; otherwise walk `git ls-files` (with ignore rules applied) and group by language convention: python packages (top-level `__init__.py`), rust crates (`Cargo.toml`), typescript workspace packages (`package.json` with `name`), or top-level directories as fallback. Emit a module list with file count, approximate LOC, and kebab-case name per entry. Module names are stable across runs. The orchestrator MUST NOT read source-code bodies during this pass — only paths and lightweight metadata.
+1. **Module discovery (orientation pass).** Identify module boundaries before any deep analysis. Walk `git ls-files` (with ignore rules applied) and group by language convention: python packages (top-level `__init__.py`), rust crates (`Cargo.toml`), typescript workspace packages (`package.json` with `name`), or top-level directories as fallback. Emit a module list with file count, approximate LOC, and kebab-case name per entry. Module names are stable across runs. The orchestrator MUST NOT read source-code bodies during this pass — only paths and lightweight metadata.
 
 2. **Per-module deep analysis (mandatory fanout).** Pipe the discovered module list into `plugins/edc/scripts/edc-build-plan.sh`. For each `module-context` task in the output, spawn ONE subagent using the embedded `prompt` verbatim. Run subagents in parallel batches. Collect the ≤500-token summaries returned. Do not interpret, edit, or skip tasks — execute the plan as written.
 

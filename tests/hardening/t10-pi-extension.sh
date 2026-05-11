@@ -39,12 +39,15 @@ fi
 # --- 3. shared lib exports --------------------------------------------------
 exports_check=$(node --input-type=module -e '
   import("./plugins/edc/hooks/lib/route.mjs").then(m => {
+    // Public API — see plugins/edc/hooks/lib/route.mjs. Internal helpers
+    // (loadManifest, routeFile, dedupPath, etc.) are intentionally unexported.
     const required = [
-      "loadManifest","manifestPath","checkStaleness",
-      "extractFilePaths","extractFilePathsFromBash","normalizePath",
-      "routeFile","moduleDocPath","dedupPath","isDuplicate",
-      "isEdcProject","installOrchestratorScript","resolvePluginRoot",
-      "buildSessionStartContent","buildToolCallInjection"
+      "resolvePluginRoot",
+      "installOrchestratorScript",
+      "buildSessionStartContent",
+      "buildToolCallInjection",
+      "normalizePath",
+      "routeFileSync"
     ];
     const missing = required.filter(n => typeof m[n] !== "function");
     if (missing.length) { console.log("MISSING:" + missing.join(",")); process.exit(1); }
@@ -61,19 +64,24 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Build a minimal fake ctx environment with a real .context/manifest.json so
+# Build a minimal fake ctx environment with a real edc-context/manifest.json so
 # buildToolCallInjection has something to chew on.
-mkdir -p "$TMP/.context/modules"
-cat > "$TMP/.context/manifest.json" <<'EOF'
+mkdir -p "$TMP/edc-context/modules"
+cat > "$TMP/edc-context/manifest.json" <<'EOF'
 {
   "schemaVersion": 2,
   "policy": { "defaultMode": "inject" },
   "modules": [
-    { "name": "src-mod", "priority": 50, "match": { "prefixes": ["src/"] }, "doc": ".context/modules/src-mod.md" }
+    { "name": "src-mod", "priority": 50, "match": { "prefixes": ["src/"] }, "doc": "edc-context/modules/src-mod.md" }
   ]
 }
 EOF
-echo "# src-mod docs" > "$TMP/.context/modules/src-mod.md"
+echo "# src-mod docs" > "$TMP/edc-context/modules/src-mod.md"
+cat > "$TMP/edc-context/index.md" <<'EOF'
+# Repo Index
+## Module Map
+- src-mod
+EOF
 
 # Unique session id per test run so the file-based dedup (rooted in os.tmpdir())
 # doesn't poison a re-run.
@@ -99,7 +107,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   }
   // 2. expected events subscribed
   const evs = calls.events.map(e => e.event).sort();
-  for (const want of ["resources_discover","session_start","tool_call","session_shutdown"]) {
+  // Note: session_shutdown is no longer needed — dedup is file-based, not
+  // in-process (see plugins/edc/hooks/lib/route.mjs::isDuplicate).
+  for (const want of ["resources_discover","session_start","tool_call"]) {
     if (!evs.includes(want)) { console.log("MISSING_EVENT:" + want); process.exit(1); }
   }
   // 3. resources_discover returns skill paths
@@ -109,15 +119,32 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("RD_FAIL:" + JSON.stringify(r));
     process.exit(1);
   }
-  // 4. tool_call injects context for a routed file
+  // 4. session_start injects edc-context/index.md when mode=inject
+  const ss = calls.events.find(e => e.event === "session_start");
+  const ssCtx = { cwd, sessionManager: { getSessionId: () => sid } };
+  await ss.handler({ type: "session_start", cwd, reason: "startup" }, ssCtx);
+  if (calls.messages.length !== 1 || !calls.messages[0].content.includes("Module Map")) {
+    console.log("SESSION_START_FAIL:" + JSON.stringify(calls.messages));
+    process.exit(1);
+  }
+  // 5. tool_call injects context for a routed file
   const tc = calls.events.find(e => e.event === "tool_call");
   const fakeCtx = { cwd, sessionManager: { getSessionId: () => sid } };
   await tc.handler(
     { type: "tool_call", toolCallId: "x", toolName: "edit", input: { file_path: "src/foo.ts" } },
     fakeCtx
   );
-  if (calls.messages.length !== 1 || !calls.messages[0].content.includes("src-mod")) {
+  if (calls.messages.length !== 2 || !calls.messages[1].content.includes("src-mod")) {
     console.log("INJECT_FAIL:" + JSON.stringify(calls.messages));
+    process.exit(1);
+  }
+  // 6. duplicate tool_call for the same module → no second injection
+  await tc.handler(
+    { type: "tool_call", toolCallId: "y", toolName: "edit", input: { file_path: "src/bar.ts" } },
+    fakeCtx
+  );
+  if (calls.messages.length !== 2) {
+    console.log("DEDUP_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
   console.log("OK");

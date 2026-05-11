@@ -23,6 +23,12 @@ import { fileURLToPath } from "url";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
+import {
+  EDC_CONTEXT_DIR,
+  EDC_MANIFEST_REL,
+  EDC_INDEX_REL,
+  EDC_MODULES_DIR_REL,
+} from "./paths.mjs";
 
 // --- plugin layout ---
 
@@ -54,8 +60,8 @@ export function resolvePluginRoot(metaUrl) {
 
 // --- manifest ---
 
-export function loadManifest(projectRoot) {
-  const manifestPath = join(projectRoot, ".context", "manifest.json");
+function loadManifest(projectRoot) {
+  const manifestPath = join(projectRoot, EDC_MANIFEST_REL);
   if (!existsSync(manifestPath)) return null;
   try {
     return JSON.parse(readFileSync(manifestPath, "utf-8"));
@@ -64,13 +70,13 @@ export function loadManifest(projectRoot) {
   }
 }
 
-export function manifestPath(projectRoot) {
-  return join(projectRoot, ".context", "manifest.json");
+function manifestPath(projectRoot) {
+  return join(projectRoot, EDC_MANIFEST_REL);
 }
 
 // --- staleness ---
 
-export function checkStaleness(projectRoot, manifest) {
+function checkStaleness(projectRoot, manifest) {
   const sourceCommit = manifest?.sourceCommit;
   if (!sourceCommit) return null;
   try {
@@ -95,7 +101,7 @@ export function checkStaleness(projectRoot, manifest) {
  * Accepts both Claude-style (Bash/Edit/Write) and pi-style (bash/edit/write)
  * tool names so this lib is shared across runtimes.
  */
-export function extractFilePaths(toolName, toolInput) {
+function extractFilePaths(toolName, toolInput) {
   const t = String(toolName || "").toLowerCase();
   if (t === "edit" || t === "write") {
     const fp = toolInput?.file_path;
@@ -107,7 +113,7 @@ export function extractFilePaths(toolName, toolInput) {
   return [];
 }
 
-export function extractFilePathsFromBash(command) {
+function extractFilePathsFromBash(command) {
   const paths = new Set();
   // Catch any path-shaped token: optional ./ or /, then at least one
   // dir/segment pair (extensionless OK). Routing filters non-matches.
@@ -129,27 +135,138 @@ export function normalizePath(p, projectRoot) {
 
 // --- routing ---
 
-export function routeFile(manifestPathArg, filePath, pluginRoot) {
-  const route = join(pluginRoot, "scripts", "edc-route.sh");
-  if (!existsSync(route)) return null;
-  try {
-    const out = execFileSync(route, [manifestPathArg, filePath], {
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const name = out.trim();
-    return name || null;
-  } catch {
-    // exit 1 (no match) or 2 (ambiguous) — both surface as no module
-    return null;
+/**
+ * Convert a glob pattern (subset supported by edc-route.sh's `[[ $f == $pat ]]`)
+ * into a RegExp. Supports `*` (no slash), `**` (any), `?` (single non-slash),
+ * and `[...]` character classes. Anchored.
+ */
+function globToRegex(glob) {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if (c === "[") {
+      const end = glob.indexOf("]", i + 1);
+      if (end === -1) {
+        re += "\\[";
+      } else {
+        re += glob.slice(i, end + 1);
+        i = end;
+      }
+    } else if (/[.+^$(){}|\\]/.test(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
   }
+  re += "$";
+  return new RegExp(re);
 }
 
-export function moduleDocPath(manifest, moduleName) {
+/**
+ * Route a file path to a module, in-process. Mirrors the 3-tier algorithm in
+ * plugins/edc/scripts/edc-route.sh:
+ *   T1. exactFiles equality
+ *   T2. longest prefix in match.prefixes
+ *   T3. any glob in match.globs
+ * Within each tier, the highest .priority wins; multi-way ties → null.
+ *
+ * @param {object} manifest  Parsed edc-context/manifest.json.
+ * @param {string} filePath  Project-relative POSIX path.
+ * @returns {string|null}    Module name, or null on no-match / ambiguous.
+ */
+export function routeFileSync(manifest, filePath) {
+  if (!manifest || !Array.isArray(manifest.modules)) return null;
+
+  const exact = [];
+  const prefix = [];
+  const globs = [];
+  for (const mod of manifest.modules) {
+    const name = mod.name;
+    if (!name) continue;
+    const prio = Number(mod.priority || 0);
+    const m = mod.match || {};
+    for (const p of m.exactFiles || []) exact.push({ name, prio, pattern: p });
+    for (const p of m.prefixes || []) prefix.push({ name, prio, pattern: p });
+    for (const p of m.globs || []) globs.push({ name, prio, pattern: p });
+  }
+
+  const pickWinner = (candidates) => {
+    if (candidates.length === 0) return undefined;
+    let maxP = -Infinity;
+    for (const c of candidates) if (c.prio > maxP) maxP = c.prio;
+    const tops = candidates.filter((c) => c.prio === maxP);
+    const names = new Set(tops.map((c) => c.name));
+    if (names.size === 1) return tops[0].name;
+    return null; // ambiguous — mirror shell exit 2 (surfaced as null)
+  };
+
+  // T1: exact
+  const t1 = exact.filter((r) => r.pattern === filePath);
+  if (t1.length > 0) {
+    const w = pickWinner(t1);
+    return w === undefined ? null : w;
+  }
+
+  // T2: longest prefix
+  const t2Hits = prefix.filter((r) => filePath.startsWith(r.pattern));
+  if (t2Hits.length > 0) {
+    let maxLen = 0;
+    for (const r of t2Hits) if (r.pattern.length > maxLen) maxLen = r.pattern.length;
+    const longest = t2Hits.filter((r) => r.pattern.length === maxLen);
+    const w = pickWinner(longest);
+    return w === undefined ? null : w;
+  }
+
+  // T3: globs (dedup by module name within tier, matching shell behavior)
+  const seenModules = new Set();
+  const t3 = [];
+  for (const r of globs) {
+    if (seenModules.has(r.name)) continue;
+    if (globToRegex(r.pattern).test(filePath)) {
+      seenModules.add(r.name);
+      t3.push(r);
+    }
+  }
+  if (t3.length > 0) {
+    const w = pickWinner(t3);
+    return w === undefined ? null : w;
+  }
+
+  return null;
+}
+
+/**
+ * Legacy signature kept for any external caller. Loads the manifest from disk
+ * and dispatches to routeFileSync. New code should call routeFileSync directly
+ * with an already-parsed manifest to avoid the file read.
+ *
+ * The third param (pluginRoot) is unused — historically pointed at
+ * edc-route.sh; routing is now pure JS.
+ */
+function routeFile(manifestPathArg, filePath, _pluginRoot) {
+  if (!existsSync(manifestPathArg)) return null;
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPathArg, "utf-8"));
+  } catch {
+    return null;
+  }
+  return routeFileSync(manifest, filePath);
+}
+
+function moduleDocPath(manifest, moduleName) {
   const mod = (manifest.modules || []).find((m) => m.name === moduleName);
   if (!mod) return null;
-  return mod.doc || `.context/modules/${moduleName}.md`;
+  return mod.doc || `${EDC_MODULES_DIR_REL}/${moduleName}.md`;
 }
 
 // --- dedup ---
@@ -158,7 +275,7 @@ function hashId(id) {
   return createHash("sha256").update(id).digest("hex").slice(0, 16);
 }
 
-export function dedupPath(sessionId) {
+function dedupPath(sessionId) {
   const safe = /^[a-zA-Z0-9_-]+$/.test(sessionId)
     ? sessionId
     : hashId(sessionId);
@@ -169,7 +286,7 @@ export function dedupPath(sessionId) {
  * Returns true if the module was already injected for this session.
  * Side-effect: marks the module injected on first call.
  */
-export function isDuplicate(sessionId, moduleName) {
+function isDuplicate(sessionId, moduleName) {
   if (!sessionId) return false;
   const path = dedupPath(sessionId);
   let injected = {};
@@ -192,10 +309,10 @@ export function isDuplicate(sessionId, moduleName) {
 
 // --- orchestrator script install ---
 
-export function isEdcProject(projectRoot) {
+function isEdcProject(projectRoot) {
   return (
     existsSync(join(projectRoot, ".git")) ||
-    existsSync(join(projectRoot, ".context", "manifest.json"))
+    existsSync(join(projectRoot, EDC_MANIFEST_REL))
   );
 }
 
@@ -246,7 +363,7 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
  */
 export function buildSessionStartContent(projectRoot) {
   const manifest = loadManifest(projectRoot);
-  const indexPath = join(projectRoot, ".context", "index.md");
+  const indexPath = join(projectRoot, EDC_INDEX_REL);
 
   if (!manifest) {
     return {
@@ -306,11 +423,10 @@ export function buildToolCallInjection({
   const filePaths = extractFilePaths(toolName, toolInput);
   if (filePaths.length === 0) return null;
 
-  const mPath = manifestPath(projectRoot);
   const seen = new Set();
   for (const fp of filePaths) {
     const normalized = normalizePath(fp, projectRoot);
-    const moduleName = routeFile(mPath, normalized, pluginRoot);
+    const moduleName = routeFileSync(manifest, normalized);
     if (!moduleName || seen.has(moduleName)) continue;
     seen.add(moduleName);
 

@@ -7,22 +7,26 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  edc build --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
 Commands:
-  build   Build or update .context/ in the target repo
+  build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
+  update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
   review  Run the differential review pipeline (auto-builds/updates context if needed)
-  mode    Set policy.defaultMode in .context/manifest.json (advisory or inject)
+  audit   Run the complexity-audit pipeline (auto-builds/updates context if needed)
+  mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build and review.
+  --agent is required for build, update, review, and audit.
   build defaults path to the current directory.
   --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
-  review delegates to the shared edc-review orchestrator.
+  All commands delegate to shared deterministic orchestrators.
 EOF
 }
 
@@ -49,92 +53,17 @@ require_command() {
   esac
 }
 
-join_args() {
-  local result=""
-  local arg
-  for arg in "$@"; do
-    result="${result:+$result }$arg"
-  done
-  printf '%s' "$result"
-}
-
-find_skill() {
-  local name="$1"
-  shift
-  local base
-  for base in "$@"; do
-    if [ -f "$base/$name/SKILL.md" ]; then
-      printf '%s\n' "$base/$name/SKILL.md"
-      return 0
-    fi
-  done
-  return 1
-}
-
-find_cursor_build_skill() {
-  find_skill "edc-build-impl" \
-    "$REPO_ROOT/plugins/edc/skills" \
-    ".cursor/skills" \
-    "$HOME/.cursor/skills"
-}
-
-find_codex_build_skill() {
-  find_skill "edc-build-impl" \
-    "$REPO_ROOT/plugins/edc/skills" \
-    ".codex/skills" \
-    "$HOME/.codex/skills"
-}
-
-resolve_build_prompt() {
-  local agent="$1"
-  shift
-  local arg_string
-  arg_string="$(join_args "$@")"
-
-  case "$agent" in
-    claude)
-      printf '/edc:edc-build%s\n' "${arg_string:+ $arg_string}"
-      ;;
-    cursor)
-      local skill
-      skill="$(find_cursor_build_skill)" || die "edc-build-impl not found. Install EDC Cursor skills first."
-      if [ -n "$arg_string" ]; then
-        printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$arg_string"
-      fi
-      cat "$skill"
-      ;;
-    codex)
-      local skill
-      skill="$(find_codex_build_skill)" || die "edc-build-impl not found. Install EDC Codex skills first."
-      if [ -n "$arg_string" ]; then
-        printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$arg_string"
-      fi
-      cat "$skill"
-      ;;
-  esac
-}
-
-find_review_script() {
-  local candidate
+# Locate a helper script via the standard 3-tier lookup:
+#   1. in-repo dev path (when running from a checkout)
+#   2. project-local install (.edc/scripts/<name>)
+#   3. user install ($HOME/.edc/scripts/<name>)
+# Args: <script-name>  <repo-relative-path>
+find_script() {
+  local name="$1" repo_path="$2" candidate
   for candidate in \
-    "$SCRIPT_DIR/edc-review.sh" \
-    ".edc/scripts/edc-review.sh" \
-    "$HOME/.edc/scripts/edc-review.sh"
-  do
-    if [ -f "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-find_doctor_script() {
-  local candidate
-  for candidate in \
-    "$REPO_ROOT/plugins/edc/scripts/edc-doctor.sh" \
-    ".edc/scripts/edc-doctor.sh" \
-    "$HOME/.edc/scripts/edc-doctor.sh"
+    "$REPO_ROOT/$repo_path" \
+    ".edc/scripts/$name" \
+    "$HOME/.edc/scripts/$name"
   do
     if [ -f "$candidate" ]; then
       printf '%s\n' "$candidate"
@@ -145,7 +74,7 @@ find_doctor_script() {
 }
 
 read_manifest_default_mode() {
-  local manifest=".context/manifest.json"
+  local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || return 0
   command -v jq > /dev/null 2>&1 || die "jq is required to read $manifest"
   jq -r '.policy.defaultMode // empty' "$manifest"
@@ -167,14 +96,6 @@ enforce_agent_context_mode() {
     echo "edc: $agent/$mode not yet implemented" >&2
     exit 2
   fi
-}
-
-run_doctor_in_dir() {
-  local target="$1"
-  local doctor_script
-  doctor_script="$(cd "$target" && find_doctor_script)" \
-    || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
-  (cd "$target" && bash "$doctor_script")
 }
 
 build_cmd() {
@@ -229,33 +150,14 @@ build_cmd() {
   fi
   [ -d "$target" ] || die "build target directory not found: $target"
 
-  local prompt
-  prompt="$(cd "$target" && resolve_build_prompt "$agent" "${passthrough[@]}")"
+  local build_script
+  build_script="$(cd "$target" && find_script edc-build.sh plugins/edc/scripts/edc-build.sh)" \
+    || die "edc-build.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-build.sh"
 
-  case "$agent" in
-    claude)
-      (
-        cd "$target"
-        claude -p \
-          --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-          <<< "$prompt"
-      )
-      ;;
-    cursor)
-      (
-        cd "$target"
-        cursor agent -p --force --trust <<< "$prompt"
-      )
-      ;;
-    codex)
-      (
-        cd "$target"
-        codex exec --sandbox workspace-write - <<< "$prompt"
-      )
-      ;;
-  esac
-
-  run_doctor_in_dir "$target"
+  (
+    cd "$target"
+    EDC_AGENT_CLI="$agent" bash "$build_script" "${passthrough[@]}"
+  )
 }
 
 review_cmd() {
@@ -307,15 +209,118 @@ review_cmd() {
   require_command "$agent"
 
   local review_script
-  review_script="$(find_review_script)" \
+  review_script="$(find_script edc-review.sh scripts/edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
   EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
 }
 
+audit_cmd() {
+  local agent=""
+  local context_mode=""
+  local -a passthrough=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || die "--agent requires a value"
+        agent="$2"
+        shift 2
+        ;;
+      --ignore)
+        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        context_mode="$2"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown audit option: $1"
+        ;;
+    esac
+  done
+
+  [ -n "$agent" ] || die "--agent is required"
+  validate_context_mode "$context_mode"
+  if [ -z "$context_mode" ]; then
+    context_mode="$(read_manifest_default_mode)"
+    validate_context_mode "$context_mode"
+  fi
+  enforce_agent_context_mode "$agent" "$context_mode"
+  require_command "$agent"
+
+  local audit_script
+  audit_script="$(find_script edc-audit.sh plugins/edc/scripts/edc-audit.sh)" \
+    || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
+
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$audit_script" "${passthrough[@]}"
+}
+
+update_cmd() {
+  local agent=""
+  local context_mode=""
+  local -a passthrough=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || die "--agent requires a value"
+        agent="$2"
+        shift 2
+        ;;
+      --base)
+        [ "$#" -ge 2 ] || die "--base requires a ref"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --ignore)
+        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        context_mode="$2"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown update option: $1"
+        ;;
+    esac
+  done
+
+  [ -n "$agent" ] || die "--agent is required"
+  validate_context_mode "$context_mode"
+  if [ -z "$context_mode" ]; then
+    context_mode="$(read_manifest_default_mode)"
+    validate_context_mode "$context_mode"
+  fi
+  enforce_agent_context_mode "$agent" "$context_mode"
+  require_command "$agent"
+
+  local update_script
+  update_script="$(find_script edc-update.sh plugins/edc/scripts/edc-update.sh)" \
+    || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
+
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$update_script" "${passthrough[@]}"
+}
+
 doctor_cmd() {
   local doctor_script
-  doctor_script="$(find_doctor_script)" \
+  doctor_script="$(find_script edc-doctor.sh plugins/edc/scripts/edc-doctor.sh)" \
     || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
   bash "$doctor_script"
 }
@@ -327,14 +332,14 @@ mode_cmd() {
     "")
       local current
       current="$(read_manifest_default_mode)"
-      [ -n "$current" ] || die ".context/manifest.json not found or missing policy.defaultMode"
+      [ -n "$current" ] || die "edc-context/manifest.json not found or missing policy.defaultMode"
       printf '%s\n' "$current"
       return 0
       ;;
     *) die "edc mode: argument must be 'advisory' or 'inject' (got: $mode)" ;;
   esac
 
-  local manifest=".context/manifest.json"
+  local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || die "$manifest not found (run 'edc build' first)"
   command -v jq > /dev/null 2>&1 || die "jq is required to update $manifest"
 
@@ -360,6 +365,12 @@ main() {
       ;;
     review)
       review_cmd "$@"
+      ;;
+    audit)
+      audit_cmd "$@"
+      ;;
+    update)
+      update_cmd "$@"
       ;;
     mode)
       mode_cmd "$@"

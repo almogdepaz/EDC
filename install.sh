@@ -6,7 +6,7 @@
 #
 # Agents: claude, cursor, codex, pi
 #
-# Runtime mode (advisory vs inject) is controlled by `.context/manifest.json`'s
+# Runtime mode (advisory vs inject) is controlled by `edc-context/manifest.json`'s
 # `policy.defaultMode` field. Flip it with: `edc mode advisory|inject`.
 
 set -euo pipefail
@@ -98,13 +98,6 @@ copy_or_download() {
   fi
 }
 
-copy_tree_or_fail() {
-  local src="$1" dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  rm -rf "$dst"
-  cp -R "$src" "$dst"
-}
-
 skill_rel() {
   echo "${1#plugins/edc/skills/}"
 }
@@ -112,19 +105,110 @@ skill_rel() {
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
   mkdir -p "$scripts_target"
-  copy_or_download "scripts/edc"                            "$scripts_target/edc"
-  copy_or_download "plugins/edc/scripts/edc-review.sh"      "$scripts_target/edc-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-doctor.sh"      "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-route.sh"       "$scripts_target/edc-route.sh"
-  copy_or_download "plugins/edc/scripts/edc-manifest.sh"    "$scripts_target/edc-manifest.sh"
-  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$scripts_target/edc-clean-slate.sh"
+  copy_or_download "scripts/edc"                              "$scripts_target/edc"
+  copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
+  copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
+  copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
+  copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
+  copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
+  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
+  copy_or_download "plugins/edc/scripts/edc-runtime.sh"       "$scripts_target/edc-runtime.sh"
+  copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
+  copy_or_download "plugins/edc/scripts/edc-resolve-prompt.sh" "$scripts_target/edc-resolve-prompt.sh"
+  copy_or_download "plugins/edc/scripts/edc-spawn.sh"         "$scripts_target/edc-spawn.sh"
+  copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
+  copy_or_download "plugins/edc/scripts/edc-paths.sh"          "$scripts_target/edc-paths.sh"
+  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"     "$scripts_target/edc-build-plan.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
+    "$scripts_target/edc-build.sh" \
+    "$scripts_target/edc-update.sh" \
+    "$scripts_target/edc-audit.sh" \
     "$scripts_target/edc-doctor.sh" \
     "$scripts_target/edc-route.sh" \
     "$scripts_target/edc-manifest.sh" \
-    "$scripts_target/edc-clean-slate.sh"
+    "$scripts_target/edc-clean-slate.sh" \
+    "$scripts_target/edc-runtime.sh" \
+    "$scripts_target/edc-assert-fresh.sh" \
+    "$scripts_target/edc-resolve-prompt.sh" \
+    "$scripts_target/edc-spawn.sh" \
+    "$scripts_target/edc-recover-context.sh" \
+    "$scripts_target/edc-build-plan.sh"
+  # edc-paths.sh is sourced, not exec'd — no chmod needed
+}
+
+# write_cursor_commands <cursor-target>
+# Generates four thin slash-command wrappers under <target>/commands/. Each
+# wrapper is a Bash-only shim that exports EDC_AGENT_CLI=cursor and shells to
+# the matching ~/.edc/scripts/edc-*.sh orchestrator. No source-file checked
+# into the repo — the wrapper template lives here, the only place it can
+# diverge from the contract is install.sh itself.
+write_cursor_commands() {
+  local target="$1"
+  mkdir -p "$target/commands"
+  for action in build update audit review; do
+    cat > "$target/commands/edc-$action.md" <<EOF
+---
+description: edc $action via deterministic orchestrator (auto-installed by install.sh)
+---
+
+**Arguments:** \$ARGUMENTS
+
+The orchestrator owns the full pipeline. Your only job is to invoke it and
+surface its output.
+
+\`\`\`bash
+set -- \$ARGUMENTS
+export EDC_AGENT_CLI=cursor
+if [ -f ".edc/scripts/edc-$action.sh" ]; then
+  bash .edc/scripts/edc-$action.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+else
+  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  exit 1
+fi
+\`\`\`
+
+If the script exits non-zero, surface its error verbatim and stop.
+EOF
+  done
+}
+
+# write_codex_skills <codex-skills-target>
+# Codex equivalent of write_cursor_commands. Writes <target>/edc-<action>/SKILL.md
+# wrappers that delegate to ~/.edc/scripts/edc-*.sh with EDC_AGENT_CLI=codex.
+write_codex_skills() {
+  local target="$1"
+  for action in build update audit review; do
+    mkdir -p "$target/edc-$action"
+    cat > "$target/edc-$action/SKILL.md" <<EOF
+---
+name: edc-$action
+description: edc $action via deterministic orchestrator (auto-installed by install.sh)
+---
+
+The orchestrator owns the full pipeline. Invoke it via the target's bash
+shell and surface its output. Pass through any user arguments verbatim.
+
+\`\`\`bash
+export EDC_AGENT_CLI=codex
+if [ -f ".edc/scripts/edc-$action.sh" ]; then
+  bash .edc/scripts/edc-$action.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+else
+  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  exit 1
+fi
+\`\`\`
+
+If the script exits non-zero, surface its error verbatim and stop.
+EOF
+  done
 }
 
 print_path_hint() {
@@ -138,34 +222,63 @@ print_path_hint() {
   esac
 }
 
+# print_cli_hint <agent>
+# Shows the terminal-CLI commands the user can run from any shell once
+# ~/.edc/scripts is on PATH. <agent> is one of claude/cursor/codex/pi and
+# is used to fill in the --agent flag for the example commands.
+print_cli_hint() {
+  local agent="$1"
+  echo
+  echo "Terminal CLI (run from any repo, after PATH is set):"
+  case "$agent" in
+    pi)
+      # pi has its own slash-command surface and is not yet supported as an
+      # --agent value for the orchestrators (claude/cursor/codex only).
+      echo "  edc doctor                 # validate context"
+      echo "  edc mode advisory|inject   # toggle runtime mode in edc-context/manifest.json"
+      echo
+      echo "Build/review/audit from pi: use the slash commands inside pi:"
+      echo "  /edc-build, /edc-update, /edc-audit, /edc-run-review, /edc-doctor"
+      ;;
+    *)
+      echo "  edc build  --agent $agent             # build or update edc-context/"
+      echo "  edc update --agent $agent             # force incremental update"
+      echo "  edc review --agent $agent --base main # differential review of current branch"
+      echo "  edc audit  --agent $agent             # complexity / bloat audit"
+      echo "  edc doctor                            # validate context"
+      echo "  edc mode advisory|inject              # toggle runtime mode"
+      ;;
+  esac
+}
+
+# install_edc_skills <skills-target>
+# Drop SKILL.md (+ supporting files) into <target>/<skill-name>/. Used by
+# the claude CLI install path so resolve_prompt's claude branch can find
+# skills under ~/.edc/skills/ without depending on the claude plugin.
+install_edc_skills() {
+  local target="$1"
+  local f rel
+  for f in "${SKILLS[@]}"; do
+    rel=$(skill_rel "$f")
+    copy_or_download "$f" "$target/$rel"
+  done
+}
+
 install_claude_runtime() {
-  local target="$HOME/.claude/plugins/edc"
-
-  if [ -d "$LOCAL_PLUGIN_ROOT" ]; then
-    mkdir -p "$HOME/.claude/plugins"
-    copy_tree_or_fail "$LOCAL_PLUGIN_ROOT" "$target"
-  else
-    mkdir -p "$target/.claude-plugin" "$target/commands" "$target/hooks" "$target/scripts"
-    copy_or_download "plugins/edc/.claude-plugin/plugin.json" "$target/.claude-plugin/plugin.json"
-    copy_or_download "plugins/edc/commands/edc-build.md" "$target/commands/edc-build.md"
-    copy_or_download "plugins/edc/commands/edc-update.md" "$target/commands/edc-update.md"
-    copy_or_download "plugins/edc/commands/edc-audit.md" "$target/commands/edc-audit.md"
-    copy_or_download "plugins/edc/commands/edc-review.md" "$target/commands/edc-review.md"
-    copy_or_download "plugins/edc/commands/edc-run-review.md" "$target/commands/edc-run-review.md"
-    copy_or_download "plugins/edc/commands/edc-doctor.md" "$target/commands/edc-doctor.md"
-    copy_or_download "plugins/edc/hooks/hooks.json" "$target/hooks/hooks.json"
-    copy_or_download "plugins/edc/hooks/session-start.mjs" "$target/hooks/session-start.mjs"
-    copy_or_download "plugins/edc/hooks/pretooluse-context-inject.mjs" "$target/hooks/pretooluse-context-inject.mjs"
-    copy_or_download "plugins/edc/scripts/edc-review.sh" "$target/scripts/edc-review.sh"
-    copy_or_download "plugins/edc/scripts/edc-route.sh" "$target/scripts/edc-route.sh"
-    copy_or_download "plugins/edc/scripts/edc-clean-slate.sh" "$target/scripts/edc-clean-slate.sh"
-  fi
-
   install_terminal_cli
-  echo "Installed EDC Claude runtime in $target."
-  echo "Terminal CLI installed at $HOME/.edc/scripts/edc."
-  echo "Runtime mode is read from .context/manifest.json (defaults to advisory)."
+  install_edc_skills "$HOME/.edc/skills"
+  echo "Installed EDC terminal CLI at $HOME/.edc/scripts/edc."
+  echo "Installed EDC skill bundle at $HOME/.edc/skills/."
+  echo
+  echo "This installs the standalone CLI only. The CLI works without the claude plugin."
+  echo
+  echo "For slash commands (/edc:edc-build, hooks) inside interactive claude, ALSO run:"
+  echo "  claude plugin marketplace add almogdepaz/wolfpack-plugins"
+  echo "  claude plugin install edc@edc"
+  echo
+  echo "Runtime mode is read from edc-context/manifest.json (defaults to advisory)."
   echo "Flip with: edc mode inject"
+  print_cli_hint claude
   print_path_hint
 }
 
@@ -181,18 +294,11 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/skills/$(skill_rel "$f")"
     done
-    download "agents/cursor/.cursor/commands/edc-run-build.md" "$TARGET/commands/edc-run-build.md"
-    download "agents/cursor/.cursor/commands/edc-run-review.md" "$TARGET/commands/edc-run-review.md"
-    download "agents/cursor/.cursor/commands/edc-run-update.md" "$TARGET/commands/edc-run-update.md"
-    download "agents/cursor/.cursor/commands/edc-run-audit.md" "$TARGET/commands/edc-run-audit.md"
-    download "agents/cursor/.cursor/rules/edc-session-start.mdc" "$TARGET/rules/edc-session-start.mdc"
-    download "scripts/edc" "$SCRIPTS_TARGET/edc"
-    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
-    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
-    chmod +x "$SCRIPTS_TARGET/edc"
-    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
+    install_terminal_cli
+    write_cursor_commands "$TARGET"
     echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
+    print_cli_hint cursor
+    print_path_hint
     ;;
 
   codex)
@@ -202,17 +308,11 @@ case "$AGENT" in
     for f in "${SKILLS[@]}"; do
       download "$f" "$TARGET/$(skill_rel "$f")"
     done
-    download "agents/codex/.codex/skills/edc-build/SKILL.md" "$TARGET/edc-build/SKILL.md"
-    download "agents/codex/.codex/skills/edc-update/SKILL.md" "$TARGET/edc-update/SKILL.md"
-    download "agents/codex/.codex/skills/edc-audit/SKILL.md" "$TARGET/edc-audit/SKILL.md"
-    download "agents/codex/.codex/skills/edc-run-review/SKILL.md" "$TARGET/edc-run-review/SKILL.md"
-    download "scripts/edc" "$SCRIPTS_TARGET/edc"
-    download "plugins/edc/scripts/edc-review.sh" "$SCRIPTS_TARGET/edc-review.sh"
-    download "plugins/edc/scripts/edc-doctor.sh" "$SCRIPTS_TARGET/edc-doctor.sh"
-    chmod +x "$SCRIPTS_TARGET/edc"
-    chmod +x "$SCRIPTS_TARGET/edc-review.sh"
-    chmod +x "$SCRIPTS_TARGET/edc-doctor.sh"
+    install_terminal_cli
+    write_codex_skills "$TARGET"
     echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
+    print_cli_hint codex
+    print_path_hint
     ;;
 
   pi)
@@ -227,6 +327,7 @@ case "$AGENT" in
     fi
     install_terminal_cli
     echo "Done. Run /edc-build inside pi to create context. Toggle mode with 'edc mode advisory|inject'."
+    print_cli_hint pi
     print_path_hint
     ;;
 

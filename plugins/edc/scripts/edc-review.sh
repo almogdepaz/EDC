@@ -13,12 +13,12 @@
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
 #   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 #                                                     task-generation only (emit TASK lines, no subprocess spawning)
-#   edc-review.sh --check-context                      assert .context/manifest.json fresh (no diff, no task gen)
+#   edc-review.sh --check-context                      assert <EDC_CONTEXT_DIR>/manifest.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
 # --build exit codes:
-#   0 — review-tasks/ written, TASK lines on stdout, proceed with skill
+#   0 — $EDC_REVIEW_TASKS_DIR/ written, TASK lines on stdout, proceed with skill
 #   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
 #   2 — bad arguments or environment error
 #
@@ -36,9 +36,27 @@ if ! command -v jq > /dev/null 2>&1; then
   exit 2
 fi
 
-MANIFEST=".context/manifest.json"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
+# edc-clean-slate.sh) are found relative to the real script location, not the
+# invocation path. scripts/edc-review.sh is a symlink to
+# plugins/edc/scripts/edc-review.sh; without symlink resolution the helpers
+# would be looked up under scripts/, where they don't exist.
+_edc_resolve_script_dir() {
+  local src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ $src != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+SCRIPT_DIR="$(_edc_resolve_script_dir)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
+ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -51,150 +69,10 @@ EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
 CODEX_EXEC_HOME=""
 CODEX_EXEC_HOME_OWNED=0
 
-# ── timeout detection ────────────────────────────────────────────────────────
-#
-# Prefer GNU timeout (Linux) or gtimeout (macOS via coreutils). Fall back to a
-# background watchdog implemented in run_with_timeout().
-
-if command -v timeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
-elif command -v gtimeout > /dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-else
-  TIMEOUT_BIN=""
-  # Print once per top-level invocation, but only when we'll actually spawn
-  # subprocesses (i.e. the default auto_mode path). Skip for phase-internal
-  # flags and usage errors. EDC_TIMEOUT_WARNED is exported so the nested
-  # `bash "$0" --build ...` call inside auto_mode inherits it and stays silent.
-  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ]; then
-    case "${1:-}" in
-      --build|--check-context|--consolidate|--verify|"") ;;
-      *)
-        echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
-        export EDC_TIMEOUT_WARNED=1
-        ;;
-    esac
-  fi
-fi
-
-# run_with_timeout <secs> <phase-label> <cmd> [args...]
-# Run cmd with a timeout. Uses $TIMEOUT_BIN if available, otherwise a
-# background watchdog: spawns cmd, starts a sleep watchdog; if watchdog
-# fires first it kills cmd and exits non-zero.
-run_with_timeout() {
-  local secs="$1" label="$2"; shift 2
-  if [ -n "$TIMEOUT_BIN" ]; then
-    "$TIMEOUT_BIN" "$secs" "$@"
-    local rc=$?
-    if [ $rc -eq 124 ]; then
-      echo "ERROR: phase '$label' timed out after ${secs}s" >&2
-      return 1
-    fi
-    return $rc
-  fi
-  # watchdog fallback: the watchdog subshell prints the timeout message itself
-  # when it fires; we just forward the command's exit code.
-  # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
-  # non-interactive scripts, which swallows here-strings passed to the caller.
-  exec 3<&0
-  "$@" <&3 &
-  local cmd_pid=$!
-  exec 3<&-
-  # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
-  # the pipe write-end. If it did, the sleep (reparented to init when the
-  # subshell dies on kill) would keep the downstream `stream_filter` reader
-  # blocked for the full watchdog duration after the real command already exited.
-  (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
-    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
-  local watchdog_pid=$!
-  wait "$cmd_pid"
-  local rc=$?
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-  return $rc
-}
-
-cleanup_codex_exec_home() {
-  if [ "${CODEX_EXEC_HOME_OWNED:-0}" -eq 1 ] && [ -n "${CODEX_EXEC_HOME:-}" ] && [ -d "$CODEX_EXEC_HOME" ]; then
-    rm -rf "$CODEX_EXEC_HOME"
-  fi
-}
-
-ensure_codex_exec_home() {
-  if [ -n "${CODEX_EXEC_HOME:-}" ]; then
-    return 0
-  fi
-
-  if [ -n "${EDC_CODEX_HOME:-}" ]; then
-    mkdir -p "$EDC_CODEX_HOME"
-    CODEX_EXEC_HOME="$EDC_CODEX_HOME"
-    CODEX_EXEC_HOME_OWNED=0
-    return 0
-  fi
-
-  CODEX_EXEC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-codex-home.XXXXXX") \
-    || { echo "ERROR: could not create temporary CODEX_HOME" >&2; return 1; }
-  CODEX_EXEC_HOME_OWNED=1
-  trap cleanup_codex_exec_home EXIT
-}
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-# stream_filter: read NDJSON from agent CLI output and print human-readable
-# progress lines. Handles Claude, Cursor, and Codex formats.
-stream_filter() {
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    # type=assistant with text content
-    text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
-    if [ -n "$text" ]; then
-      printf '%s\n' "$text"
-      continue
-    fi
-    # type=tool_use — show tool name + first arg truncated
-    tool_info=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "tool_use") | "→ \(.name)(\((.input | to_entries | first | .value // "") | tostring | .[0:80]))") | .[] else empty end' 2>/dev/null)
-    if [ -n "$tool_info" ]; then
-      printf '%s\n' "$tool_info"
-      continue
-    fi
-    # type=tool_call (Cursor stream format) — show tool name on start
-    tool_call_info=$(printf '%s' "$line" | jq -r '
-      if .type == "tool_call" and .subtype == "started" then
-        (.tool_call | to_entries[0] |
-         "→ \(.key)(\(.value.args // {} | to_entries[0] | .value // "" | tostring | .[0:80]))")
-      else empty end' 2>/dev/null)
-    if [ -n "$tool_call_info" ]; then
-      printf '%s\n' "$tool_call_info"
-      continue
-    fi
-    # type=result with is_error=true
-    err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
-    if [ -n "$err" ]; then
-      printf '%s\n' "$err" >&2
-      continue
-    fi
-    # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
-    # agent_message carries the assistant text the user needs to see; without
-    # this handler the pipeline runs silent under real `codex exec`.
-    codex_msg=$(printf '%s' "$line" | jq -r '
-      if (.msg.type // "") == "agent_message" then (.msg.message // "")
-      elif (.msg.type // "") == "agent_reasoning" then "… \(.msg.text // "")"
-      elif (.msg.type // "") == "exec_command_begin" then "→ \(((.msg.command // []) | join(" "))[0:120])"
-      else empty end' 2>/dev/null)
-    if [ -n "$codex_msg" ]; then
-      printf '%s\n' "$codex_msg"
-      continue
-    fi
-    # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
-    codex_err=$(printf '%s' "$line" | jq -r '
-      if .type == "error" then "ERROR (subprocess): \(.message // "unknown error")"
-      elif (.msg.type // "") == "error" then "ERROR (subprocess): \(.msg.message // "unknown error")"
-      else empty end' 2>/dev/null)
-    if [ -n "$codex_err" ]; then
-      printf '%s\n' "$codex_err" >&2
-    fi
-  done
-}
+# Shared subprocess runtime (TIMEOUT_BIN, run_with_timeout, stream_filter,
+# codex home helpers). Sourced by every orchestrator to avoid drift.
+# shellcheck source=edc-runtime.sh
+. "$SCRIPT_DIR/edc-runtime.sh"
 
 final_review_filename() {
   # derive consolidated review filename from a target string
@@ -202,25 +80,23 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
-read_manifest_source_commit() {
-  local val
-  val=$(grep -o '"sourceCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$MANIFEST" \
-    | head -1 \
-    | sed 's/.*"sourceCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
-  if [ -z "$val" ]; then
-    echo "ERROR: could not read sourceCommit from $MANIFEST" >&2
-    return 1
-  fi
-  echo "$val"
-}
+# read_manifest_source_commit + assert_context_fresh come from the shared
+# helper. Sourced (not exec'd) so the functions run in this shell.
+# shellcheck source=edc-assert-fresh.sh
+. "$SCRIPT_DIR/edc-assert-fresh.sh"
+# edc_spawn (per-CLI subprocess dispatch with timeout + stream filter) lives
+# in a shared helper used by every orchestrator.
+# shellcheck source=edc-spawn.sh
+. "$SCRIPT_DIR/edc-spawn.sh"
+# recover_context_if_needed (freshness gate + spawn build/update + force-retry).
+# shellcheck source=edc-recover-context.sh
+. "$SCRIPT_DIR/edc-recover-context.sh"
 
 manifest_target() {
   local val
-  val=$(grep -o '"target"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | head -1 \
-    | sed 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(jq -r '.target // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read target from review-tasks/manifest.json" >&2
+    echo "ERROR: could not read target from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -229,10 +105,9 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(jq -r '.modules[]?.name // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read modules from review-tasks/manifest.json" >&2
+    echo "ERROR: could not read modules from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -301,37 +176,11 @@ filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
-assert_context_fresh() {
-  if [ ! -f "$MANIFEST" ]; then
-    echo "ERROR: context missing ($MANIFEST not found)" >&2
-    return 1
-  fi
-  local head source_commit
-  head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; return 1; }
-  source_commit=$(read_manifest_source_commit)
-  if [ "$source_commit" != "$head" ]; then
-    echo "ERROR: context stale (built at: $source_commit, HEAD: $head)" >&2
-    return 1
-  fi
-  # content validation: index.md must have at least one ## heading (edc-build
-  # emits module map, invariants, trust boundaries as ## sections)
-  local ctx=".context/index.md"
-  if [ ! -f "$ctx" ]; then
-    echo "ERROR: context file missing ($ctx) — run /edc:edc-build" >&2
-    return 1
-  fi
-  if ! grep -q '^##' "$ctx"; then
-    echo "ERROR: $ctx has no '## ' headings — expected module map, invariants, trust boundaries" >&2
-    echo "HINT: this usually means edc-build failed to run or wrote a stub. re-run /edc:edc-build." >&2
-    return 1
-  fi
-}
-
 # assert_report_valid <module>: require report with at least one ## heading
 # (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
   local module="$1"
-  local report="review-tasks/report-${module}.md"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
   if [ ! -f "$report" ]; then
     echo "ERROR: missing $report — edc-review skill did not produce output for module '$module'" >&2
     return 1
@@ -341,104 +190,6 @@ assert_report_valid() {
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
     return 1
   fi
-}
-
-# ── agent CLI helpers ────────────────────────────────────────────────────────
-
-# Locate an installed runtime skill's SKILL.md. Searches project-local first,
-# then the global agent install path.
-find_installed_skill() {
-  local name="$1"; shift
-  local base
-  for base in "$@"; do
-    if [ -f "$base/$name/SKILL.md" ]; then
-      echo "$base/$name/SKILL.md"
-      return 0
-    fi
-  done
-  echo "ERROR: skill '$name' not found in: $*" >&2
-  return 1
-}
-
-# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
-find_cursor_skill() {
-  find_installed_skill "$1" ".cursor/skills" "$HOME/.cursor/skills"
-}
-
-# Codex skills are installed under .codex/skills/<name>/ or ~/.codex/skills/<name>/.
-find_codex_skill() {
-  find_installed_skill "$1" ".codex/skills" "$HOME/.codex/skills"
-}
-
-# Build the prompt for a subprocess agent based on $EDC_AGENT_CLI.
-#
-# Cursor and Codex route through the same -impl skills directly; Claude routes
-# through command wrappers that invoke those same -impl skills.
-#
-# Claude: slash commands — the plugin system resolves the command wrapper,
-#         which invokes the matching -impl skill.
-# Cursor/Codex: cat the installed skill file so the subprocess follows the
-#               exact same instructions directly.
-resolve_prompt() {
-  local action="$1"; shift
-  local prompt_arg_string="$*"
-  case "$EDC_AGENT_CLI" in
-    claude)
-      case "$action" in
-        build)  echo "/edc:edc-build${prompt_arg_string:+ $prompt_arg_string}" ;;
-        update) echo "/edc:edc-update${prompt_arg_string:+ $prompt_arg_string}" ;;
-        review) echo "/edc:edc-review --task-file $1" ;;
-      esac
-      ;;
-    cursor)
-      case "$action" in
-        build)
-          local skill
-          skill=$(find_cursor_skill "edc-build-impl") || return 1
-          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
-          cat "$skill"
-          ;;
-        update)
-          local skill
-          skill=$(find_cursor_skill "edc-update-impl") || return 1
-          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
-          cat "$skill"
-          ;;
-        review)
-          local task_path="$1"
-          local review_skill review_dir
-          review_skill=$(find_cursor_skill "edc-review-impl") || return 1
-          review_dir=$(dirname "$review_skill")
-          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
-            "$task_path" "$review_skill" "$review_dir"
-          ;;
-      esac
-      ;;
-    codex)
-      case "$action" in
-        build)
-          local skill
-          skill=$(find_codex_skill "edc-build-impl") || return 1
-          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
-          cat "$skill"
-          ;;
-        update)
-          local skill
-          skill=$(find_codex_skill "edc-update-impl") || return 1
-          [ -n "$prompt_arg_string" ] && printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$prompt_arg_string"
-          cat "$skill"
-          ;;
-        review)
-          local task_path="$1"
-          local review_skill review_dir
-          review_skill=$(find_codex_skill "edc-review-impl") || return 1
-          review_dir=$(dirname "$review_skill")
-          printf 'Read the task file at %s and follow its instructions.\n\nRead %s and all supporting files in %s (methodology.md, adversarial.md, reporting.md, patterns.md) for the review methodology.\n\nDo not write your own review methodology. Follow the skill exactly. Do not skip reading the .context/ files.' \
-            "$task_path" "$review_skill" "$review_dir"
-          ;;
-      esac
-      ;;
-  esac
 }
 
 # ── check-context mode ───────────────────────────────────────────────────────
@@ -451,8 +202,8 @@ check_context_mode() {
 # ── consolidate mode ─────────────────────────────────────────────────────────
 
 consolidate_mode() {
-  if [ ! -f review-tasks/manifest.json ]; then
-    echo "ERROR: review-tasks/manifest.json missing — run build mode first" >&2
+  if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
+    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing — run build mode first" >&2
     exit 1
   fi
 
@@ -490,7 +241,7 @@ consolidate_mode() {
       [ -z "$module" ] && continue
       echo "## Module: \`${module}\`"
       echo ""
-      cat "review-tasks/report-${module}.md"
+      cat "$EDC_REVIEW_TASKS_DIR/report-${module}.md"
       echo ""
       echo "---"
       echo ""
@@ -505,8 +256,8 @@ consolidate_mode() {
 verify_mode() {
   assert_context_fresh || exit 1
 
-  if [ ! -f review-tasks/manifest.json ]; then
-    echo "ERROR: review-tasks/manifest.json missing" >&2
+  if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
+    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing" >&2
     exit 1
   fi
 
@@ -517,8 +268,8 @@ verify_mode() {
 
   while IFS= read -r module; do
     [ -z "$module" ] && continue
-    if [ ! -f "review-tasks/report-${module}.md" ]; then
-      echo "ERROR: missing review-tasks/report-${module}.md" >&2
+    if [ ! -f "$EDC_REVIEW_TASKS_DIR/report-${module}.md" ]; then
+      echo "ERROR: missing $EDC_REVIEW_TASKS_DIR/report-${module}.md" >&2
       missing=1
     fi
   done <<< "$modules"
@@ -590,136 +341,14 @@ auto_mode() {
     esac
   done
 
-  # Attempt 1: try to build review tasks
-  local out recovery=""
+  # Gate on freshness; recover (build/update + force-retry) if needed. After
+  # this returns, $EDC_MANIFEST is fresh or we've exited non-zero.
+  recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
+    || exit 1
+
+  # Build review tasks now that context is fresh.
+  local out
   out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
-
-  # Detect context-state markers anywhere in output (robust against any
-  # startup noise like warnings, tracing, etc.)
-  if echo "$out" | grep -q '^CONTEXT_MISSING$'; then
-    recovery="build"
-  elif echo "$out" | grep -q '^CONTEXT_STALE$'; then
-    recovery="update"
-  fi
-
-  # If recovering, pre-clean v1 leftovers / partial v2 builds so the build skill
-  # doesn't see ambiguous state and route to update by mistake. The clean-slate
-  # helper is idempotent — exit 0 means "nothing to do or successfully wiped".
-  if [ -n "$recovery" ] && [ -x "$CLEAN_SLATE_SH" ]; then
-    bash "$CLEAN_SLATE_SH" >&2 || true
-  fi
-
-  # Recover from missing/stale context (one shot)
-  case "$recovery" in
-    build)
-      echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..."
-      local build_prompt
-      build_prompt=$(resolve_prompt build "${build_args[@]}") || exit 1
-      # NOTE: spawn is inlined per CLI (not factored into a function) because
-      # `timeout`/`gtimeout` cannot exec shell functions — only real binaries.
-      # See `run_with_timeout` for the watchdog fallback that does support functions.
-      case "$EDC_AGENT_CLI" in
-        claude)
-          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-            claude -p --output-format stream-json --verbose \
-              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-            <<< "$build_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
-          ;;
-        cursor)
-          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-            cursor agent -p --output-format stream-json --force --trust \
-            <<< "$build_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
-          ;;
-        codex)
-          run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build" \
-            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
-            <<< "$build_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-build invocation failed" >&2; exit 1; }
-          ;;
-      esac
-      ;;
-    update)
-      echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..."
-      local update_prompt
-      update_prompt=$(resolve_prompt update "${update_args[@]}") || exit 1
-      case "$EDC_AGENT_CLI" in
-        claude)
-          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-            claude -p --output-format stream-json --verbose \
-              --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-            <<< "$update_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
-          ;;
-        cursor)
-          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-            cursor agent -p --output-format stream-json --force --trust \
-            <<< "$update_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
-          ;;
-        codex)
-          run_with_timeout "${EDC_UPDATE_TIMEOUT:-1800}" "edc-update" \
-            env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
-            <<< "$update_prompt" \
-            | stream_filter \
-            || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
-          ;;
-      esac
-      ;;
-  esac
-
-  if [ -n "$recovery" ]; then
-    if ! bash "$0" --check-context > /dev/null 2>&1; then
-      # The build/update LLM ran but didn't produce a valid manifest. Most
-      # common cause: subagent invoked v1 skills and wrote v1-shaped output.
-      # Wipe and retry the build with --force exactly once before giving up.
-      if [ -x "$CLEAN_SLATE_SH" ]; then
-        echo "→ context still not ready — wiping partial output and retrying with --force..."
-        bash "$CLEAN_SLATE_SH" --force >&2 || true
-        local force_build_prompt
-        force_build_prompt=$(resolve_prompt build --force "${build_args[@]}") || exit 1
-        case "$EDC_AGENT_CLI" in
-          claude)
-            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
-              claude -p --output-format stream-json --verbose \
-                --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-              <<< "$force_build_prompt" \
-              | stream_filter \
-              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
-            ;;
-          cursor)
-            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
-              cursor agent -p --output-format stream-json --force --trust \
-              <<< "$force_build_prompt" \
-              | stream_filter \
-              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
-            ;;
-          codex)
-            run_with_timeout "${EDC_BUILD_TIMEOUT:-3600}" "edc-build-retry" \
-              env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
-              <<< "$force_build_prompt" \
-              | stream_filter \
-              || { echo "ERROR: edc-build retry failed" >&2; exit 1; }
-            ;;
-        esac
-      fi
-      bash "$0" --check-context > /dev/null \
-        || {
-          echo "ERROR: context still not ready after recovery (manifest.json missing or invalid)." >&2
-          echo "HINT: the build agent likely invoked v1 skills (edc-split / top-level edc-context) instead of following edc-build-impl." >&2
-          echo "      check the build agent output above; you can also try: rm -rf .context AGENTS.md && edc review --base <ref>" >&2
-          exit 1
-        }
-    fi
-    # Attempt 2: build tasks now that context is ready
-    out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
-  fi
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
@@ -745,30 +374,8 @@ auto_mode() {
     echo "→ reviewing module: $module"
     local review_prompt
     review_prompt=$(resolve_prompt review "$task_path") || exit 1
-    case "$EDC_AGENT_CLI" in
-      claude)
-        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-          claude -p --output-format stream-json --verbose \
-            --allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob" \
-          <<< "$review_prompt" \
-          | stream_filter \
-          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
-        ;;
-      cursor)
-        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-          cursor agent -p --output-format stream-json --force --trust \
-          <<< "$review_prompt" \
-          | stream_filter \
-          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
-        ;;
-      codex)
-        run_with_timeout "${EDC_REVIEW_TIMEOUT:-1800}" "edc-review/$module" \
-          env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write - \
-          <<< "$review_prompt" \
-          | stream_filter \
-          || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
-        ;;
-    esac
+    edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt" \
+      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
   done <<< "$tasks"
@@ -776,6 +383,16 @@ auto_mode() {
   # Consolidate + verify
   bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
   bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+
+  # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
+  # review-<target>.md at the repo root is the durable artifact. On success,
+  # remove $EDC_REVIEW_TASKS_DIR/ so it doesn't clutter the tree. Failures
+  # exit non-zero above and leave the directory in place for inspection.
+  # Override with EDC_KEEP_REVIEW_TASKS=1 to keep the dir on success too.
+  if [ "${EDC_KEEP_REVIEW_TASKS:-0}" != "1" ]; then
+    rm -rf "$EDC_REVIEW_TASKS_DIR"
+  fi
+
   # Explicit exit so any late-arriving subprocess output can't poison our
   # exit code after the pipeline succeeded.
   exit 0
@@ -810,14 +427,14 @@ build_mode() {
 
   if [ ! -f "$MANIFEST" ]; then
     echo "CONTEXT_MISSING"
-    echo "No .context/manifest.json found. Run edc-build before reviewing."
+    echo "No $MANIFEST found. Run edc-build before reviewing."
     exit 1
   fi
 
   # Structural check: index.md must exist and contain ## headings. Absent or
   # stubbed index.md means edc-build never finished (or wrote junk) — treat as
   # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
-  local ctx=".context/index.md"
+  local ctx="$EDC_INDEX"
   if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
     echo "CONTEXT_MISSING"
     echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
@@ -853,9 +470,10 @@ build_mode() {
   fi
 
   # Filter out tool-internal paths. These are edc scratch state — reviewing
-  # them would make the tool eat its own tail (review .context/, review-tasks/,
-  # or prior review-*.md files as if they were source).
-  files=$(echo "$files" | grep -Ev '^(\.context/|review-tasks/|review-[^/]+\.md$)' || true)
+  # them would make the tool eat its own tail (review the context dir,
+  # $EDC_REVIEW_TASKS_DIR/ — itself under $EDC_CONTEXT_DIR/ — or prior
+  # review-*.md files as if they were source).
+  files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
   files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
 
   if [ -z "$files" ]; then
@@ -864,19 +482,126 @@ build_mode() {
     exit 2
   fi
 
-  # Step 3: group by top-level dir
+  # Step 3: group by module via $EDC_MANIFEST routing.
+  # Use edc-route.sh — single source of truth, same logic the hooks use.
+  # Files with no module match go into a synthetic "unmapped" bucket and
+  # are surfaced according to policy.unmatchedPathPolicy. Ambiguous routing
+  # is a hard error (manifest bug, refuse to silently pick a winner).
+  if [ ! -x "$ROUTE_SH" ] && [ ! -f "$ROUTE_SH" ]; then
+    echo "ERROR: edc-route.sh not found at $ROUTE_SH" >&2
+    exit 2
+  fi
+
+  local unmatched_policy
+  unmatched_policy=$(jq -r '.policy.unmatchedPathPolicy // "warn-allow"' "$MANIFEST")
+  case "$unmatched_policy" in
+    warn-allow|allow|fail) ;;
+    *)
+      echo "ERROR: invalid policy.unmatchedPathPolicy in $MANIFEST: '$unmatched_policy'" >&2
+      echo "HINT: must be one of: warn-allow, allow, fail" >&2
+      exit 2
+      ;;
+  esac
+
+  # Pre-compile allowedGlobs so we can suppress per-file warnings for paths
+  # the manifest already declared as expected-unmapped (README, package.json,
+  # docs/*, etc).
+  local -a allowed_globs=()
+  while IFS= read -r g; do
+    [ -n "$g" ] && allowed_globs+=("$g")
+  done < <(jq -r '.unmapped.allowedGlobs // [] | .[]' "$MANIFEST")
+
+  _is_expected_unmapped() {
+    local path="$1" g
+    for g in "${allowed_globs[@]}"; do
+      # shellcheck disable=SC2053
+      [[ "$path" == $g ]] && return 0
+    done
+    return 1
+  }
+
   declare -A MODULE_FILES
+  local ambiguous_count=0 unmapped_count=0 mapped_count=0
+  local -a unmapped_unexpected=()
+  local -a ambiguous_lines=()
+
   while IFS= read -r file; do
     [ -z "$file" ] && continue
-    local dir
-    dir=$(dirname "$file" | cut -d'/' -f1)
-    [ "$dir" = "." ] && dir="root"
-    MODULE_FILES["$dir"]+="${file}"$'\n'
+    local module route_err route_rc=0
+    route_err=$(mktemp)
+    module=$(bash "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
+
+    case "$route_rc" in
+      0)
+        MODULE_FILES["$module"]+="${file}"$'\n'
+        mapped_count=$((mapped_count + 1))
+        ;;
+      1)
+        # No module match — group into "unmapped". Track unexpected ones for
+        # policy enforcement.
+        MODULE_FILES["unmapped"]+="${file}"$'\n'
+        unmapped_count=$((unmapped_count + 1))
+        if ! _is_expected_unmapped "$file"; then
+          unmapped_unexpected+=("$file")
+        fi
+        ;;
+      2)
+        ambiguous_count=$((ambiguous_count + 1))
+        ambiguous_lines+=("$file: $(cat "$route_err")")
+        ;;
+      *)
+        echo "ERROR: edc-route.sh failed (rc=$route_rc) for path: $file" >&2
+        cat "$route_err" >&2
+        rm -f "$route_err"
+        exit 2
+        ;;
+    esac
+    rm -f "$route_err"
   done <<< "$files"
 
-  # Step 4: write review-tasks/
-  rm -rf review-tasks
-  mkdir -p review-tasks
+  # Ambiguous routing is always fatal — manifest bug, not a runtime concern.
+  if [ "$ambiguous_count" -gt 0 ]; then
+    echo "ERROR: $ambiguous_count file(s) match multiple modules at top priority:" >&2
+    local line
+    for line in "${ambiguous_lines[@]}"; do
+      echo "  $line" >&2
+    done
+    echo "HINT: edit $MANIFEST — bump priority on the intended" >&2
+    echo "      module or tighten its match.{exactFiles,prefixes,globs} rules" >&2
+    exit 2
+  fi
+
+  # Unmapped policy enforcement.
+  if [ "${#unmapped_unexpected[@]}" -gt 0 ]; then
+    case "$unmatched_policy" in
+      fail)
+        echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (policy=fail):" >&2
+        local f
+        for f in "${unmapped_unexpected[@]}"; do
+          echo "  $f" >&2
+        done
+        echo "HINT: add a module rule in $MANIFEST or list the path" >&2
+        echo "      in unmapped.allowedGlobs, then re-run." >&2
+        exit 2
+        ;;
+      warn-allow)
+        echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (will review under 'unmapped'):" >&2
+        local f
+        for f in "${unmapped_unexpected[@]}"; do
+          echo "  $f" >&2
+        done
+        ;;
+      allow)
+        : # silent — counted in summary below only
+        ;;
+    esac
+  fi
+
+  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count modules=${#MODULE_FILES[@]}" >&2
+
+  # Step 4: write $EDC_REVIEW_TASKS_DIR/
+  rm -rf "$EDC_REVIEW_TASKS_DIR"
+  mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
   local sorted_modules
   sorted_modules=$(printf '%s\n' "${!MODULE_FILES[@]}" | sort)
@@ -891,7 +616,11 @@ build_mode() {
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      echo -n "    { \"name\": \"$module\", \"doc\": \".context/modules/${module}.md\", \"files\": ["
+      # The synthetic "unmapped" bucket has no per-module doc; emit empty
+      # doc field so the review subagent skips the per-module read step.
+      local module_doc="${EDC_MODULES_DIR}/${module}.md"
+      [ "$module" = "unmapped" ] && module_doc=""
+      echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
         | grep -v '^$' \
@@ -905,16 +634,22 @@ build_mode() {
     echo ""
     echo "  ]"
     echo "}"
-  } > review-tasks/manifest.json
+  } > "$EDC_REVIEW_TASKS_MANIFEST"
 
   # per-module task files
   while IFS= read -r module; do
-    local file_list baseline_line
+    local file_list baseline_line module_context_line
     file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
-    cat > "review-tasks/${module}.md" <<TASK
+    if [ "$module" = "unmapped" ]; then
+      module_context_line="3. NOTE: these files are not mapped to any module in ${EDC_MANIFEST}. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths."
+    else
+      module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists — deep per-module context, invariants, call graphs"
+    fi
+
+    cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
 ## Target
@@ -925,11 +660,11 @@ ${file_list}
 
 ## Instructions
 
-1. Read \`.context/index.md\` — module map, invariants, trust boundaries
-2. Read \`.context/reports/issues.md\` if it exists — cross-reference known issues against the files above
-3. Read \`.context/modules/${module}.md\` if it exists — deep per-module context, invariants, call graphs
+1. Read \`${EDC_INDEX}\` — module map, invariants, trust boundaries
+2. Read \`${EDC_ISSUES}\` if it exists — cross-reference known issues against the files above
+${module_context_line}
 4. Use the edc-review skill to perform the full review on the files listed above
-5. Write your report to \`review-tasks/report-${module}.md\`
+5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
 
 DO NOT write your own review methodology.
 DO NOT skip reading the context files.
@@ -942,7 +677,7 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    echo "TASK review-tasks/${module}.md"
+    echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"
   done <<< "$sorted_modules"
 }
 
@@ -980,7 +715,7 @@ case "${1:-}" in
     echo "                                                     full review pipeline (default)" >&2
     echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
     echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
-    echo "                                                     generate review-tasks/ only (no subprocess spawning)" >&2
+    echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

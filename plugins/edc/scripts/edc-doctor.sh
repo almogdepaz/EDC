@@ -6,10 +6,12 @@
 
 set -euo pipefail
 
-MANIFEST=".context/manifest.json"
-INDEX=".context/index.md"
-ROOT_AGENTS="AGENTS.md"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=edc-paths.sh
+. "$SCRIPT_DIR/edc-paths.sh"
+MANIFEST="$EDC_MANIFEST"
+INDEX="$EDC_INDEX"
+ROOT_AGENTS="AGENTS.md"
 ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
 TMP_ERR="${TMPDIR:-/tmp}/edc-doctor-route.$$"
 

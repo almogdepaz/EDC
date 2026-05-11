@@ -30,35 +30,35 @@ git add src/keep.txt generated/skip.txt
 git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
 
-mkdir -p .context
-cat > .context/manifest.json <<EOF
+mkdir -p edc-context
+cat > edc-context/manifest.json <<EOF
 {"schemaVersion":2,"sourceCommit":"$HEAD_SHA","modules":[]}
 EOF
-printf '## Module Map\n\n- root\n' > .context/index.md
+printf '## Module Map\n\n- root\n' > edc-context/index.md
 
 # ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
 printf 'generated/**\n' > .edcignore
 
 bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > /tmp/t8-build-out.txt
 
-if grep -q '"src/keep.txt"' review-tasks/manifest.json \
-  && ! grep -q '"generated/skip.txt"' review-tasks/manifest.json; then
+if grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json \
+  && ! grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json; then
   echo "PASS: .edcignore excludes matching files from review tasks"
 else
   echo "FAIL: .edcignore did not filter manifest as expected"
-  cat review-tasks/manifest.json
+  cat edc-context/review-tasks/manifest.json
   exit 1
 fi
 
 # ── 8b: --ignore overrides .edcignore for the run ─────────────────────────────
 bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 --ignore src/** > /tmp/t8-build-out.txt
 
-if grep -q '"generated/skip.txt"' review-tasks/manifest.json \
-  && ! grep -q '"src/keep.txt"' review-tasks/manifest.json; then
+if grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json \
+  && ! grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json; then
   echo "PASS: --ignore overrides .edcignore"
 else
   echo "FAIL: --ignore did not override .edcignore as expected"
-  cat review-tasks/manifest.json
+  cat edc-context/review-tasks/manifest.json
   exit 1
 fi
 

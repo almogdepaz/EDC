@@ -6,14 +6,14 @@ Detailed phase-by-phase workflow for code review.
 
 **FIRST ACTION — Check for existing context, then build baseline if needed:**
 
-If `.context/index.md` exists in the repository:
-1. Read `.context/index.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+If `edc-context/index.md` exists in the repository:
+1. Read `edc-context/index.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
 2. This IS your baseline — skip the full context build
 3. Map changed files to modules using the Module Map table
-4. Load `.context/modules/{module}.md` for affected modules
-5. Load `.context/reports/issues.md` to check if changes touch known issues
+4. Load `edc-context/modules/{module}.md` for affected modules
+5. Load `edc-context/reports/issues.md` to check if changes touch known issues
 
-If `.context/` does NOT exist but the `edc:edc-context` skill is available (NOT `audit-context-building` — that is a different plugin):
+If `edc-context/` does NOT exist but the `edc:edc-context` skill is available (NOT `audit-context-building` — that is a different plugin):
 
 ```bash
 # Checkout baseline commit
@@ -74,21 +74,21 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 - **MEDIUM**: Business logic, state changes, new public APIs
 - **LOW**: Comments, tests, UI, logging
 
-**Context-aware triage (if `.context/` exists):**
-- Check `.context/reports/issues.md` — does this PR touch files with known issues?
-- Check module coupling in `.context/index.md` — does this change have cascade risk?
-- Elevate risk for changes touching fragility clusters documented in `.context/modules/{module}.md`
+**Context-aware triage (if `edc-context/` exists):**
+- Check `edc-context/reports/issues.md` — does this PR touch files with known issues?
+- Check module coupling in `edc-context/index.md` — does this change have cascade risk?
+- Elevate risk for changes touching fragility clusters documented in `edc-context/modules/{module}.md`
 
 ---
 
 ## Phase 0.5: C Memory Safety Fast-Path (run BEFORE deep analysis)
 
-**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `.context/reports/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
+**CRITICAL: Create the output issues file FIRST, before any scanning.** Write an empty report skeleton to `issues.md` (or `edc-context/reports/issues.md` if that directory exists) immediately. Then append each finding as you discover it. This guarantees a file exists even if analysis is cut short by time limits.
 
 ```bash
 # Create output file immediately
-mkdir -p .context/reports 2>/dev/null || true
-OUTPUT_FILE=".context/reports/issues.md"
+mkdir -p edc-context/reports 2>/dev/null || true
+OUTPUT_FILE="edc-context/reports/issues.md"
 cat > "$OUTPUT_FILE" << 'EOF'
 # Security Review Findings
 <!-- findings appended below as discovered -->
@@ -233,8 +233,8 @@ For each changed file:
    IMPACT: [severity + scope]
    ```
 
-7. **Invariant compliance (if `.context/` exists):**
-   - Read `.context/modules/{module}.md` for the affected module
+7. **Invariant compliance (if `edc-context/` exists):**
+   - Read `edc-context/modules/{module}.md` for the affected module
    - Does the change violate any documented invariant?
    - Does it break an implicit contract with another module?
    - Does the coupling map flag cascade risk?
@@ -276,9 +276,9 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 - 21-50 calls: HIGH
 - 50+ calls: CRITICAL
 
-**Context-aware blast radius (if `.context/` exists):**
-- Cross-module coupling section in `.context/index.md` maps cascade paths
-- `.context/modules/{module}.md` documents which modules depend on the changed module
+**Context-aware blast radius (if `edc-context/` exists):**
+- Cross-module coupling section in `edc-context/index.md` maps cascade paths
+- `edc-context/modules/{module}.md` documents which modules depend on the changed module
 - Use these instead of grep when available — they capture non-obvious coupling
 
 **Priority matrix:**
@@ -294,13 +294,13 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 
 ## Phase 4: Deep Context Analysis
 
-**If `.context/` exists**, this is already done — the context files contain the deep analysis. Focus on:
+**If `edc-context/` exists**, this is already done — the context files contain the deep analysis. Focus on:
 1. Does the change violate documented invariants?
 2. Does the change break documented implicit contracts?
 3. Does the change touch a documented fragility cluster?
 4. Does the change conflict with documented design decisions?
 
-**If `.context/` does NOT exist**, build context for HIGH RISK changes:
+**If `edc-context/` does NOT exist**, build context for HIGH RISK changes:
 
 Use the `edc:edc-context` skill (NOT `audit-context-building`) or manually analyze:
 

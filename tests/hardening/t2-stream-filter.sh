@@ -4,6 +4,9 @@
 set -euo pipefail
 
 SCRIPT="scripts/edc-review.sh"
+# Subprocess spawning + per-CLI flags moved to edc-spawn.sh; check both files
+# for stream-json contract.
+SPAWN="plugins/edc/scripts/edc-spawn.sh"
 
 echo "=== T2: Stream-json visibility ==="
 
@@ -26,10 +29,10 @@ else
 fi
 
 # 2. stream_filter: source the function and feed synthetic NDJSON
+RUNTIME="plugins/edc/scripts/edc-runtime.sh"
 source_and_test() {
-  # Source only the stream_filter function from the script
-  # We extract it and eval it
-  eval "$(awk '/^stream_filter\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
+  # Source only the stream_filter function from the runtime helper.
+  eval "$(awk '/^stream_filter\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$RUNTIME")"
 
   local output errors
 
@@ -64,9 +67,9 @@ source_and_test() {
 source_and_test
 
 # 3. Verify every claude -p invocation uses --output-format stream-json --verbose
-# (exclude comment lines)
-total=$(grep -cE '^\s+claude -p' "$SCRIPT")
-locked=$(grep -v '^#' "$SCRIPT" | grep -c -- '--output-format stream-json --verbose')
+# (exclude comment lines). Spawns live in edc-spawn.sh.
+total=$(grep -cE '^\s+claude -p' "$SPAWN")
+locked=$(grep -v '^#' "$SPAWN" | grep -c -- '--output-format stream-json --verbose')
 echo "claude -p invocations: $total; with stream-json: $locked"
 if [ "$total" -lt 1 ] || [ "$locked" -ne "$total" ]; then
   echo "FAIL: every claude -p must use --output-format stream-json --verbose (invocations=$total, matched=$locked)"

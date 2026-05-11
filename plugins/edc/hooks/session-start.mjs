@@ -4,6 +4,7 @@ import {
   buildSessionStartContent,
   installOrchestratorScript,
 } from "./lib/route.mjs";
+import { detectPlatform } from "./lib/platform.mjs";
 
 // --- I/O helpers ---
 
@@ -13,18 +14,6 @@ function parseInput(raw) {
   } catch {
     return null;
   }
-}
-
-function detectPlatform(input) {
-  if (
-    input &&
-    ("conversation_id" in input ||
-      "cursor_version" in input ||
-      "workspace_roots" in input)
-  ) {
-    return "cursor";
-  }
-  return "claude-code";
 }
 
 function resolveProjectRoot(input) {

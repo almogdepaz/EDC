@@ -6,7 +6,7 @@
 #   ./install.sh --local           # project-local install (.pi/settings.json)
 #   ./install.sh --from-source     # install from this checkout (local path)
 #   ./install.sh --context-mode advisory|inject
-#                                  # toggle .context/manifest.json default mode
+#                                  # toggle edc-context/manifest.json default mode
 #
 # Requires: pi (https://github.com/mariozechner/pi) on PATH.
 
@@ -34,9 +34,9 @@ while [ "$#" -gt 0 ]; do
       mode="${2:-}"
       case "$mode" in
         advisory|inject)
-          manifest="$REPO_ROOT/.context/manifest.json"
+          manifest="$REPO_ROOT/edc-context/manifest.json"
           if [ ! -f "$manifest" ]; then
-            echo "edc: no .context/manifest.json in $REPO_ROOT — build first" >&2
+            echo "edc: no edc-context/manifest.json in $REPO_ROOT — build first" >&2
             exit 2
           fi
           tmp="$(mktemp)"

@@ -109,10 +109,10 @@ From baseline analysis (see [methodology.md](methodology.md#pre-analysis-baselin
 - Does this bypass a validation pattern?
 - Is this a regression of a previous fix?
 
-If `.context/` exists:
-- Does the change violate invariants documented in `.context/modules/{module}.md`?
-- Does the coupling map in `.context/index.md` flag modules affected by this change?
-- Is this issue already documented in `.context/reports/issues.md`?
+If `edc-context/` exists:
+- Does the change violate invariants documented in `edc-context/modules/{module}.md`?
+- Does the coupling map in `edc-context/index.md` flag modules affected by this change?
+- Is this issue already documented in `edc-context/reports/issues.md`?
 
 ---
 

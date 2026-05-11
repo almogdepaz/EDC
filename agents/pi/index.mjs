@@ -5,11 +5,11 @@
  *   - registers slash commands (/edc-build, /edc-update, /edc-audit,
  *     /edc-run-review, /edc-doctor, /edc-review)
  *   - on session_start: installs the orchestrator script into the project
- *     and surfaces .context/index.md (in inject mode)
+ *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
  *
- * Mode is controlled by .context/manifest.json's `policy.defaultMode`
+ * Mode is controlled by edc-context/manifest.json's `policy.defaultMode`
  * ("advisory" | "inject"), same as for Claude Code.
  *
  * Loaded via the repo-root package.json:
@@ -39,7 +39,7 @@ const COMMANDS = [
   },
   {
     name: "edc-update",
-    description: "Incrementally update .context/ from branch changes",
+    description: "Incrementally update edc-context/ from branch changes",
     file: "edc-update.md",
   },
   {
@@ -92,15 +92,8 @@ function renderCommandPrompt(file, args) {
   return body.replace(/\$ARGUMENTS/g, args || "");
 }
 
-/** Per-runtime cache of injected modules per pi session id. */
-function makeSessionDedup() {
-  return new Map(); // sessionId -> Set<moduleName>
-}
-
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
 export default async function edcExtension(pi) {
-  const dedup = makeSessionDedup();
-
   // -- skills ---------------------------------------------------------------
   pi.on("resources_discover", async () => {
     const skillsDir = join(PLUGIN_ROOT, "skills");
@@ -146,27 +139,16 @@ export default async function edcExtension(pi) {
     });
     if (!injection) return;
 
-    // Local in-process dedup (in addition to the file-based dedup in
-    // buildToolCallInjection) — prevents double injection if pi reloads
-    // the extension within the same session.
-    let seen = dedup.get(sessionId);
-    if (!seen) {
-      seen = new Set();
-      dedup.set(sessionId, seen);
-    }
-    if (seen.has(injection.moduleName)) return;
-    seen.add(injection.moduleName);
+    // Dedup is handled by buildToolCallInjection via a tmpfile keyed on
+    // session id (see plugins/edc/hooks/lib/route.mjs::isDuplicate). The
+    // file persists across extension reloads within a session, so a separate
+    // in-process layer adds no coverage.
 
     pi.sendMessage({
       customType: "edc-context-inject",
       content: injection.content,
       display: `[edc] injected module "${injection.moduleName}" for ${injection.normalizedPath}`,
     });
-  });
-
-  // -- session shutdown: clear in-process dedup ----------------------------
-  pi.on("session_shutdown", async () => {
-    dedup.clear();
   });
 
   // -- slash commands -------------------------------------------------------

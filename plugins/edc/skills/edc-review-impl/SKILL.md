@@ -3,7 +3,7 @@ name: edc-review-impl
 description: >
   Performs differential review of code changes (PRs, commits, diffs).
   Adapts analysis depth to codebase size, uses git history for context, calculates
-  blast radius, checks test coverage, leverages .context/ files when available,
+  blast radius, checks test coverage, leverages edc-context/ files when available,
   and generates comprehensive markdown reports.
 allowed-tools:
   - Read
@@ -31,20 +31,20 @@ by `scripts/edc-review.sh` and contains everything needed for a self-contained r
 
 **Required steps when `--task-file` is present:**
 
-1. Read the task file at `<path>` (e.g. `review-tasks/{module}.md`)
+1. Read the task file at `<path>` (e.g. `edc-context/review-tasks/{module}.md`)
 2. Parse these fields from the task file:
    - **Target** (PR URL, commit SHA, or diff path) — under `## Target`
    - **Baseline** (optional) — under `## Baseline`
    - **Files to review** — bullet list under `## Files to review`
-3. Derive `{module}` from the task file basename (e.g. `review-tasks/foo.md` → `foo`)
+3. Derive `{module}` from the task file basename (e.g. `edc-context/review-tasks/foo.md` → `foo`)
 4. Load context in this order (skip silently if a file does not exist):
-   - `.context/index.md`
-   - `.context/reports/issues.md`
-   - `.context/modules/{module}.md`
+   - `edc-context/index.md`
+   - `edc-context/reports/issues.md`
+   - `edc-context/modules/{module}.md`
 5. Scope the review **strictly to the listed files**. Do not expand to siblings or
    transitive callers unless blast radius analysis explicitly requires touching them.
 6. Run the standard workflow (Phases 0–6) on those files only.
-7. Write the report to `review-tasks/report-{module}.md`. **The report file is mandatory.**
+7. Write the report to `edc-context/review-tasks/report-{module}.md`. **The report file is mandatory.**
    The orchestrator hard-fails if it is missing.
 
 Do not write to any other location, do not update `manifest.json`, do not consolidate.
@@ -60,7 +60,7 @@ the original behavior, used when a human invokes the skill directly.
 
 ## Core Principles
 
-1. **Output-First**: Create the output file (`issues.md` or `.context/reports/issues.md`) BEFORE any analysis begins. Append findings as discovered. Never batch to end.
+1. **Output-First**: Create the output file (`issues.md` or `edc-context/reports/issues.md`) BEFORE any analysis begins. Append findings as discovered. Never batch to end.
 2. **Risk-First**: Focus on auth, validation, state mutation, external calls, data flow
 3. **Evidence-Based**: Every finding backed by git history, line numbers, attack scenarios
 4. **Adaptive**: Scale to codebase size (SMALL/MEDIUM/LARGE)
@@ -143,7 +143,7 @@ Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Pha
 
 Before delivering:
 
-- [ ] **Output file created at start** (before any analysis — `issues.md` or `.context/reports/issues.md`)
+- [ ] **Output file created at start** (before any analysis — `issues.md` or `edc-context/reports/issues.md`)
 - [ ] **Complex C/C++ functions analyzed in dedicated isolated pass** (>100 LOC or with recursion/state-machine/parser structure: perform focused analysis on that function alone BEFORE continuing with the rest of the file, preventing context exhaustion on complex targets)
 - [ ] All changed files analyzed
 - [ ] Git blame on removed security code
@@ -161,10 +161,10 @@ Before delivering:
 - Pre-Analysis: Build baseline context
 - Phase 4: Deep context on HIGH RISK changes
 
-**EDC context files (`.context/`):**
-- If `.context/index.md` exists, load it for architecture overview and module map
-- Map changed files to modules, load relevant `.context/modules/{module}.md`
-- Load `.context/reports/issues.md` to check if changes touch known issues
+**EDC context files (`edc-context/`):**
+- If `edc-context/index.md` exists, load it for architecture overview and module map
+- Map changed files to modules, load relevant `edc-context/modules/{module}.md`
+- Load `edc-context/reports/issues.md` to check if changes touch known issues
 - Use documented invariants for compliance checking
 - Use coupling map for cross-module impact analysis
 
@@ -227,7 +227,7 @@ For these cases, use standard code review instead.
 - Validation removed without replacement
 - External calls or subprocess spawns added without checks
 - High blast radius (50+ callers) + HIGH risk change
-- Change touches code flagged in `.context/reports/issues.md`
+- Change touches code flagged in `edc-context/reports/issues.md`
 
 These patterns require adversarial analysis even in quick triage.
 

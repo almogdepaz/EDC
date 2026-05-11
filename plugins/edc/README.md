@@ -4,9 +4,9 @@
 
 | Command | What it does |
 |---------|--------------|
-| `/edc:edc-build` | Build or update the v2 context tree (`AGENTS.md`, `.context/index.md`, `.context/manifest.json`, `.context/modules/*`) |
+| `/edc:edc-build` | Build or update the v2 context tree (`AGENTS.md`, `edc-context/index.md`, `edc-context/manifest.json`, `edc-context/modules/*`) |
 | `/edc:edc-update` | Incrementally refresh the v2 context tree from branch diff |
-| `/edc:edc-audit` | Write `.context/reports/issues.md` and `.context/reports/complexity.md` from existing module docs |
+| `/edc:edc-audit` | Write `edc-context/reports/issues.md` and `edc-context/reports/complexity.md` from existing module docs |
 | `/edc:edc-run-review` | Run differential security review on the current branch or target |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
@@ -43,9 +43,9 @@ plugins/edc/
 
 The user's Claude session has ONLY `Bash` access. It runs `edc-review.sh` which:
 
-1. Checks context freshness (`.context/manifest.json.sourceCommit` vs HEAD)
+1. Checks context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Spawns `claude -p` for context build/update if needed
-3. Generates per-module task files in `review-tasks/`
+3. Generates per-module task files in `edc-context/review-tasks/` (auto-cleaned on success)
 4. Spawns `claude -p` per module for review
 5. Consolidates reports into final review file
 6. Verifies all outputs exist
@@ -83,7 +83,7 @@ No target = reviews current branch against main. No flags needed for the common 
 
 ## Context lifecycle
 
-- `edc-build`: full context build, writes `AGENTS.md` plus the v2 `.context/` tree
+- `edc-build`: full context build, writes `AGENTS.md` plus the v2 `edc-context/` tree
 - `edc-update`: incremental update when HEAD advances
-- Context is stale when `.context/manifest.json.sourceCommit != HEAD`
+- Context is stale when `edc-context/manifest.json.sourceCommit != HEAD`
 - Reviews require fresh context and valid routing — `edc-review.sh` auto-recovers and `edc-doctor.sh` validates the result

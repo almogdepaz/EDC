@@ -22,19 +22,37 @@ All commands write to / read from `edc-context/` at the repo root. You only need
 
 ### Run it
 
-From any terminal, in the target repo:
+Every installer (claude, cursor, codex, pi) places a shared terminal wrapper at `~/.edc/scripts/edc` alongside the orchestrator scripts. From any terminal, in the target repo:
 
 ```bash
-edc build  --agent claude              # build edc-context/ (once per repo)
+# build or update context in the current repo
+edc build  --agent claude
+edc build  --agent cursor --force
+edc build  --agent codex --focus orchestrator
+edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
-edc review --agent claude --base main  # differential review of current branch
-edc audit  --agent claude              # complexity / bloat / duplication audit
-edc doctor                             # validate edc-context/ layout
+
+# run the review pipeline in the current repo
+edc review --agent claude --base main
+edc review --agent cursor HEAD --base main
+edc review --agent codex https://github.com/owner/repo/pull/42
+edc review --agent codex HEAD --base main --ignore 'generated/**'
+
+# complexity / bloat / duplication audit
+edc audit  --agent claude
+
+# claude runtime-mode toggle (no-op for cursor/codex)
+edc mode                # show current mode
+edc mode inject         # turn on auto-injection
+edc mode advisory       # turn it off
+
+# validate the edc-context/ layout
+edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout. `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale.
+`--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout, and is mandatory for `build` / `update` / `review` / `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale. `build` defaults to the current directory if no path is passed. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
-Each agent also exposes the same actions as native slash commands (e.g. `/edc:edc-run-review` in Claude Code, `/edc-review` in Cursor, `$edc-review` in Codex) — they all shell out to the same orchestrators under `~/.edc/scripts/`. See [Terminal CLI](#terminal-cli) below for the full flag reference.
+Each agent also exposes the same actions as native slash commands (e.g. `/edc:edc-run-review` in Claude Code, `/edc-review` in Cursor, `$edc-review` in Codex) — they all shell out to the same orchestrators under `~/.edc/scripts/`.
 
 ### Two runtime modes (Claude Code)
 
@@ -133,39 +151,6 @@ export EDC_CODEX_HOME="$HOME/.codex"
 
 When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim (and does not
 clean it up).
-
-## Terminal CLI
-
-Every installer (claude, cursor, codex, pi) places a shared terminal wrapper at `~/.edc/scripts/edc` alongside the orchestrator scripts.
-
-```bash
-# build or update context in the current repo
-~/.edc/scripts/edc build --agent claude
-~/.edc/scripts/edc build --agent cursor --force
-~/.edc/scripts/edc build --agent codex --focus orchestrator
-~/.edc/scripts/edc build --agent codex --ignore 'vendor/**' --ignore 'dist/**'
-
-# run the review pipeline in the current repo
-~/.edc/scripts/edc review --agent claude --base main
-~/.edc/scripts/edc review --agent cursor HEAD --base main
-~/.edc/scripts/edc review --agent codex https://github.com/owner/repo/pull/42
-~/.edc/scripts/edc review --agent codex HEAD --base main --ignore 'generated/**'
-
-# claude runtime-mode toggle (no-op for cursor/codex)
-~/.edc/scripts/edc mode                # show current mode
-~/.edc/scripts/edc mode inject         # turn on auto-injection
-~/.edc/scripts/edc mode advisory       # turn it off
-
-# validate the edc-context/ layout
-~/.edc/scripts/edc doctor
-```
-
-Notes:
-- `--agent` is mandatory for `build` and `review` (not for `mode` or `doctor`).
-- `build` defaults to the current directory if no path is passed.
-- `--ignore` may be repeated. If any `--ignore` flags are passed, EDC ignores `.edcignore` for that run.
-- Otherwise, if `.edcignore` exists in the repo root, EDC reads non-empty, non-comment lines from it as repo-relative glob patterns.
-- `review` delegates to `edc-review.sh`, so it automatically builds or updates `edc-context/` first when context is missing or stale.
 
 ## Two Independent Install Paths
 

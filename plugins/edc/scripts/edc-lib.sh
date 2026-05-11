@@ -22,6 +22,25 @@
 
 EDC_CONTEXT_DIR="${EDC_CONTEXT_DIR:-edc-context}"
 EDC_MANIFEST="$EDC_CONTEXT_DIR/manifest.json"
+
+# EDC_SCRIPTS_DIR: absolute path to the directory containing this lib and the
+# sibling edc-*.sh orchestrators. Resolved through symlinks so installs that
+# symlink the bin or the lib still produce a correct path. Exported so spawned
+# subprocess agents see it and can substitute it for the `plugins/edc/scripts/`
+# paths baked into the skill markdown (those paths only exist when running
+# inside the EDC dev repo).
+_edc_lib_resolve_scripts_dir() {
+  local src="${BASH_SOURCE[0]}"
+  while [ -L "$src" ]; do
+    local d
+    d="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ $src != /* ]] && src="$d/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+EDC_SCRIPTS_DIR="$(_edc_lib_resolve_scripts_dir)"
+export EDC_SCRIPTS_DIR
 EDC_INDEX="$EDC_CONTEXT_DIR/index.md"
 EDC_MODULES_DIR="$EDC_CONTEXT_DIR/modules"
 EDC_REPORTS_DIR="$EDC_CONTEXT_DIR/reports"
@@ -270,6 +289,40 @@ _find_skill_for_agent() {
   esac
 }
 
+# _emit_scripts_dir_preamble
+# Emitted at the top of every skill prompt. The installed skill markdown
+# references `plugins/edc/scripts/<name>.sh` — a path that only exists inside
+# the EDC dev repo. In any target repo the scripts live at $EDC_SCRIPTS_DIR
+# (typically ~/.edc/scripts). This preamble tells the agent to do the
+# substitution at invocation time so we don't have to rewrite skill text per
+# install or maintain a probe in every skill.
+_emit_scripts_dir_preamble() {
+  cat <<EOF
+IMPORTANT — script path substitution:
+The skill instructions below reference orchestrator helpers as
+\`plugins/edc/scripts/<name>.sh\`. That path is only valid inside the EDC
+dev repo. In this repo it is not. The orchestrator scripts actually live at:
+
+    $EDC_SCRIPTS_DIR
+
+Whenever the skill tells you to invoke or reference a script under
+\`plugins/edc/scripts/\`, substitute the absolute path above. For example:
+  skill says:  bash plugins/edc/scripts/edc-manifest.sh
+  you run:     bash $EDC_SCRIPTS_DIR/edc-manifest.sh
+
+The scripts to substitute include (at least):
+edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-route.sh,
+edc-discover-modules.sh (optional — may not exist; fall back as the skill
+describes), edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
+
+Do not rewrite the skill text. Do not fail the build because
+\`plugins/edc/scripts/\` is empty — that is expected; use the absolute path
+above instead. \$EDC_SCRIPTS_DIR is also exported in this subprocess if you
+prefer the env-var form, but the literal absolute path is authoritative.
+
+EOF
+}
+
 # _emit_skill_prompt <skill-name> [args-string]
 # Emit the canonical "find skill, optionally prepend args, cat content"
 # prompt used by build/update/audit across all agents.
@@ -277,6 +330,7 @@ _emit_skill_prompt() {
   local skill_name="$1" args_string="${2:-}"
   local skill
   skill=$(_find_skill_for_agent "$skill_name") || return 1
+  _emit_scripts_dir_preamble
   if [ -n "$args_string" ]; then
     printf 'When following the skill instructions below, use these CLI arguments: %s\n\n' "$args_string"
   fi
@@ -313,6 +367,7 @@ _emit_review_prompt() {
   done
 
   cat <<EOF
+$(_emit_scripts_dir_preamble)
 Follow the instructions below EXACTLY. Do not improvise, do not substitute
 your own methodology, do not skip steps. The methodology, adversarial
 checks, reporting format, and patterns are all embedded below — read them

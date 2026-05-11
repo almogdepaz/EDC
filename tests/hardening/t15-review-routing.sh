@@ -90,14 +90,14 @@ trap 'rm -rf "$TMPDIR_T15A"' EXIT
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
 
-  if [ -f review-tasks/broker-client.md ] && [ -f review-tasks/server.md ]; then
+  if [ -f edc-context/review-tasks/broker-client.md ] && [ -f edc-context/review-tasks/server.md ]; then
     check "15.1: src/broker/* → broker-client, src/server/* → server" 1
   else
     check "15.1: src/broker/* → broker-client, src/server/* → server" 0
-    ls review-tasks/ 2>&1 || true
+    ls edc-context/review-tasks/ 2>&1 || true
   fi
 
-  if [ -f review-tasks/src.md ]; then
+  if [ -f edc-context/review-tasks/src.md ]; then
     check "15.1: NO synthetic 'src' module bucket" 0
   else
     check "15.1: NO synthetic 'src' module bucket" 1
@@ -119,7 +119,7 @@ TMPDIR_T15B=$(mktemp -d)
   ]'
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
-  if [ -f review-tasks/core.md ]; then
+  if [ -f edc-context/review-tasks/core.md ]; then
     check "15.2: exactFiles match routes file to declared module" 1
   else
     check "15.2: exactFiles match routes file to declared module" 0
@@ -142,7 +142,7 @@ TMPDIR_T15C=$(mktemp -d)
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
-  if [ "$rc" -eq 0 ] && [ -f review-tasks/unmapped.md ]; then
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/unmapped.md ]; then
     check "15.3a: warn-allow groups unmapped file into 'unmapped' bucket" 1
   else
     check "15.3a: warn-allow groups unmapped file into 'unmapped' bucket" 0
@@ -172,7 +172,7 @@ TMPDIR_T15D=$(mktemp -d)
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
-  if [ "$rc" -eq 0 ] && [ -f review-tasks/unmapped.md ]; then
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/unmapped.md ]; then
     check "15.4a: README.md (allowedGlobs) groups under 'unmapped'" 1
   else
     check "15.4a: README.md (allowedGlobs) groups under 'unmapped'" 0
@@ -255,7 +255,7 @@ TMPDIR_T15F=$(mktemp -d)
   rm -rf "$TMPDIR_T15F"
 )
 
-# ── 15.7: regression guard — review-tasks/manifest.json names are real ──────
+# ── 15.7: regression guard — edc-context/review-tasks/manifest.json names are real ──
 # Already implicitly verified by 15.1 (no synthetic 'src' bucket), but pin it
 # explicitly: the only synthetic name allowed is "unmapped".
 TMPDIR_T15G=$(mktemp -d)
@@ -275,10 +275,10 @@ TMPDIR_T15G=$(mktemp -d)
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || true
 
-  # Every name in review-tasks/manifest.json must either exist in
+  # Every name in edc-context/review-tasks/manifest.json must either exist in
   # edc-context/manifest.json or be the literal "unmapped".
   context_modules=$(jq -r '.modules[].name' edc-context/manifest.json)
-  review_modules=$(jq -r '.modules[].name' review-tasks/manifest.json)
+  review_modules=$(jq -r '.modules[].name' edc-context/review-tasks/manifest.json)
   bad_count=0
   for m in $review_modules; do
     [ "$m" = "unmapped" ] && continue

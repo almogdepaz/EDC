@@ -70,8 +70,9 @@ if [[ "$prompt" == *"TASK FILE: "* ]]; then
     exit 1
   fi
   module=$(basename "$task_path" .md)
-  mkdir -p review-tasks
-  printf '## Summary\n\nMock review for module %s.\n' "$module" > "review-tasks/report-${module}.md"
+  task_dir=$(dirname "$task_path")
+  mkdir -p "$task_dir"
+  printf '## Summary\n\nMock review for module %s.\n' "$module" > "$task_dir/report-${module}.md"
   exit 0
 fi
 
@@ -160,11 +161,14 @@ if ! grep -q '^##' "$final"; then
 fi
 echo "PASS: final review file has ## headings"
 
-if ! ls review-tasks/report-*.md > /dev/null 2>&1; then
-  echo "FAIL: no per-module reports left under review-tasks/"
+# Per-module reports under edc-context/review-tasks/ are IPC scaffolding;
+# auto_mode removes them on success. Assert the cleanup happened.
+if [ -d edc-context/review-tasks ]; then
+  echo "FAIL: edc-context/review-tasks/ not cleaned up after successful run"
+  ls edc-context/review-tasks/
   exit 1
 fi
-echo "PASS: per-module reports present"
+echo "PASS: review-tasks scaffold cleaned up on success"
 
 echo ""
 echo "All T6 checks passed."

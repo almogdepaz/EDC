@@ -18,7 +18,7 @@
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
 # --build exit codes:
-#   0 — review-tasks/ written, TASK lines on stdout, proceed with skill
+#   0 — $EDC_REVIEW_TASKS_DIR/ written, TASK lines on stdout, proceed with skill
 #   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
 #   2 — bad arguments or environment error
 #
@@ -94,11 +94,9 @@ final_review_filename() {
 
 manifest_target() {
   local val
-  val=$(grep -o '"target"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | head -1 \
-    | sed 's/.*"target"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(jq -r '.target // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read target from review-tasks/manifest.json" >&2
+    echo "ERROR: could not read target from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -107,10 +105,9 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' review-tasks/manifest.json \
-    | sed 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
+  val=$(jq -r '.modules[]?.name // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
-    echo "ERROR: could not read modules from review-tasks/manifest.json" >&2
+    echo "ERROR: could not read modules from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
   fi
   echo "$val"
@@ -183,7 +180,7 @@ filter_ignored_files() {
 # (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
   local module="$1"
-  local report="review-tasks/report-${module}.md"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
   if [ ! -f "$report" ]; then
     echo "ERROR: missing $report — edc-review skill did not produce output for module '$module'" >&2
     return 1
@@ -205,8 +202,8 @@ check_context_mode() {
 # ── consolidate mode ─────────────────────────────────────────────────────────
 
 consolidate_mode() {
-  if [ ! -f review-tasks/manifest.json ]; then
-    echo "ERROR: review-tasks/manifest.json missing — run build mode first" >&2
+  if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
+    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing — run build mode first" >&2
     exit 1
   fi
 
@@ -244,7 +241,7 @@ consolidate_mode() {
       [ -z "$module" ] && continue
       echo "## Module: \`${module}\`"
       echo ""
-      cat "review-tasks/report-${module}.md"
+      cat "$EDC_REVIEW_TASKS_DIR/report-${module}.md"
       echo ""
       echo "---"
       echo ""
@@ -259,8 +256,8 @@ consolidate_mode() {
 verify_mode() {
   assert_context_fresh || exit 1
 
-  if [ ! -f review-tasks/manifest.json ]; then
-    echo "ERROR: review-tasks/manifest.json missing" >&2
+  if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
+    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing" >&2
     exit 1
   fi
 
@@ -271,8 +268,8 @@ verify_mode() {
 
   while IFS= read -r module; do
     [ -z "$module" ] && continue
-    if [ ! -f "review-tasks/report-${module}.md" ]; then
-      echo "ERROR: missing review-tasks/report-${module}.md" >&2
+    if [ ! -f "$EDC_REVIEW_TASKS_DIR/report-${module}.md" ]; then
+      echo "ERROR: missing $EDC_REVIEW_TASKS_DIR/report-${module}.md" >&2
       missing=1
     fi
   done <<< "$modules"
@@ -386,6 +383,16 @@ auto_mode() {
   # Consolidate + verify
   bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
   bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+
+  # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
+  # review-<target>.md at the repo root is the durable artifact. On success,
+  # remove $EDC_REVIEW_TASKS_DIR/ so it doesn't clutter the tree. Failures
+  # exit non-zero above and leave the directory in place for inspection.
+  # Override with EDC_KEEP_REVIEW_TASKS=1 to keep the dir on success too.
+  if [ "${EDC_KEEP_REVIEW_TASKS:-0}" != "1" ]; then
+    rm -rf "$EDC_REVIEW_TASKS_DIR"
+  fi
+
   # Explicit exit so any late-arriving subprocess output can't poison our
   # exit code after the pipeline succeeded.
   exit 0
@@ -464,8 +471,9 @@ build_mode() {
 
   # Filter out tool-internal paths. These are edc scratch state — reviewing
   # them would make the tool eat its own tail (review the context dir,
-  # review-tasks/, or prior review-*.md files as if they were source).
-  files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-tasks/|review-[^/]+\.md$)" || true)
+  # $EDC_REVIEW_TASKS_DIR/ — itself under $EDC_CONTEXT_DIR/ — or prior
+  # review-*.md files as if they were source).
+  files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
   files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
 
   if [ -z "$files" ]; then
@@ -591,9 +599,9 @@ build_mode() {
 
   echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count modules=${#MODULE_FILES[@]}" >&2
 
-  # Step 4: write review-tasks/
-  rm -rf review-tasks
-  mkdir -p review-tasks
+  # Step 4: write $EDC_REVIEW_TASKS_DIR/
+  rm -rf "$EDC_REVIEW_TASKS_DIR"
+  mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
   local sorted_modules
   sorted_modules=$(printf '%s\n' "${!MODULE_FILES[@]}" | sort)
@@ -626,7 +634,7 @@ build_mode() {
     echo ""
     echo "  ]"
     echo "}"
-  } > review-tasks/manifest.json
+  } > "$EDC_REVIEW_TASKS_MANIFEST"
 
   # per-module task files
   while IFS= read -r module; do
@@ -641,7 +649,7 @@ build_mode() {
       module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists — deep per-module context, invariants, call graphs"
     fi
 
-    cat > "review-tasks/${module}.md" <<TASK
+    cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
 ## Target
@@ -656,7 +664,7 @@ ${file_list}
 2. Read \`${EDC_ISSUES}\` if it exists — cross-reference known issues against the files above
 ${module_context_line}
 4. Use the edc-review skill to perform the full review on the files listed above
-5. Write your report to \`review-tasks/report-${module}.md\`
+5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
 
 DO NOT write your own review methodology.
 DO NOT skip reading the context files.
@@ -669,7 +677,7 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    echo "TASK review-tasks/${module}.md"
+    echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"
   done <<< "$sorted_modules"
 }
 
@@ -707,7 +715,7 @@ case "${1:-}" in
     echo "                                                     full review pipeline (default)" >&2
     echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
     echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
-    echo "                                                     generate review-tasks/ only (no subprocess spawning)" >&2
+    echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

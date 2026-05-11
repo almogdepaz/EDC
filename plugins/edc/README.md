@@ -45,7 +45,7 @@ The user's Claude session has ONLY `Bash` access. It runs `edc-review.sh` which:
 
 1. Checks context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Spawns `claude -p` for context build/update if needed
-3. Generates per-module task files in `review-tasks/`
+3. Generates per-module task files in `edc-context/review-tasks/` (auto-cleaned on success)
 4. Spawns `claude -p` per module for review
 5. Consolidates reports into final review file
 6. Verifies all outputs exist

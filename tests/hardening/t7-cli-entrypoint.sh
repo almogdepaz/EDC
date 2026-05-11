@@ -73,8 +73,9 @@ run_cli() {
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
 
-eval "$(awk '/^find_review_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
+eval "$(awk '/^find_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_ABS")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── 7a: --agent mandatory for build ───────────────────────────────────────────
 set +e
@@ -158,8 +159,8 @@ chmod +x "$PROJECT/.edc/scripts/edc-review.sh"
 
 # The wrapper should prefer the checked-in repo/global script over a stale
 # project-local .edc/scripts copy when invoked from the repo checkout.
-selected_review_script="$(cd "$PROJECT" && find_review_script)"
-if [ "$selected_review_script" = "$SCRIPT_DIR/edc-review.sh" ]; then
+selected_review_script="$(cd "$PROJECT" && find_script edc-review.sh scripts/edc-review.sh)"
+if [ "$selected_review_script" = "$REPO_ROOT/scripts/edc-review.sh" ]; then
   echo "PASS: wrapper prefers repo edc-review.sh over stale project copy"
 else
   echo "FAIL: wrapper selected stale project .edc/scripts/edc-review.sh"

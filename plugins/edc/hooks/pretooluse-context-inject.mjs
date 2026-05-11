@@ -3,6 +3,7 @@ import {
   resolvePluginRoot,
   buildToolCallInjection,
 } from "./lib/route.mjs";
+import { detectPlatform } from "./lib/platform.mjs";
 
 // --- I/O helpers ---
 
@@ -25,18 +26,6 @@ function parseInput(raw) {
   } catch {
     return null;
   }
-}
-
-function detectPlatform(raw) {
-  if (
-    raw &&
-    ("conversation_id" in raw ||
-      "cursor_version" in raw ||
-      "workspace_roots" in raw)
-  ) {
-    return "cursor";
-  }
-  return "claude-code";
 }
 
 function formatOutput(platform, hookEventName, content) {

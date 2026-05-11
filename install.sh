@@ -98,13 +98,6 @@ copy_or_download() {
   fi
 }
 
-copy_tree_or_fail() {
-  local src="$1" dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  rm -rf "$dst"
-  cp -R "$src" "$dst"
-}
-
 skill_rel() {
   echo "${1#plugins/edc/skills/}"
 }

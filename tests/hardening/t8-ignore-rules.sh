@@ -41,24 +41,24 @@ printf 'generated/**\n' > .edcignore
 
 bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > /tmp/t8-build-out.txt
 
-if grep -q '"src/keep.txt"' review-tasks/manifest.json \
-  && ! grep -q '"generated/skip.txt"' review-tasks/manifest.json; then
+if grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json \
+  && ! grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json; then
   echo "PASS: .edcignore excludes matching files from review tasks"
 else
   echo "FAIL: .edcignore did not filter manifest as expected"
-  cat review-tasks/manifest.json
+  cat edc-context/review-tasks/manifest.json
   exit 1
 fi
 
 # ── 8b: --ignore overrides .edcignore for the run ─────────────────────────────
 bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 --ignore src/** > /tmp/t8-build-out.txt
 
-if grep -q '"generated/skip.txt"' review-tasks/manifest.json \
-  && ! grep -q '"src/keep.txt"' review-tasks/manifest.json; then
+if grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json \
+  && ! grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json; then
   echo "PASS: --ignore overrides .edcignore"
 else
   echo "FAIL: --ignore did not override .edcignore as expected"
-  cat review-tasks/manifest.json
+  cat edc-context/review-tasks/manifest.json
   exit 1
 fi
 

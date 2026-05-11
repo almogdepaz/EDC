@@ -40,8 +40,8 @@ fi
 # ── 3b: consolidate rejects report without ## headings ────────────────────────
 printf '## Module Map\nlegit context\n' > edc-context/index.md
 
-mkdir -p review-tasks
-cat > review-tasks/manifest.json <<'MANIFEST'
+mkdir -p edc-context/review-tasks
+cat > edc-context/review-tasks/manifest.json <<'MANIFEST'
 {
   "target": "HEAD",
   "baseline": "",
@@ -51,9 +51,9 @@ cat > review-tasks/manifest.json <<'MANIFEST'
   ]
 }
 MANIFEST
-sed -i.bak "s/\"head\": \"HEAD\"/\"head\": \"$HEAD\"/" review-tasks/manifest.json
+sed -i.bak "s/\"head\": \"HEAD\"/\"head\": \"$HEAD\"/" edc-context/review-tasks/manifest.json
 
-printf 'just plain text with zero markdown structure\n' > review-tasks/report-foo.md
+printf 'just plain text with zero markdown structure\n' > edc-context/review-tasks/report-foo.md
 
 ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0
@@ -67,7 +67,7 @@ else
 fi
 
 # ── 3c: valid report passes consolidate ───────────────────────────────────────
-printf '## Summary\n\nfindings here\n' > review-tasks/report-foo.md
+printf '## Summary\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
 
 result=0
 bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?

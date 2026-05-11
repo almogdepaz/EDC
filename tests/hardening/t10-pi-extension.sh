@@ -39,12 +39,15 @@ fi
 # --- 3. shared lib exports --------------------------------------------------
 exports_check=$(node --input-type=module -e '
   import("./plugins/edc/hooks/lib/route.mjs").then(m => {
+    // Public API — see plugins/edc/hooks/lib/route.mjs. Internal helpers
+    // (loadManifest, routeFile, dedupPath, etc.) are intentionally unexported.
     const required = [
-      "loadManifest","manifestPath","checkStaleness",
-      "extractFilePaths","extractFilePathsFromBash","normalizePath",
-      "routeFile","moduleDocPath","dedupPath","isDuplicate",
-      "isEdcProject","installOrchestratorScript","resolvePluginRoot",
-      "buildSessionStartContent","buildToolCallInjection"
+      "resolvePluginRoot",
+      "installOrchestratorScript",
+      "buildSessionStartContent",
+      "buildToolCallInjection",
+      "normalizePath",
+      "routeFileSync"
     ];
     const missing = required.filter(n => typeof m[n] !== "function");
     if (missing.length) { console.log("MISSING:" + missing.join(",")); process.exit(1); }

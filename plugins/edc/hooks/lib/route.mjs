@@ -60,7 +60,7 @@ export function resolvePluginRoot(metaUrl) {
 
 // --- manifest ---
 
-export function loadManifest(projectRoot) {
+function loadManifest(projectRoot) {
   const manifestPath = join(projectRoot, EDC_MANIFEST_REL);
   if (!existsSync(manifestPath)) return null;
   try {
@@ -70,13 +70,13 @@ export function loadManifest(projectRoot) {
   }
 }
 
-export function manifestPath(projectRoot) {
+function manifestPath(projectRoot) {
   return join(projectRoot, EDC_MANIFEST_REL);
 }
 
 // --- staleness ---
 
-export function checkStaleness(projectRoot, manifest) {
+function checkStaleness(projectRoot, manifest) {
   const sourceCommit = manifest?.sourceCommit;
   if (!sourceCommit) return null;
   try {
@@ -101,7 +101,7 @@ export function checkStaleness(projectRoot, manifest) {
  * Accepts both Claude-style (Bash/Edit/Write) and pi-style (bash/edit/write)
  * tool names so this lib is shared across runtimes.
  */
-export function extractFilePaths(toolName, toolInput) {
+function extractFilePaths(toolName, toolInput) {
   const t = String(toolName || "").toLowerCase();
   if (t === "edit" || t === "write") {
     const fp = toolInput?.file_path;
@@ -113,7 +113,7 @@ export function extractFilePaths(toolName, toolInput) {
   return [];
 }
 
-export function extractFilePathsFromBash(command) {
+function extractFilePathsFromBash(command) {
   const paths = new Set();
   // Catch any path-shaped token: optional ./ or /, then at least one
   // dir/segment pair (extensionless OK). Routing filters non-matches.
@@ -252,7 +252,7 @@ export function routeFileSync(manifest, filePath) {
  * The third param (pluginRoot) is unused — historically pointed at
  * edc-route.sh; routing is now pure JS.
  */
-export function routeFile(manifestPathArg, filePath, _pluginRoot) {
+function routeFile(manifestPathArg, filePath, _pluginRoot) {
   if (!existsSync(manifestPathArg)) return null;
   let manifest;
   try {
@@ -263,7 +263,7 @@ export function routeFile(manifestPathArg, filePath, _pluginRoot) {
   return routeFileSync(manifest, filePath);
 }
 
-export function moduleDocPath(manifest, moduleName) {
+function moduleDocPath(manifest, moduleName) {
   const mod = (manifest.modules || []).find((m) => m.name === moduleName);
   if (!mod) return null;
   return mod.doc || `${EDC_MODULES_DIR_REL}/${moduleName}.md`;
@@ -275,7 +275,7 @@ function hashId(id) {
   return createHash("sha256").update(id).digest("hex").slice(0, 16);
 }
 
-export function dedupPath(sessionId) {
+function dedupPath(sessionId) {
   const safe = /^[a-zA-Z0-9_-]+$/.test(sessionId)
     ? sessionId
     : hashId(sessionId);
@@ -286,7 +286,7 @@ export function dedupPath(sessionId) {
  * Returns true if the module was already injected for this session.
  * Side-effect: marks the module injected on first call.
  */
-export function isDuplicate(sessionId, moduleName) {
+function isDuplicate(sessionId, moduleName) {
   if (!sessionId) return false;
   const path = dedupPath(sessionId);
   let injected = {};
@@ -309,7 +309,7 @@ export function isDuplicate(sessionId, moduleName) {
 
 // --- orchestrator script install ---
 
-export function isEdcProject(projectRoot) {
+function isEdcProject(projectRoot) {
   return (
     existsSync(join(projectRoot, ".git")) ||
     existsSync(join(projectRoot, EDC_MANIFEST_REL))

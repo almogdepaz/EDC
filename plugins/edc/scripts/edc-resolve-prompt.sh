@@ -34,35 +34,29 @@ find_installed_skill() {
   return 1
 }
 
-# Claude skills are installed under ~/.edc/skills/<name>/ (cli install) or
-# under the bundled plugin marketplace dir (when claude plugin is installed).
-# CLI install is the primary source of truth; the plugin path is a fallback
-# so a plugin-only setup still has skill content available.
-find_claude_skill() {
-  find_installed_skill "$1" \
-    ".edc/skills" \
-    "$HOME/.edc/skills" \
-    "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/skills"
-}
-
-# Cursor skills are installed under .cursor/skills/<name>/ or ~/.cursor/skills/<name>/.
-find_cursor_skill() {
-  find_installed_skill "$1" ".cursor/skills" "$HOME/.cursor/skills"
-}
-
-# Codex skills are installed under .codex/skills/<name>/ or ~/.codex/skills/<name>/.
-find_codex_skill() {
-  find_installed_skill "$1" ".codex/skills" "$HOME/.codex/skills"
-}
-
 # _find_skill_for_agent <skill-name>
-# Dispatch find_*_skill based on EDC_AGENT_CLI.
+# Resolve <skill-name>/SKILL.md from the agent-specific install paths.
+#
+# Per-agent layout:
+#   claude: .edc/skills, ~/.edc/skills, plus a marketplace fallback so a
+#           plugin-only setup (no CLI install) still finds skill content.
+#   cursor: .cursor/skills, ~/.cursor/skills
+#   codex:  .codex/skills,  ~/.codex/skills
 _find_skill_for_agent() {
   local name="$1"
   case "$EDC_AGENT_CLI" in
-    claude) find_claude_skill "$name" ;;
-    cursor) find_cursor_skill "$name" ;;
-    codex)  find_codex_skill  "$name" ;;
+    claude)
+      find_installed_skill "$name" \
+        ".edc/skills" \
+        "$HOME/.edc/skills" \
+        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/skills"
+      ;;
+    cursor)
+      find_installed_skill "$name" ".cursor/skills" "$HOME/.cursor/skills"
+      ;;
+    codex)
+      find_installed_skill "$name" ".codex/skills" "$HOME/.codex/skills"
+      ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2

@@ -12,22 +12,10 @@ SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-review.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
 # Counters live in temp files so subshell-scoped checks aggregate correctly.
-PASS_FILE=$(mktemp)
-FAIL_FILE=$(mktemp)
-echo 0 > "$PASS_FILE"
-echo 0 > "$FAIL_FILE"
-trap 'rm -f "$PASS_FILE" "$FAIL_FILE"' EXIT
-
-check() {
-  local desc="$1" cond="$2"
-  if [ "$cond" = "1" ]; then
-    echo $(( $(cat "$PASS_FILE") + 1 )) > "$PASS_FILE"
-    echo "PASS: $desc"
-  else
-    echo $(( $(cat "$FAIL_FILE") + 1 )) > "$FAIL_FILE"
-    echo "FAIL: $desc"
-  fi
-}
+# shellcheck source=lib/check.sh
+. "$(dirname "$0")/lib/check.sh"
+check_init --file
+trap 'check_cleanup' EXIT
 
 setup_repo() {
   local dir="$1"
@@ -297,8 +285,4 @@ TMPDIR_T15G=$(mktemp -d)
 )
 
 cd "$ORIG_DIR"
-PASS=$(cat "$PASS_FILE")
-FAIL=$(cat "$FAIL_FILE")
-echo
-echo "=== T15 result: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] || exit 1
+check_summary "T15"

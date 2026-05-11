@@ -10,19 +10,9 @@
 # Run from repo root: bash tests/hardening/t16-context-dir-source-of-truth.sh
 set -uo pipefail
 
-PASS=0
-FAIL=0
-
-check() {
-  local desc="$1" cond="$2"
-  if [ "$cond" = "1" ]; then
-    PASS=$((PASS + 1))
-    echo "PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "FAIL: $desc"
-  fi
-}
+# shellcheck source=lib/check.sh
+. "$(dirname "$0")/lib/check.sh"
+check_init
 
 echo "=== T16: context dir source-of-truth ==="
 
@@ -121,6 +111,4 @@ else
   echo "$old_in_skills" | sed 's/^/    /'
 fi
 
-echo
-echo "=== T16 result: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] || exit 1
+check_summary "T16"

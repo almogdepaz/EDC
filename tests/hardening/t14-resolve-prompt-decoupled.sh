@@ -14,21 +14,11 @@ set -uo pipefail
 SCRIPT="plugins/edc/scripts/edc-resolve-prompt.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
+# shellcheck source=lib/check.sh
+. "$(dirname "$0")/lib/check.sh"
+check_init
+
 echo "=== T14: resolve_prompt CLI/plugin decoupling ==="
-
-PASS=0
-FAIL=0
-
-check() {
-  local desc="$1" cond="$2"
-  if [ "$cond" = "1" ]; then
-    PASS=$((PASS + 1))
-    echo "PASS: $desc"
-  else
-    FAIL=$((FAIL + 1))
-    echo "FAIL: $desc"
-  fi
-}
 
 # Set up a hermetic skills tree so we don't depend on the user's install state.
 TMP="$(mktemp -d)"
@@ -181,6 +171,4 @@ else
   check "claude review: missing methodology.md produces clear error" 0
 fi
 
-echo
-echo "=== T14 result: $PASS passed, $FAIL failed ==="
-[ "$FAIL" -eq 0 ] || exit 1
+check_summary "T14"

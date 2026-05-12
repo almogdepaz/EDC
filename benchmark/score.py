@@ -7,7 +7,7 @@ Two-phase scoring:
 2. LLM-as-judge for exact match verification (accurate, only runs on candidates)
 
 Usage:
-    python3 score.py --issues .context/issues.md --cve CVE-2023-38545 \
+    python3 score.py --issues edc-context/reports/issues.md --cve CVE-2023-38545 \
         --bug-pattern "hostname length check bypassed" --category heap-buffer-overflow \
         --severity critical --affected-files lib/socks.c \
         --description "SOCKS5 heap buffer overflow when hostname too long for remote resolve"

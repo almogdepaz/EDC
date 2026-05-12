@@ -8,7 +8,7 @@ set -uo pipefail
 #   run-regression.sh --commit <sha> --repo curl|redis [--attempts 3] [--smoke]
 #
 # Per repo per attempt: runs `/edc:edc-build` once on the target repo using the
-# EDC plugin AT --commit, snapshots .context/, then runs `/edc:edc-review` per
+# EDC plugin AT --commit, snapshots edc-context/, then runs `/edc:edc-review` per
 # CVE in cve-lists.conf on top of that snapshot.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -194,7 +194,7 @@ build_one_attempt() {
     return 0
   fi
   local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/attempt-$attempt"
-  if [[ -d "$cache_dir/.context" ]] && [[ -f "$cache_dir/.context/manifest.json" ]]; then
+  if [[ -d "$cache_dir/edc-context" ]] && [[ -f "$cache_dir/edc-context/manifest.json" ]]; then
     log "[build] attempt $attempt cached → $cache_dir"
     return 0
   fi
@@ -210,9 +210,9 @@ build_one_attempt() {
     git clone --quiet --no-local "$TARGET_REPO_DIR" "$run_dir/src"
     git -C "$run_dir/src" checkout --quiet --detach "$BUILD_COMMIT"
   }
-  rm -rf "$run_dir/src/.context"
+  rm -rf "$run_dir/src/edc-context"
 
-  local prompt="Run the /edc:edc-build slash command on this repository. Build the full v2 architectural context (modules + index + manifest) under .context/. Use --force if needed. Do not perform security review. End when .context/index.md and .context/manifest.json and per-module docs in .context/modules/ exist."
+  local prompt="Run the /edc:edc-build slash command on this repository. Build the full v2 architectural context (modules + index + manifest) under edc-context/. Use --force if needed. Do not perform security review. End when edc-context/index.md and edc-context/manifest.json and per-module docs in edc-context/modules/ exist."
 
   log "[build] attempt $attempt — invoking claude (model=$MODEL, timeout=${BUILD_TIMEOUT}s)"
   ( cd "$run_dir/src" && true )
@@ -220,12 +220,12 @@ build_one_attempt() {
   run_claude "$run_dir/src" "$prompt" "$BUILD_TURNS" "$BUILD_TIMEOUT"
   popd >/dev/null
 
-  # The build skill sometimes writes .context to $run_dir/src (correct) and
+  # The build skill sometimes writes edc-context to $run_dir/src (correct) and
   # sometimes to $run_dir (one level up — observed on redis). Accept either.
   local status="ok"
   local module_count=0 index_lines=0
   local found_ctx=""
-  for candidate in "$run_dir/src/.context" "$run_dir/.context"; do
+  for candidate in "$run_dir/src/edc-context" "$run_dir/edc-context"; do
     [[ -d "$candidate" ]] && [[ -f "$candidate/manifest.json" ]] && { found_ctx="$candidate"; break; }
   done
   if [[ -n "$found_ctx" ]]; then
@@ -275,7 +275,7 @@ review_one_cve() {
     git clone --quiet --no-local "$TARGET_REPO_DIR" "$run_dir"
     git -C "$run_dir" checkout --quiet --detach "${fix_commit}~1"
   }
-  rm -rf "$run_dir/.context"
+  rm -rf "$run_dir/edc-context"
 
   local file_list=""
   IFS=',' read -ra files <<< "$affected_files"
@@ -291,29 +291,29 @@ review_one_cve() {
   local prompt
   if [[ "$MODE" == "v2" ]]; then
     local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/attempt-$attempt"
-    [[ -d "$cache_dir/.context" ]] || { log "[review] no cached context for attempt $attempt — skip $cve"; return 1; }
-    cp -R "$cache_dir/.context" "$run_dir/.context"
+    [[ -d "$cache_dir/edc-context" ]] || { log "[review] no cached context for attempt $attempt — skip $cve"; return 1; }
+    cp -R "$cache_dir/edc-context" "$run_dir/edc-context"
 
-    prompt="Pre-built v2 architectural context exists under .context/ (index.md, manifest.json, modules/*.md). Read .context/index.md first, then drill into the relevant module(s) under .context/modules/.
+    prompt="Pre-built v2 architectural context exists under edc-context/ (index.md, manifest.json, modules/*.md). Read edc-context/index.md first, then drill into the relevant module(s) under edc-context/modules/.
 
 Perform a FULL-FILE security review of these source files:$file_list
 
 Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
-Write ALL findings to .context/issues.md with: title, severity, category, file:line, description, evidence."
+Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
   else
     # v1 / v2-per-cve: build per-CVE context first, then review.
-    mkdir -p "$run_dir/.context/modules"
+    mkdir -p "$run_dir/edc-context/modules"
     local v1_prompt
     if [[ "$MODE" == "v1" ]]; then
       v1_prompt="Run the edc:edc-context skill on these files:$file_list
 
-Build complete architectural context. Write the full analysis to .context/full-context.md.
+Build complete architectural context. Write the full analysis to edc-context/full-context.md.
 This step is pure architectural context building only — do NOT identify security vulnerabilities."
     else
       # v2-per-cve: mirrors edc-build-plan.sh's per-module prompt verbatim,
       # but with a single synthetic module = the CVE's affected files.
-      v1_prompt="Build deep architectural context for module \`target\`. Files in scope: \`${affected_files}\`. Invoke the \`edc-context\` skill on these files. You may read sibling-module source if it materially improves this module's context. Write the deep doc directly to \`.context/modules/target.md\`. Return a ≤500-token summary for the orchestrator."
+      v1_prompt="Build deep architectural context for module \`target\`. Files in scope: \`${affected_files}\`. Invoke the \`edc-context\` skill on these files. You may read sibling-module source if it materially improves this module's context. Write the deep doc directly to \`edc-context/modules/target.md\`. Return a ≤500-token summary for the orchestrator."
     fi
 
     local v1_tools=""
@@ -326,7 +326,7 @@ This step is pure architectural context building only — do NOT identify securi
     local v1_dur=$RUN_DURATION v1_in=$RUN_IN v1_out=$RUN_OUT v1_cr=$RUN_CACHE_R v1_cc=$RUN_CACHE_C v1_cost=$RUN_COST v1_turns=$RUN_TURNS
     local v1_status="ok"
     local ctx_files=0
-    [[ -d "$run_dir/.context" ]] && ctx_files=$(find "$run_dir/.context" -type f -name '*.md' 2>/dev/null | wc -l | xargs)
+    [[ -d "$run_dir/edc-context" ]] && ctx_files=$(find "$run_dir/edc-context" -type f -name '*.md' 2>/dev/null | wc -l | xargs)
     [[ "$ctx_files" -gt 0 ]] || v1_status="no-context-files"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$REPO" "$SHORT_SHA" "${cve}-${attempt}" "$v1_dur" "$v1_turns" \
@@ -334,30 +334,30 @@ This step is pure architectural context building only — do NOT identify securi
       "$ctx_files" 0 "$v1_status" >> "$BUILD_TSV"
     log "[v1-build] $cve attempt $attempt — $v1_status (${v1_dur}s, ctx_files=$ctx_files, cost=\$$v1_cost)"
 
-    # Snapshot the v1 .context for later inspection (per-CVE)
+    # Snapshot the v1 edc-context for later inspection (per-CVE)
     local v1_cache="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/$cve/attempt-$attempt"
     mkdir -p "$v1_cache"
-    cp -R "$run_dir/.context" "$v1_cache/" 2>/dev/null || true
+    cp -R "$run_dir/edc-context" "$v1_cache/" 2>/dev/null || true
 
     [[ "$v1_status" == "ok" ]] || { log "[review] skipping $cve — build failed"; return 1; }
 
     if [[ "$MODE" == "v1" ]]; then
-      prompt="Pre-built v1 architectural context exists under .context/ (full-context.md and per-file *.md). Read those first.
+      prompt="Pre-built v1 architectural context exists under edc-context/ (full-context.md and per-file *.md). Read those first.
 
 Perform a FULL-FILE security review of these source files:$file_list
 
 Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
-Write ALL findings to .context/issues.md with: title, severity, category, file:line, description, evidence."
+Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
     else
       # v2-per-cve: review reads the narrow module doc rather than a per-repo index.
-      prompt="Pre-built v2-style architectural context for the in-scope files exists at .context/modules/target.md. Read it first.
+      prompt="Pre-built v2-style architectural context for the in-scope files exists at edc-context/modules/target.md. Read it first.
 
 Perform a FULL-FILE security review of these source files:$file_list
 
 Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
-Write ALL findings to .context/issues.md with: title, severity, category, file:line, description, evidence."
+Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
     fi
   fi
 
@@ -372,8 +372,17 @@ Write ALL findings to .context/issues.md with: title, severity, category, file:l
   run_claude "$run_dir" "$prompt" "$review_turns" "$REVIEW_TIMEOUT" "$review_tools"
   popd >/dev/null
 
-  local issues="$run_dir/.context/issues.md"
-  if [[ ! -s "$issues" ]]; then
+  # Look for findings at the v2 canonical path first, fall back to legacy locations.
+  local issues=""
+  for candidate in \
+      "$run_dir/edc-context/reports/issues.md" \
+      "$run_dir/edc-context/issues.md" \
+      "$run_dir/issues.md"; do
+    [[ -s "$candidate" ]] && { issues="$candidate"; break; }
+  done
+  if [[ -z "$issues" ]]; then
+    issues="$run_dir/edc-context/reports/issues.md"
+    mkdir -p "$(dirname "$issues")"
     grep '"type":"result"' "$run_dir/claude-output.txt" 2>/dev/null | tail -1 \
       | jq -r '.result // empty' > "$issues" 2>/dev/null || true
   fi

@@ -255,7 +255,7 @@ build_context_for_cve() {
     cve_info=$(get_cve_info "$repo_name" "$cve") || { log "  SKIP: $cve not in ground truth"; return 1; }
     IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$cve_info"
 
-    local ctx_file="$CVE_CACHE/$repo_name/$cve_id/.context/full-context.md"
+    local ctx_file="$CVE_CACHE/$repo_name/$cve_id/edc-context/full-context.md"
     if [ -f "$ctx_file" ] && [ -s "$ctx_file" ]; then
         log "  [$cve_id] context already cached"
         return 0
@@ -270,7 +270,7 @@ build_context_for_cve() {
 
     local prompt="Run the edc:edc-context skill on these files:$file_list
 
-Build complete architectural context. Write the full analysis to .context/full-context.md.
+Build complete architectural context. Write the full analysis to edc-context/full-context.md.
 This step is pure architectural context building only — do NOT identify security vulnerabilities."
 
     local max_retries=3
@@ -284,7 +284,7 @@ This step is pure architectural context building only — do NOT identify securi
         local run_dir="$WORK_DIR/ctx-build/$cve_id"
         rm -rf "$run_dir"
         cp -r "$src_dir" "$run_dir"
-        mkdir -p "$run_dir/.context"
+        mkdir -p "$run_dir/edc-context"
 
         local t0
         t0=$(date +%s)
@@ -313,9 +313,9 @@ This step is pure architectural context building only — do NOT identify securi
 
         local dur=$(( $(date +%s) - t0 ))
 
-        if [ -f "$run_dir/.context/full-context.md" ] && [ -s "$run_dir/.context/full-context.md" ]; then
-            mkdir -p "$CVE_CACHE/$repo_name/$cve_id/.context"
-            cp "$run_dir/.context/full-context.md" "$ctx_file"
+        if [ -f "$run_dir/edc-context/full-context.md" ] && [ -s "$run_dir/edc-context/full-context.md" ]; then
+            mkdir -p "$CVE_CACHE/$repo_name/$cve_id/edc-context"
+            cp "$run_dir/edc-context/full-context.md" "$ctx_file"
             log "  [$cve_id] context cached (${dur}s, attempt $attempt)"
             return 0
         fi
@@ -347,17 +347,17 @@ run_cve() {
     mkdir -p "$(dirname "$run_dir")"
     rm -rf "$run_dir"
     cp -r "$src_dir" "$run_dir"
-    mkdir -p "$run_dir/.context"
+    mkdir -p "$run_dir/edc-context/reports"
 
-    local ctx_cached="$CVE_CACHE/$repo_name/$cve_id/.context/full-context.md"
-    [ -f "$ctx_cached" ] && cp "$ctx_cached" "$run_dir/.context/full-context.md"
+    local ctx_cached="$CVE_CACHE/$repo_name/$cve_id/edc-context/full-context.md"
+    [ -f "$ctx_cached" ] && cp "$ctx_cached" "$run_dir/edc-context/full-context.md"
 
     local file_list=""
     IFS=',' read -ra files <<< "$affected_files"
     for f in "${files[@]}"; do file_list+=" $(basename "$(echo "$f" | xargs)")"; done
 
-    local ctx_note="Pre-built architectural context is in .context/full-context.md — read it first."
-    [ ! -f "$run_dir/.context/full-context.md" ] && ctx_note="No pre-built context available — analyze from source only."
+    local ctx_note="Pre-built architectural context is in edc-context/full-context.md — read it first."
+    [ ! -f "$run_dir/edc-context/full-context.md" ] && ctx_note="No pre-built context available — analyze from source only."
 
     local prompt="$ctx_note
 
@@ -366,7 +366,7 @@ Perform a full security review of these source files:$file_list
 Use the edc:edc-review skill. This is a FULL-FILE review — analyze the entire source for vulnerabilities.
 Ignore any diff/PR-specific instructions in the skill.
 
-Write ALL findings to .context/issues.md with:
+Write ALL findings to edc-context/reports/issues.md with:
 - issue title
 - severity (critical/high/medium/low)
 - category (buffer overflow, use-after-free, logic error, etc.)
@@ -422,13 +422,20 @@ Write ALL findings to .context/issues.md with:
         fi
     fi
 
-    local issues_file="$run_dir/.context/issues.md"
-    [ ! -f "$issues_file" ] && issues_file="$run_dir/issues.md"
-    if [ ! -f "$issues_file" ]; then
+    # v2 canonical: edc-context/reports/issues.md. Fall back to legacy locations.
+    local issues_file=""
+    for candidate in \
+        "$run_dir/edc-context/reports/issues.md" \
+        "$run_dir/edc-context/issues.md" \
+        "$run_dir/issues.md"; do
+        [ -s "$candidate" ] && { issues_file="$candidate"; break; }
+    done
+    if [ -z "$issues_file" ]; then
+        issues_file="$run_dir/edc-context/reports/issues.md"
+        mkdir -p "$(dirname "$issues_file")"
         grep '"type":"result"' "$run_dir/claude-output.txt" 2>/dev/null | tail -1 \
-            | jq -r '.result // empty' > "$run_dir/.context/issues.md" 2>/dev/null || true
-        [ ! -s "$run_dir/.context/issues.md" ] && cp "$run_dir/claude-output.txt" "$run_dir/.context/issues.md" 2>/dev/null || true
-        issues_file="$run_dir/.context/issues.md"
+            | jq -r '.result // empty' > "$issues_file" 2>/dev/null || true
+        [ ! -s "$issues_file" ] && cp "$run_dir/claude-output.txt" "$issues_file" 2>/dev/null || true
     fi
 
     if [ -n "${EDC_METRICS_FILE:-}" ]; then

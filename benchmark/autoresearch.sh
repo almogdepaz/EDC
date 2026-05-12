@@ -42,6 +42,11 @@ SKILL_FILES=(
 )
 
 MODEL="${EDC_BENCH_MODEL:-sonnet}"
+# Phase 0 (F1): propagate into edc_spawn so spawned children receive --model.
+export EDC_BUILD_MODEL="${EDC_BUILD_MODEL:-$MODEL}"
+export EDC_REVIEW_MODEL="${EDC_REVIEW_MODEL:-$MODEL}"
+# Force Claude Code Task subagents to use the same model as the parent.
+export CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-$MODEL}"
 
 # ── Repo discovery ──────────────────────────────────────────────────────────
 

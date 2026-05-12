@@ -16,7 +16,37 @@ BENCH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$BENCH_DIR/.." && pwd)"
 
 WORK_DIR="${EDC_REG_WORKDIR:-/private/tmp/edc-bench-regression}"
+# Single-knob default — used by harness as the "model" label in OUT_DIR and as
+# the outer claude -p --model. For per-phase splits (e.g. build=sonnet,
+# review=haiku), set EDC_BUILD_MODEL / EDC_REVIEW_MODEL explicitly and set
+# EDC_RUN_LABEL to a descriptive dirname (e.g. "build-sonnet-review-haiku").
 MODEL="${EDC_BENCH_MODEL:-haiku}"
+# Phase 0 (F1): propagate model into edc_spawn via per-phase env vars so the
+# spawned child claude/cursor/codex actually receives --model. Bench harness
+# always resolves explicitly so the interactive prompt path in `edc` never
+# triggers under CI / non-tty runs.
+export EDC_BUILD_MODEL="${EDC_BUILD_MODEL:-$MODEL}"
+export EDC_REVIEW_MODEL="${EDC_REVIEW_MODEL:-$MODEL}"
+# Outer claude -p --model: the bench's top-level claude that shells out to
+# edc-build.sh. It doesn't do real work (4-7 turns) so this matters little;
+# default to the build model since build is the longer phase.
+OUTER_MODEL="${EDC_OUTER_MODEL:-$EDC_BUILD_MODEL}"
+# Label used to name OUT_DIR's model subdir. Defaults to the single-knob MODEL
+# (e.g. "haiku"); override for split-model runs (e.g. "build-sonnet-review-haiku").
+RUN_LABEL="${EDC_RUN_LABEL:-$MODEL}"
+# Phase 0 observability: preserve every edc_spawn transcript for post-hoc
+# analysis with edc-spawn-analyze.sh. Transcripts go under each run_dir's
+# edc-context/build/transcripts/ by default; we explicitly point them at our
+# per-attempt output dir so attempts don't collide.
+export EDC_PRESERVE_TRANSCRIPTS="${EDC_PRESERVE_TRANSCRIPTS:-1}"
+# CLAUDE_CODE_SUBAGENT_MODEL is set per-phase by edc_spawn (build phase →
+# EDC_BUILD_MODEL, review phase → EDC_REVIEW_MODEL) via --settings inline
+# JSON, so we don't export a single fixed value here. The outer claude -p
+# below (the bench's own top-level invocation) still inherits the user's
+# global ~/.claude/settings.json for its own Task tool, but in practice the
+# outer claude doesn't fan out — it only shells out. Leaving this unset
+# means the outer's Task tool (if any) inherits the global setting, which
+# is acceptable since no real subagent work happens at that layer.
 MODE="${EDC_REG_MODE:-v2}"
 BUILD_TIMEOUT="${EDC_REG_BUILD_TIMEOUT:-1800}"
 REVIEW_TIMEOUT="${EDC_REG_REVIEW_TIMEOUT:-600}"
@@ -78,7 +108,7 @@ if $SMOKE; then
 fi
 
 # ── Output paths ───────────────────────────────────────────────────────────
-OUT_DIR="$BENCH_DIR/regression/results/${SHORT_SHA}/${MODE}/${MODEL}/${REPO}"
+OUT_DIR="$BENCH_DIR/regression/results/${SHORT_SHA}/${MODE}/${RUN_LABEL}/${REPO}"
 mkdir -p "$OUT_DIR"
 LOGFILE="$OUT_DIR/run.log"
 BUILD_TSV="$OUT_DIR/build-metrics.tsv"
@@ -151,7 +181,7 @@ run_claude() {
   (cd "$run_dir" && exec claude -p "$prompt" \
       --plugin-dir "$PLUGIN_DIR" \
       --max-turns "$max_turns" \
-      --model "$MODEL" \
+      --model "$OUTER_MODEL" \
       "${tools_arg[@]}" \
       --output-format stream-json --verbose \
       --dangerously-skip-permissions) \
@@ -193,13 +223,13 @@ build_one_attempt() {
     log "[build] $MODE mode — per-repo build skipped (per-CVE build inline)"
     return 0
   fi
-  local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/attempt-$attempt"
+  local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/attempt-$attempt"
   if [[ -d "$cache_dir/edc-context" ]] && [[ -f "$cache_dir/edc-context/manifest.json" ]]; then
     log "[build] attempt $attempt cached → $cache_dir"
     return 0
   fi
 
-  local run_dir="$WORK_DIR/builds/$SHORT_SHA/$MODE/$MODEL/$REPO/attempt-$attempt"
+  local run_dir="$WORK_DIR/builds/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/attempt-$attempt"
   rm -rf "$run_dir"
   mkdir -p "$run_dir"
 
@@ -212,13 +242,52 @@ build_one_attempt() {
   }
   rm -rf "$run_dir/src/edc-context"
 
-  local prompt="Run the /edc:edc-build slash command on this repository. Build the full v2 architectural context (modules + index + manifest) under edc-context/. Use --force if needed. Do not perform security review. End when edc-context/index.md and edc-context/manifest.json and per-module docs in edc-context/modules/ exist."
-
-  log "[build] attempt $attempt — invoking claude (model=$MODEL, timeout=${BUILD_TIMEOUT}s)"
-  ( cd "$run_dir/src" && true )
+  # Run edc-build.sh DIRECTLY (no outer claude wrapper).
+  #
+  # Why: claude code's Bash tool auto-backgrounds any command with
+  # timeout > 600000ms. The build legitimately takes 15-30 min, so the
+  # outer Bash call always gets backgrounded. After backgrounding, haiku
+  # polls TaskOutput indefinitely — even after the inner build's edc-doctor
+  # already finished and exited. The outer wrapper has no work to do beyond
+  # invoking the script and surfacing its output, so we drop it. The bench
+  # writes a synthetic claude-output.txt so downstream parsers (which look
+  # for a `"type":"result"` line) still find what they need.
+  log "[build] attempt $attempt — invoking edc-build.sh directly (build=$EDC_BUILD_MODEL, review=$EDC_REVIEW_MODEL, label=$RUN_LABEL, timeout=${BUILD_TIMEOUT}s)"
+  local out="$run_dir/src/claude-output.txt"
+  local t0=$(date +%s)
   pushd "$run_dir/src" >/dev/null
-  run_claude "$run_dir/src" "$prompt" "$BUILD_TURNS" "$BUILD_TIMEOUT"
+  ( EDC_AGENT_CLI=claude bash "$EDC_WT/plugins/edc/scripts/edc-build.sh" --force ) \
+    < /dev/null > "$out" 2>&1 &
+  local pid=$!
+  ( sleep "$BUILD_TIMEOUT" \
+      && kill "$pid" 2>/dev/null \
+      && pkill -TERM -P "$pid" 2>/dev/null \
+      ; sleep 5 \
+      ; kill -9 "$pid" 2>/dev/null \
+      ; pkill -KILL -P "$pid" 2>/dev/null \
+  ) &
+  local wd=$!
+  wait "$pid" 2>/dev/null || true
+  kill "$wd" 2>/dev/null || true
+  wait "$wd" 2>/dev/null || true
   popd >/dev/null
+
+  RUN_DURATION=$(( $(date +%s) - t0 ))
+  # Outer-shell metrics aren't applicable here — the real cost is in the
+  # inner edc_spawn child(ren), captured in spawn-log.jsonl. Zero out the
+  # outer fields so the build-metrics.tsv row stays consistent in shape.
+  RUN_IN=0; RUN_OUT=0; RUN_CACHE_R=0; RUN_CACHE_C=0; RUN_COST=0; RUN_TURNS=0
+  # Pull the real cost from spawn-log.jsonl if present (sum across all
+  # spawns this build produced).
+  local spawn_log="$run_dir/src/edc-context/build/spawn-log.jsonl"
+  if [[ -s "$spawn_log" ]] && command -v jq >/dev/null 2>&1; then
+    RUN_COST=$(jq -s 'map(.total_cost_usd // 0) | add' "$spawn_log" 2>/dev/null)
+    RUN_IN=$(jq -s 'map(.input_tokens // 0) | add' "$spawn_log" 2>/dev/null)
+    RUN_OUT=$(jq -s 'map(.output_tokens // 0) | add' "$spawn_log" 2>/dev/null)
+    RUN_CACHE_R=$(jq -s 'map(.cache_read_tokens // 0) | add' "$spawn_log" 2>/dev/null)
+    RUN_CACHE_C=$(jq -s 'map(.cache_write_tokens // 0) | add' "$spawn_log" 2>/dev/null)
+    RUN_TURNS=$(jq -s 'map(.num_turns // 0) | add' "$spawn_log" 2>/dev/null)
+  fi
 
   # The build skill sometimes writes edc-context to $run_dir/src (correct) and
   # sometimes to $run_dir (one level up — observed on redis). Accept either.
@@ -266,7 +335,7 @@ review_one_cve() {
   }
   IFS='|' read -r cve_id fix_commit affected_files category severity bug_pattern description <<< "$info"
 
-  local run_dir="$WORK_DIR/reviews/$SHORT_SHA/$MODE/$MODEL/$REPO/$cve/attempt-$attempt"
+  local run_dir="$WORK_DIR/reviews/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/$cve/attempt-$attempt"
   rm -rf "$run_dir"
   mkdir -p "$(dirname "$run_dir")"
 
@@ -290,7 +359,7 @@ review_one_cve() {
 
   local prompt
   if [[ "$MODE" == "v2" ]]; then
-    local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/attempt-$attempt"
+    local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/attempt-$attempt"
     [[ -d "$cache_dir/edc-context" ]] || { log "[review] no cached context for attempt $attempt — skip $cve"; return 1; }
     cp -R "$cache_dir/edc-context" "$run_dir/edc-context"
 
@@ -335,7 +404,7 @@ This step is pure architectural context building only — do NOT identify securi
     log "[v1-build] $cve attempt $attempt — $v1_status (${v1_dur}s, ctx_files=$ctx_files, cost=\$$v1_cost)"
 
     # Snapshot the v1 edc-context for later inspection (per-CVE)
-    local v1_cache="$WORK_DIR/cache/$SHORT_SHA/$MODE/$MODEL/$REPO/$cve/attempt-$attempt"
+    local v1_cache="$WORK_DIR/cache/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/$cve/attempt-$attempt"
     mkdir -p "$v1_cache"
     cp -R "$run_dir/edc-context" "$v1_cache/" 2>/dev/null || true
 
@@ -415,7 +484,7 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
 }
 
 # ── Drive ──────────────────────────────────────────────────────────────────
-log "starting regression: commit=$SHORT_SHA repo=$REPO attempts=$ATTEMPTS cves=${#ALL_CVES[@]} model=$MODEL"
+log "starting regression: commit=$SHORT_SHA repo=$REPO attempts=$ATTEMPTS cves=${#ALL_CVES[@]} outer=$OUTER_MODEL build=$EDC_BUILD_MODEL review=$EDC_REVIEW_MODEL label=$RUN_LABEL"
 
 for ((a=1; a<=ATTEMPTS; a++)); do
   log "═══ attempt $a/$ATTEMPTS ═══"

@@ -137,6 +137,15 @@ main() {
         esac
     done
 
+    # Phase 0 (F1): propagate model into edc_spawn for any nested orchestrator
+    # calls. run.sh calls claude -p directly so EDC_BENCH_MODEL still gates the
+    # outer invocation, but downstream paths read EDC_BUILD_MODEL/EDC_REVIEW_MODEL.
+    if [ -n "${EDC_BENCH_MODEL:-}" ]; then
+        export EDC_BUILD_MODEL="${EDC_BUILD_MODEL:-$EDC_BENCH_MODEL}"
+        export EDC_REVIEW_MODEL="${EDC_REVIEW_MODEL:-$EDC_BENCH_MODEL}"
+        export CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-$EDC_BENCH_MODEL}"
+    fi
+
     mkdir -p "$WORK_DIR"
 
     # Initialize results file

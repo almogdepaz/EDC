@@ -6,10 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  edc build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
-  edc update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc [--model <slug>] update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
@@ -23,6 +23,10 @@ Commands:
 
 Notes:
   --agent is required for build, update, review, and audit.
+  --model is optional and applies to both build and review phases. Per-phase
+    overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
+    Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
+    'claude-haiku-4-5'; cursor: 'sonnet-4'; etc).
   build defaults path to the current directory.
   --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
   All commands delegate to shared deterministic orchestrators.
@@ -349,14 +353,76 @@ mode_cmd() {
   echo "policy.defaultMode set to $mode in $manifest"
 }
 
+# Load ~/.edc/config (recognized keys: EDC_BUILD_MODEL, EDC_REVIEW_MODEL,
+# EDC_AGENT_CLI, EDC_PROVIDER). Caller's env always wins.
+_load_config() {
+  local lib
+  for lib in \
+    "$SCRIPT_DIR/edc-lib.sh" \
+    ".edc/scripts/edc-lib.sh" \
+    "$HOME/.edc/scripts/edc-lib.sh"
+  do
+    if [ -f "$lib" ]; then
+      # shellcheck disable=SC1090
+      . "$lib"
+      command -v edc_load_config >/dev/null 2>&1 && edc_load_config
+      return 0
+    fi
+  done
+}
+
+# Prompt-or-fail when no model has been resolved. Called once at top-level
+# before delegating to a subcommand that spawns agent work. "mode" and
+# "doctor" don't spawn agents so they skip this.
+_check_model_or_prompt() {
+  if [ -n "${EDC_BUILD_MODEL:-}" ] || [ -n "${EDC_REVIEW_MODEL:-}" ]; then
+    return 0
+  fi
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf 'edc: no model configured. backend will use its own default (may auto-route across models).\n' >&2
+    printf 'edc: continue? [y/N] ' >&2
+    local ans=""
+    read -r ans || true
+    case "$ans" in
+      y|Y|yes|YES) return 0 ;;
+      *) echo "edc: aborted. set --model <slug> or edit ~/.edc/config (EDC_BUILD_MODEL=, EDC_REVIEW_MODEL=)." >&2; exit 2 ;;
+    esac
+  else
+    echo "edc: no model configured. set EDC_BUILD_MODEL and EDC_REVIEW_MODEL via --model, env, or ~/.edc/config." >&2
+    exit 2
+  fi
+}
+
 main() {
   [ "$#" -gt 0 ] || {
     usage
     exit 2
   }
 
+  _load_config
+
+  # Parse top-level --model <slug>. Must appear before the subcommand verb.
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --model)
+        [ "$#" -ge 2 ] || die "--model requires a slug"
+        export EDC_BUILD_MODEL="$2"
+        export EDC_REVIEW_MODEL="$2"
+        shift 2
+        ;;
+      *) break ;;
+    esac
+  done
+
+  [ "$#" -gt 0 ] || { usage; exit 2; }
+
   local command="$1"
   shift
+
+  # Prompt-or-fail for agent-spawning subcommands only.
+  case "$command" in
+    build|review|audit|update) _check_model_or_prompt ;;
+  esac
 
   case "$command" in
     build)

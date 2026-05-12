@@ -118,6 +118,7 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
   copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
   copy_or_download "plugins/edc/scripts/edc-build-plan.sh"    "$scripts_target/edc-build-plan.sh"
+  copy_or_download "plugins/edc/scripts/edc-spawn-analyze.sh" "$scripts_target/edc-spawn-analyze.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
@@ -130,7 +131,8 @@ install_terminal_cli() {
     "$scripts_target/edc-clean-slate.sh" \
     "$scripts_target/edc-assert-fresh.sh" \
     "$scripts_target/edc-recover-context.sh" \
-    "$scripts_target/edc-build-plan.sh"
+    "$scripts_target/edc-build-plan.sh" \
+    "$scripts_target/edc-spawn-analyze.sh"
   # edc-lib.sh is sourced, not exec'd — no chmod needed
 }
 

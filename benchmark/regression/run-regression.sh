@@ -168,31 +168,59 @@ BUILD_COMMIT=$(pick_build_commit) || exit 1
 log "build commit (target repo): $BUILD_COMMIT"
 
 # ── Run claude with watchdog and parse metrics from stream-json ───────────
-# args: <run_dir> <prompt> <max_turns> <timeout_s> <metrics_var_prefix>
-# Writes claude-output.txt in $run_dir; sets METRICS array via temp file.
+# args: <run_dir> <prompt> <max_turns> <timeout_s> <allowed_tools> <model>
+# Writes claude-output.txt in $run_dir; sets RUN_* metrics vars.
+#
+# Process-group kill: we wrap claude in `setsid` (via `setsid -w` on Linux,
+# or `script -q /dev/null` on macOS) so it becomes its own process group
+# leader. The watchdog then kills the entire group via `kill -- -<pgid>`,
+# which reliably terminates claude AND any subprocess it spawned (including
+# any internal Task-related processes that might escape `pkill -P`).
 run_claude() {
-  local run_dir="$1" prompt="$2" max_turns="$3" timeout="$4" allowed_tools="${5:-}"
+  local run_dir="$1" prompt="$2" max_turns="$3" timeout="$4" allowed_tools="${5:-}" model="${6:-$OUTER_MODEL}"
   mkdir -p "$run_dir"
   local out="$run_dir/claude-output.txt"
   local t0=$(date +%s)
   local tools_arg=()
   [[ -n "$allowed_tools" ]] && tools_arg=(--allowedTools "$allowed_tools")
+  local model_arg=()
+  [[ -n "$model" ]] && model_arg=(--model "$model")
+  # Force Task-tool subagents to inherit the requested model (otherwise
+  # ~/.claude/settings.json's CLAUDE_CODE_SUBAGENT_MODEL wins).
+  local settings_arg=()
+  [[ -n "$model" ]] && settings_arg=(--settings "$(printf '{"env":{"CLAUDE_CODE_SUBAGENT_MODEL":"%s"}}' "$model")")
 
-  (cd "$run_dir" && exec claude -p "$prompt" \
+  # Spawn claude in its own process group via setsid. On macOS setsid is
+  # available via util-linux (brew) or we fall back to perl. Pick whichever
+  # is on PATH; if neither, fall back to the old behavior with a warning.
+  local pgid_launcher=()
+  if command -v setsid >/dev/null 2>&1; then
+    pgid_launcher=(setsid)
+  elif command -v perl >/dev/null 2>&1; then
+    # perl one-liner: become session leader, then exec
+    pgid_launcher=(perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or die' --)
+  fi
+
+  (cd "$run_dir" && exec "${pgid_launcher[@]}" claude -p "$prompt" \
       --plugin-dir "$PLUGIN_DIR" \
       --max-turns "$max_turns" \
-      --model "$OUTER_MODEL" \
+      "${model_arg[@]}" \
+      "${settings_arg[@]}" \
       "${tools_arg[@]}" \
       --output-format stream-json --verbose \
       --dangerously-skip-permissions) \
       < /dev/null > "$out" 2>&1 &
   local pid=$!
+  # Capture the process group id (= pid if setsid succeeded; same as pid
+  # otherwise — best-effort).
+  local pgid
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [[ -z "$pgid" ]] && pgid="$pid"
+
   ( sleep "$timeout" \
-      && kill "$pid" 2>/dev/null \
-      && pkill -TERM -P "$pid" 2>/dev/null \
+      && kill -TERM -- "-$pgid" 2>/dev/null \
       ; sleep 5 \
-      ; kill -9 "$pid" 2>/dev/null \
-      ; pkill -KILL -P "$pid" 2>/dev/null \
+      ; kill -KILL -- "-$pgid" 2>/dev/null \
   ) &
   local wd=$!
   wait "$pid" 2>/dev/null || true
@@ -201,6 +229,7 @@ run_claude() {
 
   RUN_DURATION=$(( $(date +%s) - t0 ))
   RUN_IN=0; RUN_OUT=0; RUN_CACHE_R=0; RUN_CACHE_C=0; RUN_COST=0; RUN_TURNS=0
+  local recovered_from=""
   if [[ -s "$out" ]]; then
     local rl
     rl=$(grep -m1 '"type":"result"' "$out" 2>/dev/null | tail -1)
@@ -211,8 +240,51 @@ run_claude() {
       RUN_CACHE_C=$(printf '%s' "$rl" | jq -r '.usage.cache_creation_input_tokens // 0')
       RUN_COST=$(printf '%s' "$rl" | jq -r '.total_cost_usd // 0')
       RUN_TURNS=$(printf '%s' "$rl" | jq -r '.num_turns // 0')
+      recovered_from="stream-json"
     fi
   fi
+  # Fallback: if no result line (watchdog killed before claude wrote it),
+  # aggregate from Claude Code's per-session jsonls. Cost is unknowable
+  # without anthropic API price tables; we recover tokens + turns and
+  # leave cost as 0.
+  if [[ -z "$recovered_from" ]]; then
+    local cwd_dirname
+    cwd_dirname=$(printf '%s' "$run_dir" | sed 's|^/||; s|[/_]|-|g')
+    local cc_proj="$HOME/.claude/projects/-$cwd_dirname"
+    if [[ -d "$cc_proj" ]]; then
+      local metrics
+      metrics=$(python3 - "$cc_proj" <<'PY' 2>/dev/null
+import json, sys
+from pathlib import Path
+proj = Path(sys.argv[1])
+tot = dict(in_=0, out=0, cr=0, cw=0, turns=0)
+for jsonl in list(proj.glob("*.jsonl")) + list(proj.glob("*/subagents/agent-*.jsonl")):
+    try:
+        with open(jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("{"): continue
+                try: d = json.loads(line)
+                except: continue
+                if d.get("type") == "assistant":
+                    u = (d.get("message", {}) or {}).get("usage", {}) or {}
+                    tot["in_"]  += u.get("input_tokens", 0)
+                    tot["out"]  += u.get("output_tokens", 0)
+                    tot["cr"]   += u.get("cache_read_input_tokens", 0)
+                    tot["cw"]   += u.get("cache_creation_input_tokens", 0)
+                    tot["turns"] += 1
+    except Exception:
+        continue
+print(f"{tot['in_']}\t{tot['out']}\t{tot['cr']}\t{tot['cw']}\t{tot['turns']}")
+PY
+)
+      if [[ -n "$metrics" ]]; then
+        IFS=$'\t' read -r RUN_IN RUN_OUT RUN_CACHE_R RUN_CACHE_C RUN_TURNS <<< "$metrics"
+        recovered_from="cc-jsonl"
+      fi
+    fi
+  fi
+  [[ "$recovered_from" == "cc-jsonl" ]] && echo "  metrics recovered from cc-jsonl (watchdog likely killed claude mid-stream)" >&2
 }
 
 # ── Build phase ────────────────────────────────────────────────────────────
@@ -256,15 +328,24 @@ build_one_attempt() {
   local out="$run_dir/src/claude-output.txt"
   local t0=$(date +%s)
   pushd "$run_dir/src" >/dev/null
-  ( EDC_AGENT_CLI=claude bash "$EDC_WT/plugins/edc/scripts/edc-build.sh" --force ) \
+  # Wrap in setsid (or perl fallback) so the inner claude grandchild is in
+  # our process group and gets killed by `kill -- -<pgid>`.
+  local pgid_launcher=()
+  if command -v setsid >/dev/null 2>&1; then
+    pgid_launcher=(setsid)
+  elif command -v perl >/dev/null 2>&1; then
+    pgid_launcher=(perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or die' --)
+  fi
+  ( exec "${pgid_launcher[@]}" env EDC_AGENT_CLI=claude bash "$EDC_WT/plugins/edc/scripts/edc-build.sh" --force ) \
     < /dev/null > "$out" 2>&1 &
   local pid=$!
+  local pgid
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [[ -z "$pgid" ]] && pgid="$pid"
   ( sleep "$BUILD_TIMEOUT" \
-      && kill "$pid" 2>/dev/null \
-      && pkill -TERM -P "$pid" 2>/dev/null \
+      && kill -TERM -- "-$pgid" 2>/dev/null \
       ; sleep 5 \
-      ; kill -9 "$pid" 2>/dev/null \
-      ; pkill -KILL -P "$pid" 2>/dev/null \
+      ; kill -KILL -- "-$pgid" 2>/dev/null \
   ) &
   local wd=$!
   wait "$pid" 2>/dev/null || true
@@ -277,9 +358,13 @@ build_one_attempt() {
   # inner edc_spawn child(ren), captured in spawn-log.jsonl. Zero out the
   # outer fields so the build-metrics.tsv row stays consistent in shape.
   RUN_IN=0; RUN_OUT=0; RUN_CACHE_R=0; RUN_CACHE_C=0; RUN_COST=0; RUN_TURNS=0
-  # Pull the real cost from spawn-log.jsonl if present (sum across all
-  # spawns this build produced).
+  # First try spawn-log.jsonl (written by edc_spawn IF it survived the
+  # watchdog kill). If that's missing or empty (B7/B8 — watchdog killed the
+  # bash subprocess before edc_spawn's post-spawn cleanup ran), fall back to
+  # scraping Claude Code's per-session jsonls under ~/.claude/projects/.
+  # That data persists regardless of how the spawn died.
   local spawn_log="$run_dir/src/edc-context/build/spawn-log.jsonl"
+  local recovered_from=""
   if [[ -s "$spawn_log" ]] && command -v jq >/dev/null 2>&1; then
     RUN_COST=$(jq -s 'map(.total_cost_usd // 0) | add' "$spawn_log" 2>/dev/null)
     RUN_IN=$(jq -s 'map(.input_tokens // 0) | add' "$spawn_log" 2>/dev/null)
@@ -287,7 +372,47 @@ build_one_attempt() {
     RUN_CACHE_R=$(jq -s 'map(.cache_read_tokens // 0) | add' "$spawn_log" 2>/dev/null)
     RUN_CACHE_C=$(jq -s 'map(.cache_write_tokens // 0) | add' "$spawn_log" 2>/dev/null)
     RUN_TURNS=$(jq -s 'map(.num_turns // 0) | add' "$spawn_log" 2>/dev/null)
+    recovered_from="spawn-log"
+  else
+    # Fallback: aggregate from claude code's per-session jsonl + Task subagent
+    # jsonls. The session dir is derived from the build's cwd path.
+    local cwd_dirname
+    cwd_dirname=$(printf '%s' "$run_dir/src" | sed 's|^/||; s|[/_]|-|g')
+    local cc_proj="$HOME/.claude/projects/-$cwd_dirname"
+    if [[ -d "$cc_proj" ]]; then
+      local metrics
+      metrics=$(python3 - "$cc_proj" <<'PY' 2>/dev/null
+import json, sys, glob
+from pathlib import Path
+proj = Path(sys.argv[1])
+tot = dict(in_=0, out=0, cr=0, cw=0, turns=0, cost=0.0)
+for jsonl in list(proj.glob("*.jsonl")) + list(proj.glob("*/subagents/agent-*.jsonl")):
+    try:
+        with open(jsonl) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("{"): continue
+                try: d = json.loads(line)
+                except: continue
+                if d.get("type") == "assistant":
+                    u = (d.get("message", {}) or {}).get("usage", {}) or {}
+                    tot["in_"]  += u.get("input_tokens", 0)
+                    tot["out"]  += u.get("output_tokens", 0)
+                    tot["cr"]   += u.get("cache_read_input_tokens", 0)
+                    tot["cw"]   += u.get("cache_creation_input_tokens", 0)
+                    tot["turns"] += 1
+    except Exception:
+        continue
+print(f"{tot['in_']}\t{tot['out']}\t{tot['cr']}\t{tot['cw']}\t{tot['turns']}\t{tot['cost']}")
+PY
+)
+      if [[ -n "$metrics" ]]; then
+        IFS=$'\t' read -r RUN_IN RUN_OUT RUN_CACHE_R RUN_CACHE_C RUN_TURNS RUN_COST <<< "$metrics"
+        recovered_from="cc-jsonl"
+      fi
+    fi
   fi
+  [[ -n "$recovered_from" ]] && log "[build] metrics recovered from $recovered_from"
 
   # The build skill sometimes writes edc-context to $run_dir/src (correct) and
   # sometimes to $run_dir (one level up — observed on redis). Accept either.
@@ -389,7 +514,7 @@ This step is pure architectural context building only — do NOT identify securi
     [[ "$MODE" == "v1" ]] && v1_tools="Read Glob Grep Write Skill"
     log "[$MODE-build] $cve attempt $attempt — claude invoking (turns=$V1_BUILD_TURNS, timeout=${V1_BUILD_TIMEOUT}s)"
     pushd "$run_dir" >/dev/null
-    run_claude "$run_dir" "$v1_prompt" "$V1_BUILD_TURNS" "$V1_BUILD_TIMEOUT" "$v1_tools"
+    run_claude "$run_dir" "$v1_prompt" "$V1_BUILD_TURNS" "$V1_BUILD_TIMEOUT" "$v1_tools" "$EDC_BUILD_MODEL"
     popd >/dev/null
 
     local v1_dur=$RUN_DURATION v1_in=$RUN_IN v1_out=$RUN_OUT v1_cr=$RUN_CACHE_R v1_cc=$RUN_CACHE_C v1_cost=$RUN_COST v1_turns=$RUN_TURNS
@@ -438,7 +563,7 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
   fi
   log "[review] $cve attempt $attempt — claude invoking"
   pushd "$run_dir" >/dev/null
-  run_claude "$run_dir" "$prompt" "$review_turns" "$REVIEW_TIMEOUT" "$review_tools"
+  run_claude "$run_dir" "$prompt" "$review_turns" "$REVIEW_TIMEOUT" "$review_tools" "$EDC_REVIEW_MODEL"
   popd >/dev/null
 
   # Look for findings at the v2 canonical path first, fall back to legacy locations.

@@ -117,7 +117,10 @@ SCORE_TSV="$OUT_DIR/review-results.tsv"
 
 [[ -f "$BUILD_TSV" ]] || printf 'repo\tcommit\tattempt\tduration_s\tnum_turns\tin_tokens\tout_tokens\tcache_read\tcache_create\ttotal_cost_usd\tmodule_count\tindex_lines\tstatus\n' > "$BUILD_TSV"
 [[ -f "$REVIEW_TSV" ]] || printf 'repo\tcommit\tcve\tattempt\tduration_s\tnum_turns\tin_tokens\tout_tokens\tcache_read\tcache_create\ttotal_cost_usd\tstatus\n' > "$REVIEW_TSV"
-[[ -f "$SCORE_TSV" ]] || printf 'timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes\n' > "$SCORE_TSV"
+# Extended schema: appends 4 columns for dual-phase scoring (build_verdict,
+# build_confidence, combined_score, build_notes). Legacy 8-column readers
+# still work — the extra columns are ignored at the tail.
+[[ -f "$SCORE_TSV" ]] || printf 'timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes\tbuild_verdict\tbuild_confidence\tcombined_score\tbuild_notes\n' > "$SCORE_TSV"
 
 log() {
   local m="[$(date '+%H:%M:%S')] $*"
@@ -592,8 +595,21 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
 
   log "[review] $cve attempt $attempt — $status (${RUN_DURATION}s, cost=\$$RUN_COST)"
 
+  # Dual-phase scoring: when v2 (per-repo build) we also point score.py at the
+  # build snapshot so it judges whether the build's reports/issues.md already
+  # surfaced this CVE. The combined-score column then weights review wins that
+  # piggybacked on a build leak at 0.5x. See COMBINED_MATRIX in score.py.
+  local build_issues_arg=()
+  if [[ "$MODE" == "v2" ]]; then
+    local build_snapshot="$WORK_DIR/cache/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/attempt-$attempt/edc-context/reports/issues.md"
+    if [[ -f "$build_snapshot" ]]; then
+      build_issues_arg=(--build-issues "$build_snapshot")
+    fi
+  fi
+
   EDC_RESULTS_FILE="$SCORE_TSV" python3 "$BENCH_DIR/score.py" \
     --issues "$issues" \
+    "${build_issues_arg[@]}" \
     --cve "$cve_id" \
     --bug-pattern "$bug_pattern" \
     --category "$category" \

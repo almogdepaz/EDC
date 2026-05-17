@@ -27,6 +27,30 @@ from pathlib import Path
 
 RESULTS_FILE = Path(os.environ.get("EDC_RESULTS_FILE", Path(__file__).parent / "results.tsv"))
 KEYWORD_THRESHOLD = 0.3  # minimum keyword score to trigger LLM judge
+
+# Patterns indicating the judge refused or returned safety boilerplate instead
+# of a verdict. When matched, the verdict is `judge_error` with reason
+# `refusal`. We do NOT retry and do NOT fall back to keyword-only — the row
+# is surfaced for human re-judging via `rejudge.py` after the run.
+REFUSAL_PATTERNS = [
+    r"\bI can'?t (?:help|assist|provide|do that|with this)\b",
+    r"\bI cannot (?:help|assist|provide|comply)\b",
+    r"\bI'?m (?:not able|unable) to (?:help|assist|provide)\b",
+    r"\bI (?:will|won'?t) not (?:help|assist|provide)\b",
+    r"\b(?:against|violates) (?:my|the) (?:safety|content|usage) (?:policy|policies|guidelines)\b",
+    r"\b(?:harmful|malicious) (?:content|request|activity)\b",
+    r"\bI apologize, but\b.*\b(?:cannot|can'?t|unable)\b",
+    # Anthropic API server-side policy block (returned with rc!=0 and the
+    # "is_error":true envelope; we treat it as a first-class refusal).
+    r"unable to respond to this request, which appears to violate our Usage Policy",
+    r"\bAPI Error: Claude Code is unable to respond\b",
+]
+REFUSAL_RE = re.compile("|".join(REFUSAL_PATTERNS), re.IGNORECASE)
+
+# Verdict strings. `judge_error` is first-class — it means the automated
+# scorer could not produce a verdict and a human must resolve it via
+# `rejudge.py`. It is NOT counted as `missed` and NOT counted as a hit.
+VALID_VERDICTS = ("exact", "partial", "missed", "judge_error")
 # Default judge: opus. Sonnet was the prior default but exhibited substantial
 # verdict variance and outright hallucinations (“no mention of <affected_file>”
 # when the file was clearly present in the analysis output). Opus is slower and
@@ -205,7 +229,15 @@ IMPORTANT: VERDICT_JSON must be a single JSON object on one line. The `explanati
         )
 
         if result.returncode != 0:
-            return "error", 0.0, f"claude failed: {result.stderr[:200]}"
+            err = (result.stderr or "").strip() or (result.stdout or "").strip()
+            # Anthropic returns usage-policy refusals with rc!=0 and the
+            # refusal text inside the stdout JSON envelope. Detect that
+            # before falling back to generic process_fail.
+            if REFUSAL_RE.search(err):
+                return ("judge_error", 0.0,
+                        f"reason=refusal; rc={result.returncode}; out={err[:300]}")
+            return ("judge_error", 0.0,
+                    f"reason=process_fail; rc={result.returncode}; out={err[:300]}")
 
         output = result.stdout.strip()
 
@@ -218,30 +250,47 @@ IMPORTANT: VERDICT_JSON must be a single JSON object on one line. The `explanati
         except json.JSONDecodeError:
             pass
 
+        # Refusal detection. If the judge returned safety boilerplate instead
+        # of a verdict, that's a `judge_error` with reason=refusal. Human
+        # resolves via `rejudge.py` after the run — no silent retry, no
+        # silent fallback.
+        if REFUSAL_RE.search(output):
+            return "judge_error", 0.0, f"reason=refusal; output={output[:300]}"
+
         # Extract VERDICT_JSON from the structured response. The new prompt
         # asks the judge to emit a labeled section, so look for that first;
         # fall back to any verdict-shaped JSON for back-compat with older runs.
         verdict_match = re.search(r'VERDICT_JSON:\s*(\{[^{}]*"verdict"[^{}]*\})', output)
         json_match = verdict_match or re.search(r'\{[^{}]*"verdict"[^{}]*\}', output)
-        if json_match:
-            parsed = json.loads(json_match.group(1) if verdict_match else json_match.group())
-            # Also stash the locate/quote/compare for diagnostics
-            extracted = _extract_judge_steps(output)
-            explanation = parsed.get("explanation", "no explanation")
-            if extracted:
-                explanation = f"{explanation} | {extracted}"
-            return (
-                parsed.get("verdict", "error"),
-                float(parsed.get("confidence", 0.0)),
-                explanation,
-            )
+        if not json_match:
+            return "judge_error", 0.0, f"reason=parse_fail; output={output[:300]}"
 
-        return "error", 0.0, f"could not parse judge response: {output[:200]}"
+        try:
+            parsed = json.loads(json_match.group(1) if verdict_match else json_match.group())
+        except json.JSONDecodeError as e:
+            return "judge_error", 0.0, f"reason=json_decode; err={e}; output={output[:300]}"
+
+        verdict = parsed.get("verdict", "")
+        if verdict not in ("exact", "partial", "missed"):
+            return "judge_error", 0.0, f"reason=bad_verdict; verdict={verdict!r}; output={output[:300]}"
+
+        # The plan requires a verbatim QUOTE from the analysis (or explicit
+        # NOT_FOUND). Verdicts without one are not trustworthy.
+        extracted = _extract_judge_steps(output)
+        if "quote=" not in extracted:
+            return "judge_error", 0.0, f"reason=missing_quote; output={output[:300]}"
+
+        explanation = parsed.get("explanation", "no explanation")
+        return (
+            verdict,
+            float(parsed.get("confidence", 0.0)),
+            f"{explanation} | {extracted}",
+        )
 
     except subprocess.TimeoutExpired:
-        return "error", 0.0, "judge timed out"
+        return "judge_error", 0.0, "reason=timeout"
     except Exception as e:
-        return "error", 0.0, f"judge error: {str(e)[:200]}"
+        return "judge_error", 0.0, f"reason=exception; err={str(e)[:200]}"
 
 
 def _extract_judge_steps(output: str) -> str:
@@ -265,7 +314,13 @@ def score_cve(issues_text: str, cve_id: str, bug_pattern: str,
     """
     Full two-phase scoring.
 
-    Returns: (verdict: "exact"|"partial"|"missed"|"error", confidence: 0-1, notes: str)
+    Returns: (verdict, confidence, notes) where verdict is one of
+    `exact`, `partial`, `missed`, `judge_error`.
+
+    Failure modes are NEVER silently coerced into `missed`. If the judge
+    refuses, times out, or returns unparseable output, the verdict is
+    `judge_error` with a `reason=<class>` tag in `notes`. A human resolves
+    `judge_error` rows post-run via `rejudge.py`.
     """
     if not issues_text:
         return "missed", 0.0, "no issues file"
@@ -282,16 +337,14 @@ def score_cve(issues_text: str, cve_id: str, bug_pattern: str,
         verdict = "exact" if found else "missed"
         return verdict, kw_score, f"keyword_only({kw_notes})"
 
-    # Phase 2: LLM judge
+    # Phase 2: LLM judge. Any failure surfaces as judge_error — no fallback,
+    # no retry. The plan explicitly forbids silent coercion.
     verdict, confidence, explanation = llm_judge(
         issues_text, cve_id, bug_pattern, category, description, affected_files
     )
 
-    if verdict == "error":
-        # Fall back to keyword score
-        found = kw_score >= 0.4
-        fallback_verdict = "exact" if found else "missed"
-        return fallback_verdict, kw_score, f"judge_error({explanation}); fallback({kw_notes})"
+    if verdict == "judge_error":
+        return "judge_error", 0.0, f"judge_error({explanation}); keywords({kw_notes})"
 
     return verdict, confidence, f"judge: {explanation}; keywords({kw_notes})"
 
@@ -321,8 +374,13 @@ def append_result(cve_id: str, category: str, severity: str,
             )
 
     # combined_score = -1 sentinel means "single-phase row, use verdict mapping".
+    # judge_error is excluded from aggregates and gets a sentinel score of -1.0
+    # so downstream readers can filter it out.
     if combined_score < 0:
-        combined_score = {"exact": 1.0, "partial": 0.5, "missed": 0.0, "error": 0.0}.get(verdict, 0.0)
+        if verdict == "judge_error":
+            combined_score = -1.0
+        else:
+            combined_score = {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(verdict, 0.0)
 
     line = (
         f"{timestamp}\t{cve_id}\t{category}\t{severity}\t"
@@ -332,7 +390,8 @@ def append_result(cve_id: str, category: str, severity: str,
     with open(RESULTS_FILE, "a") as f:
         f.write(line)
 
-    icon = {"exact": "HIT", "partial": "PARTIAL", "missed": "MISS", "error": "ERR"}.get(verdict, "???")
+    icon = {"exact": "HIT", "partial": "PARTIAL", "missed": "MISS",
+            "judge_error": "JUDGE_ERR"}.get(verdict, "???")
     if build_verdict:
         print(f"    [{icon}] {cve_id} review={verdict} build={build_verdict} combined={combined_score:.2f} — {notes}")
     else:
@@ -354,17 +413,25 @@ def print_summary():
     exact = sum(1 for l in lines[1:] if "\texact\t" in l)
     partial = sum(1 for l in lines[1:] if "\tpartial\t" in l)
     missed = sum(1 for l in lines[1:] if "\tmissed\t" in l)
-    errors = total - exact - partial - missed
+    judge_errors = sum(1 for l in lines[1:] if "\tjudge_error\t" in l)
+    other = total - exact - partial - missed - judge_errors
+
+    # judge_error rows are excluded from recall — they need human resolution.
+    scored = exact + partial + missed
 
     print(f"\n=== EDC Benchmark Summary ===")
     print(f"Total CVEs tested: {total}")
+    print(f"Scored (auto):     {scored}/{total}")
     print(f"Exact match:  {exact}")
     print(f"Partial:      {partial}")
     print(f"Missed:       {missed}")
-    if errors:
-        print(f"Errors:       {errors}")
-    print(f"Recall (exact):          {exact/total:.1%}" if total > 0 else "")
-    print(f"Recall (exact+partial):  {(exact+partial)/total:.1%}" if total > 0 else "")
+    if judge_errors:
+        print(f"Judge error:  {judge_errors}  ← run `rejudge.py` to resolve")
+    if other:
+        print(f"Other:        {other}")
+    if scored > 0:
+        print(f"Recall (exact, scored only):         {exact/scored:.1%}")
+        print(f"Recall (exact+partial, scored only): {(exact+partial)/scored:.1%}")
 
     # Per-category
     categories: dict[str, dict] = {}
@@ -403,15 +470,16 @@ COMBINED_MATRIX = {
 
 
 def combine_scores(build_verdict: str, review_verdict: str) -> float:
-    """Apply the dual-phase scoring matrix. Falls back to review-only mapping
-    when build_verdict is empty or unrecognized."""
+    """Apply the dual-phase scoring matrix. Returns -1.0 sentinel when either
+    phase is `judge_error` so the row can be filtered out of aggregates.
+    Falls back to the review-only mapping when build_verdict is empty."""
+    if "judge_error" in (build_verdict, review_verdict):
+        return -1.0
     if not build_verdict:
         return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
     key = (build_verdict, review_verdict)
     if key in COMBINED_MATRIX:
         return COMBINED_MATRIX[key]
-    # Any unrecognized combination (e.g. "error") falls back conservatively to
-    # the review verdict's single-phase weight.
     return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
 
 

@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$MODE" == "v1" || "$MODE" == "v2" || "$MODE" == "v2-per-cve" ]] || { echo "--mode must be v1, v2, or v2-per-cve" >&2; exit 64; }
+[[ "$MODE" == "v0" || "$MODE" == "v1" || "$MODE" == "v2" || "$MODE" == "v2-per-cve" ]] || { echo "--mode must be v0, v1, v2, or v2-per-cve" >&2; exit 64; }
 
 [[ -z "$COMMIT" ]] && { echo "--commit required" >&2; exit 64; }
 [[ -z "$REPO" ]]   && { echo "--repo required" >&2; exit 64; }
@@ -486,7 +486,18 @@ review_one_cve() {
   done
 
   local prompt
-  if [[ "$MODE" == "v2" ]]; then
+  if [[ "$MODE" == "v0" ]]; then
+    # No pre-built context. Review reads source files only. This is the
+    # baseline cell the build-value question needs.
+    mkdir -p "$run_dir/edc-context/reports"
+    prompt="No pre-built architectural context is available. Analyze the source files directly.
+
+Perform a FULL-FILE security review of these source files:$file_list
+
+Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
+
+Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
+  elif [[ "$MODE" == "v2" ]]; then
     local cache_dir="$WORK_DIR/cache/$SHORT_SHA/$MODE/$RUN_LABEL/$REPO/attempt-$attempt"
     [[ -d "$cache_dir/edc-context" ]] || { log "[review] no cached context for attempt $attempt — skip $cve"; return 1; }
     cp -R "$cache_dir/edc-context" "$run_dir/edc-context"
@@ -629,7 +640,14 @@ log "starting regression: commit=$SHORT_SHA repo=$REPO attempts=$ATTEMPTS cves=$
 
 for ((a=1; a<=ATTEMPTS; a++)); do
   log "═══ attempt $a/$ATTEMPTS ═══"
-  if ! build_one_attempt "$a"; then
+  if [[ "$MODE" == "v0" ]]; then
+    # v0 has no build phase. Emit a single status=skipped row so the
+    # build-metrics.tsv shape is consistent with v1/v2 (downstream
+    # aggregation expects one row per attempt).
+    printf '%s\t%s\t%s\t0\t0\t0\t0\t0\t0\t0\t0\t0\tskipped\n' \
+      "$REPO" "$SHORT_SHA" "$a" >> "$BUILD_TSV"
+    log "[build] attempt $a — skipped (v0 mode, no build)"
+  elif ! build_one_attempt "$a"; then
     log "[build] attempt $a failed — skipping reviews"
     continue
   fi

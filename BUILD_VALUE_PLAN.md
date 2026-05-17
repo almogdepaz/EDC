@@ -109,43 +109,73 @@ Folded into `benchmark/audit.py` (the audit step already cross-references transc
 
 ## Phase 1 — Fill the missing matrix cell: no-build baseline
 
-**Status:** blocked on Phase 0
+**Status:** done (curl pilot, n=1)
 
 **Why:** current artifacts have `v1` (per-CVE build + review) and `v2` (repo-wide build + review). There is **no** controlled "review with zero pre-built context" run on the same commit, same corpus, same scoring. Without that cell, the build-value question cannot be answered.
 
-### 1.1 Define the matrix — `todo`
+### 1.1 Define the matrix — `done` (pilot scope)
 
-Single locked commit (Phase 0's hardened scorer must be merged). Single attempt count (`n=3`, bump to `n=5` for hard CVEs if variance > 0.15). Corpus = `curl` `FAST_CVES + REGRESSION_CVES` and `redis` `FAST_CVES + REGRESSION_CVES + HARD_CVES`.
+Per user direction: curl only, n=1, reuse existing builds where possible. Locked commit for new runs = `token_model_optimization` HEAD (`2cf4ca56eb`). Existing v2 cells are from different EDC commits (`9727d87e4f`, `d0451ef052`, `7788697171`) — cross-commit comparison is noisy but accepted as pilot constraint.
+
+Matrix actually executed:
 
 | Review model ↓ / Build ↓ | none (v0) | haiku-built (v2) | sonnet-built (v2) |
 | ------------------------ | --------- | ---------------- | ----------------- |
-| haiku review             | **gap**   | have (rescore)   | gap               |
-| sonnet review            | **gap**   | have (rescore)   | have (rescore)    |
+| haiku review             | **new run** | reused `9727` (n=2 attempts, old scorer) | reused `7788` (rescored) |
+| sonnet review            | **new run** | reused `d045` (rescored) | reused `d045` (rescored) |
 
-Cells marked `gap` must be produced. Cells marked `have (rescore)` must be re-scored under Phase 0's scorer.
+### 1.2 Implement `v0` mode in the regression harness — `done`
 
-### 1.2 Implement `v0` mode in the regression harness — `todo`
+`benchmark/regression/run-regression.sh` now accepts `--mode v0`. Behavior:
 
-- Extend `benchmark/regression/run-regression.sh` with `--mode v0`: skip the build phase entirely, write an empty `build-metrics.tsv` row (`status=skipped`, all costs `0`), then run the review on raw source only.
-- Review prompt for `v0`: same as `v2` but remove the "Pre-built v2 architectural context exists under edc-context/..." preamble and replace with "Analyze the source files directly. No pre-built context is available."
-- Output dir: `benchmark/regression/results/<sha>/v0/<run-label>/<repo>/`.
+- `--mode` validation accepts `v0` alongside `v1`/`v2`/`v2-per-cve`.
+- The drive loop's per-attempt build phase is replaced with a single `status=skipped` row in `build-metrics.tsv` (all metrics 0) so downstream aggregation sees a consistent shape.
+- `review_one_cve` gets a dedicated v0 branch: creates an empty `edc-context/reports/` dir and uses a no-preamble prompt: `"No pre-built architectural context is available. Analyze the source files directly. …"`.
+- Scoring already gated on `MODE == v2` for `--build-issues`, so v0 naturally produces single-phase rows.
 
-### 1.3 Run the matrix — `todo`
+Smoke-tested: `bash benchmark/regression/run-regression.sh --mode v0 --commit HEAD --repo curl` enters the review phase with the v0 prompt and correctly writes the `status=skipped` build row. Killed before any paid `claude -p` ran.
 
-- `v0/haiku/{curl,redis}` × n attempts
-- `v0/sonnet/{curl,redis}` × n attempts
-- `v2/build-sonnet-review-haiku/{curl,redis}` × n attempts (the remaining gap)
-- Re-score all existing `v2/build-haiku-review-*/` and `v2/build-sonnet-review-sonnet/` under the hardened scorer
+### 1.3 Run the matrix — `done` (pilot)
+
+New runs:
+- `v0/haiku/curl` @ 2cf4ca56eb, n=1, all 9 CVEs scored cleanly (no judge_error). recall = `0.667`.
+- `v0/sonnet/curl` @ 2cf4ca56eb, n=1, all 9 CVEs scored, 2 judge_error resolved via rejudge. recall = `0.778`.
+
+Rescores:
+- `7788697171/v2/build-sonnet-review-haiku/curl`: 8/9 rescored (1 had no transcript). new recall = `0.556`.
+- `d0451ef052/v2/build-haiku-review-sonnet/curl`: 9/9, 3 judge_error resolved. new recall = `1.000`.
+- `d0451ef052/v2/build-sonnet-review-sonnet/curl`: 9/9, 2 judge_error resolved. new recall = `1.000`.
+
+Observed issues:
+- v0/sonnet review duration without context spikes hard: cve-23838545 ran 23min, cve-19-3822 ran 34min, cve-18-0500 needed `EDC_REG_REVIEW_TIMEOUT=3600` to finish (default 600s killed it mid-stream the first time).
+- Harness watchdog kills the entire process group on timeout; if the outer wrapper is interrupted, claude orphans need manual cleanup.
 
 ### Phase 1 exit criterion
 
-Every cell of the matrix has `n ≥ 3` scored attempts on both `curl` and `redis`, all scored under Phase 0's hardened scorer.
+Pilot-scope criterion (per user direction): curl matrix at n=1 with no-build baseline rows produced and scored under hardened scorer.
+
+- [x] v0/haiku/curl n=1
+- [x] v0/sonnet/curl n=1
+- [x] v2 cells rescored or scored under hardened scorer
+- [x] All judge_error rows resolved (rejudge.py)
+- [x] Comparison report written: `benchmark/build-value-report.md`
+
+Full-scope criterion (`n≥3` on curl+redis) deferred until pilot findings warrant the spend.
 
 ---
 
 ## Phase 2 — Apples-to-apples comparison
 
-**Status:** blocked on Phase 1
+**Status:** done (pilot)
+
+Deliverable: `benchmark/build-value-report.md`. Per-cell recall, costs, $/exact, per-CVE flip table, and an initial read on the build-value question.
+
+Headline findings from the curl pilot (n=1, cross-commit caveats apply):
+- For haiku review model: v0/haiku beats v2/haiku-build/haiku-review on both recall AND cost (`0.667` @ `$1.74` vs `0.611` @ `$5.44`).
+- For sonnet review model: build adds recall (`0.778 → 1.000`) at substantial cost (`+$8.37/run`, ~$37 per additional exact finding).
+- Build model matters less than review model: haiku-built and sonnet-built context produce identical sonnet-review recall.
+- 2 CVEs (`CVE-2023-38545`, `CVE-2019-3822`) consistently miss without context, regardless of review model strength.
+- Anthropic API usage-policy refusals are routine (~22% of judge calls in this pilot); `rejudge.py` is a hard requirement.
 
 ### 2.1 Per-cell aggregates — `todo`
 
@@ -177,7 +207,12 @@ Write `benchmark/build-value-report.md` containing:
 
 ## Phase 3 — Decision + action
 
-**Status:** blocked on Phase 2
+**Status:** blocked on Phase 1 follow-up (n≥3 + redis)
+
+Pilot data is suggestive but not decision-grade. Before applying keep/conditional/drop rules, need:
+- variance bound (rerun v0/haiku and v0/sonnet @ n≥3)
+- redis cells (different bug-class shape — multi-step state corruption, which the BLOGPOST.md showed the methodology struggles with)
+- cleaner cross-commit story for the v2 baseline (rerun at least one v2 cell at the locked HEAD)
 
 ### 3.1 Apply the decision rules — `todo`
 

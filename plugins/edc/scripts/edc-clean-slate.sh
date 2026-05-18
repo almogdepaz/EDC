@@ -95,6 +95,13 @@ is_healthy_v2() {
   [ -f "$MANIFEST" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
   jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 1
+  # AGENTS.md is part of the v2 layout (built by edc-build-impl step 8).
+  # If it's missing, the layout is incomplete: every full build regenerates
+  # it, so its absence indicates a build was interrupted, AGENTS.md was
+  # deleted, or an update ran on an already-broken layout. Treat as partial
+  # so the build orchestrator wipes + rebuilds and the update orchestrator
+  # refuses with the --force hint.
+  [ -f "$AGENTS" ] || return 1
 }
 
 wipe() {

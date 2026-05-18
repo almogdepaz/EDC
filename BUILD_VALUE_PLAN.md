@@ -152,30 +152,42 @@ Observed issues:
 
 ### Phase 1 exit criterion
 
-Pilot-scope criterion (per user direction): curl matrix at n=1 with no-build baseline rows produced and scored under hardened scorer.
+Pilot-scope criterion (per user direction): curl + redis matrices at n=1 with no-build baseline rows produced and scored under hardened scorer.
 
 - [x] v0/haiku/curl n=1
 - [x] v0/sonnet/curl n=1
-- [x] v2 cells rescored or scored under hardened scorer
+- [x] v0/haiku/redis n=1
+- [x] v0/sonnet/redis n=1
+- [x] v2 curl cells rescored under hardened scorer
+- [ ] v2 redis cells rescorable — NO (transcripts gone, scored under old scorer; recall numbers are floors only)
 - [x] All judge_error rows resolved (rejudge.py)
-- [x] Comparison report written: `benchmark/build-value-report.md`
+- [x] Comparison reports written: `benchmark/build-value-report.md` (curl), `benchmark/build-value-report-redis.md` (redis)
 
-Full-scope criterion (`n≥3` on curl+redis) deferred until pilot findings warrant the spend.
+Full-scope criterion (`n≥3` + clean v2/sonnet/redis at HEAD) deferred until decision warrants the spend.
 
 ---
 
 ## Phase 2 — Apples-to-apples comparison
 
-**Status:** done (pilot)
+**Status:** done (pilot, curl + redis)
 
-Deliverable: `benchmark/build-value-report.md`. Per-cell recall, costs, $/exact, per-CVE flip table, and an initial read on the build-value question.
+Deliverables: `benchmark/build-value-report.md` (curl), `benchmark/build-value-report-redis.md` (redis). Each contains per-cell recall, costs, $/exact, and per-CVE flip tables.
 
-Headline findings from the curl pilot (n=1, cross-commit caveats apply):
-- For haiku review model: v0/haiku beats v2/haiku-build/haiku-review on both recall AND cost (`0.667` @ `$1.74` vs `0.611` @ `$5.44`).
-- For sonnet review model: build adds recall (`0.778 → 1.000`) at substantial cost (`+$8.37/run`, ~$37 per additional exact finding).
-- Build model matters less than review model: haiku-built and sonnet-built context produce identical sonnet-review recall.
-- 2 CVEs (`CVE-2023-38545`, `CVE-2019-3822`) consistently miss without context, regardless of review model strength.
-- Anthropic API usage-policy refusals are routine (~22% of judge calls in this pilot); `rejudge.py` is a hard requirement.
+Headline findings (n=1, cross-commit and old-scorer caveats apply):
+
+| review model | repo  | v0 recall | best comparable v2 | v0 total $ | v2 total $ |
+| ------------ | ----- | --------- | ------------------ | ---------- | ---------- |
+| haiku        | curl  | 0.667     | 0.611 (rescored)   | 1.74       | 5.44       |
+| haiku        | redis | 0.625     | 0.458 (old scorer) | 2.19       | 8.18       |
+| sonnet       | curl  | 0.778     | 1.000 (rescored)   | 8.23       | 16.60      |
+| sonnet       | redis | 0.833     | 0.250 (old scorer) | 17.08      | 11.74      |
+
+Reads:
+- **haiku review: build NOT worth it on either repo.** Two independent data points.
+- **sonnet review on curl: build helps** (+0.222 recall at +$8.37/run).
+- **sonnet review on redis: too contaminated to judge.** v2 cells all under old scorer with no transcripts to rescore; a fresh v2/sonnet/redis run at HEAD is needed.
+- **2 CVE classes don't yield to v0:** curl scattered-helper bugs (CVE-2023-38545, CVE-2019-3822) miss entirely; redis multi-step bugs (CVE-2022-31144, CVE-2023-22458, CVE-2023-28856, CVE-2023-41053) get partial credit (sonnet finds the right file/CVE but describes a parallel bug). Different failure modes.
+- Anthropic API usage-policy refusals are routine (~20% of judge calls + reviews); `rejudge.py` is a hard requirement.
 
 ### 2.1 Per-cell aggregates — `todo`
 
@@ -207,12 +219,17 @@ Write `benchmark/build-value-report.md` containing:
 
 ## Phase 3 — Decision + action
 
-**Status:** blocked on Phase 1 follow-up (n≥3 + redis)
+**Status:** blocked on one more cell + variance bound
 
-Pilot data is suggestive but not decision-grade. Before applying keep/conditional/drop rules, need:
-- variance bound (rerun v0/haiku and v0/sonnet @ n≥3)
-- redis cells (different bug-class shape — multi-step state corruption, which the BLOGPOST.md showed the methodology struggles with)
-- cleaner cross-commit story for the v2 baseline (rerun at least one v2 cell at the locked HEAD)
+Pilot data (curl + redis, both at HEAD) is consistent for haiku review: build is not worth it. For sonnet review, curl says yes-build, redis cannot say (old-scorer v2 cells are unrescorable).
+
+Before drawing the keep/conditional/drop conclusion:
+- variance bound: rerun v0/haiku/curl and v0/sonnet/curl @ n=3 (cost ~$30) to confirm the haiku finding is not noise
+- one new cell: v2/haiku-build/sonnet-review/redis @ HEAD, n=1 (~$25-30) to close the sonnet/redis question
+
+If both confirm the pilot direction:
+- **drop-build for haiku reviews** (clear win)
+- **conditional-build for sonnet reviews** (curl yes, redis tbd — likely gated by codebase shape / scattered-helper bug class)
 
 ### 3.1 Apply the decision rules — `todo`
 

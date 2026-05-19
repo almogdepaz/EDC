@@ -284,5 +284,149 @@ TMPDIR_T15G=$(mktemp -d)
   rm -rf "$TMPDIR_T15G"
 )
 
+# ── 15.8: --ignore-context requires no manifest and writes pure baseline task ──
+TMPDIR_T15H=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15H"
+  mkdir -p src
+  echo "x" > src/a.ts
+  git add src/a.ts
+  git commit -q -m "add"
+
+  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ]; then
+    check "15.8a: --ignore-context writes synthetic baseline task without manifest" 1
+  else
+    check "15.8a: --ignore-context writes synthetic baseline task without manifest" 0
+    echo "$out"
+  fi
+  if [ "$(jq -r '.contextMode' edc-context/review-tasks/manifest.json 2>/dev/null)" = "ignored" ]; then
+    check "15.8b: --ignore-context manifest records contextMode=ignored" 1
+  else
+    check "15.8b: --ignore-context manifest records contextMode=ignored" 0
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  if grep -q "DO NOT use prebuilt EDC context" edc-context/review-tasks/ignore-context.md; then
+    check "15.8c: --ignore-context task forbids context usage" 1
+  else
+    check "15.8c: --ignore-context task forbids context usage" 0
+    cat edc-context/review-tasks/ignore-context.md 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15H"
+)
+
+# ── 15.9: --no-context-refresh does not force-ignore context ───────────────
+TMPDIR_T15I=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15I"
+  mkdir -p src
+  echo "x" > src/a.ts
+  git add src/a.ts
+  git commit -q -m "add"
+
+  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/no-context-refresh.md ]; then
+    check "15.9a: --no-context-refresh writes direct task when context absent" 1
+  else
+    check "15.9a: --no-context-refresh writes direct task when context absent" 0
+    echo "$out"
+  fi
+  if [ "$(jq -r '.contextMode' edc-context/review-tasks/manifest.json 2>/dev/null)" = "no-refresh" ]; then
+    check "15.9b: --no-context-refresh manifest records contextMode=no-refresh" 1
+  else
+    check "15.9b: --no-context-refresh manifest records contextMode=no-refresh" 0
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  if grep -q "DO NOT use prebuilt EDC context" edc-context/review-tasks/no-context-refresh.md; then
+    check "15.9c: --no-context-refresh does not force-ignore context" 0
+    cat edc-context/review-tasks/no-context-refresh.md 2>/dev/null || true
+  else
+    check "15.9c: --no-context-refresh does not force-ignore context" 1
+  fi
+  rm -rf "$TMPDIR_T15I"
+)
+
+# ── 15.10: --no-context-refresh uses existing stale context if present ────
+TMPDIR_T15J=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15J"
+  write_minimal_context
+  mkdir -p src
+  echo "x" > src/a.ts
+  git add src/a.ts edc-context
+  git commit -q -m "add file"
+  old_head=$(git rev-parse HEAD)
+  write_manifest edc-context/manifest.json "$old_head" "warn-allow" '[
+    {"name":"core","doc":"edc-context/modules/core.md","priority":100,"match":{"prefixes":["src/"]}}
+  ]'
+  echo "y" >> src/a.ts
+  git add src/a.ts
+  git commit -q -m "change file"
+
+  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/core.md ]; then
+    check "15.10a: --no-context-refresh uses existing context/routing" 1
+  else
+    check "15.10a: --no-context-refresh uses existing context/routing" 0
+    echo "$out"
+    ls edc-context/review-tasks 2>/dev/null || true
+  fi
+  if echo "$out" | grep -q "context is stale"; then
+    check "15.10b: --no-context-refresh warns but does not update stale context" 1
+  else
+    check "15.10b: --no-context-refresh warns but does not update stale context" 0
+    echo "$out"
+  fi
+  if [ "$(jq -r '.contextMode' edc-context/review-tasks/manifest.json 2>/dev/null)" = "no-refresh" ]; then
+    check "15.10c: routed no-refresh manifest records contextMode=no-refresh" 1
+  else
+    check "15.10c: routed no-refresh manifest records contextMode=no-refresh" 0
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15J"
+)
+
+# ── 15.11: --verify skips freshness gate for non-context manifests ─────────
+TMPDIR_T15J=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15J"
+  mkdir -p edc-context/review-tasks
+  cat > edc-context/review-tasks/manifest.json <<'EOF'
+{"target":"HEAD","baseline":"","head":"dummy","contextMode":"ignored","modules":[{"name":"ignore-context","doc":"","files":["src/a.ts"]}]}
+EOF
+  printf '## Findings\n\nnone\n' > edc-context/review-tasks/report-ignore-context.md
+  printf '# Review\n' > review-HEAD.md
+
+  out=$(bash "$SCRIPT" --verify 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Verified: review-HEAD.md"; then
+    check "15.11: --verify skips context freshness for contextMode=ignored" 1
+  else
+    check "15.11: --verify skips context freshness for contextMode=ignored" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15J"
+)
+
+# ── 15.12: ambiguous legacy --no-context flag is rejected ──────────────────
+TMPDIR_T15K=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15K"
+  set +e
+  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] && echo "$out" | grep -q "unknown argument: --no-context"; then
+    check "15.12: --no-context is rejected" 1
+  else
+    check "15.12: --no-context is rejected" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15K"
+)
+
 cd "$ORIG_DIR"
 check_summary "T15"

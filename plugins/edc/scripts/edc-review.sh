@@ -8,24 +8,24 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-#                                                     full review pipeline (default — spawns agent subprocesses via EDC_AGENT_CLI)
+#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+#                                                     full review pipeline (default - spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
-#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+#   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 #                                                     task-generation only (emit TASK lines, no subprocess spawning)
 #   edc-review.sh --check-context                      assert <EDC_CONTEXT_DIR>/manifest.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
 #
 # --build exit codes:
-#   0 — $EDC_REVIEW_TASKS_DIR/ written, TASK lines on stdout, proceed with skill
-#   1 — context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
-#   2 — bad arguments or environment error
+#   0 - $EDC_REVIEW_TASKS_DIR/ written, TASK lines on stdout, proceed with skill
+#   1 - context not ready (CONTEXT_MISSING or CONTEXT_STALE), see stdout
+#   2 - bad arguments or environment error
 #
 # Consolidate / verify exit codes:
-#   0 — all assertions pass
-#   1 — assertion failed (missing report, missing final file, stale context)
-#   2 — bad arguments or environment error
+#   0 - all assertions pass
+#   1 - assertion failed (missing report, missing final file, stale context)
+#   2 - bad arguments or environment error
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ fi
 
 # Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
 # edc-clean-slate.sh) are found relative to the real script location, not the
-# invocation path. Defensive — the installer copies (not symlinks) into
+# invocation path. Defensive - the installer copies (not symlinks) into
 # ~/.edc/scripts/, but users may symlink manually.
 _edc_resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
@@ -103,6 +103,10 @@ manifest_modules() {
     return 1
   fi
   echo "$val"
+}
+
+manifest_context_mode() {
+  jq -r '.contextMode // "context"' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
 }
 
 load_ignore_patterns() {
@@ -174,11 +178,11 @@ assert_report_valid() {
   local module="$1"
   local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
   if [ ! -f "$report" ]; then
-    echo "ERROR: missing $report — edc-review skill did not produce output for module '$module'" >&2
+    echo "ERROR: missing $report - edc-review skill did not produce output for module '$module'" >&2
     return 1
   fi
   if ! grep -q '^##' "$report"; then
-    echo "ERROR: $report has no '## ' headings (module: $module) — expected sections like ## What Changed, ## Findings" >&2
+    echo "ERROR: $report has no '## ' headings (module: $module) - expected sections like ## What Changed, ## Findings" >&2
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
     return 1
   fi
@@ -195,7 +199,7 @@ check_context_mode() {
 
 consolidate_mode() {
   if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
-    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing — run build mode first" >&2
+    echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing - run build mode first" >&2
     exit 1
   fi
 
@@ -246,11 +250,13 @@ consolidate_mode() {
 # ── verify mode ──────────────────────────────────────────────────────────────
 
 verify_mode() {
-  assert_context_fresh || exit 1
-
   if [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
     echo "ERROR: $EDC_REVIEW_TASKS_MANIFEST missing" >&2
     exit 1
+  fi
+
+  if [ "$(manifest_context_mode)" = "context" ]; then
+    assert_context_fresh || exit 1
   fi
 
   local target final modules missing=0
@@ -309,6 +315,8 @@ auto_mode() {
   local target="$1"; shift
   local extra_args=("$@")
   local -a build_args=() update_args=()
+  local no_context_refresh=0
+  local ignore_context=0
   local idx=0
   while [ "$idx" -lt "${#extra_args[@]}" ]; do
     case "${extra_args[$idx]}" in
@@ -327,16 +335,28 @@ auto_mode() {
         [ $((idx + 1)) -lt "${#extra_args[@]}" ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
         idx=$((idx + 2))
         ;;
+      --no-context-refresh)
+        no_context_refresh=1
+        idx=$((idx + 1))
+        ;;
+      --ignore-context)
+        ignore_context=1
+        idx=$((idx + 1))
+        ;;
       *)
         idx=$((idx + 1))
         ;;
     esac
   done
 
-  # Gate on freshness; recover (build/update + force-retry) if needed. After
-  # this returns, $EDC_MANIFEST is fresh or we've exited non-zero.
-  recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
-    || exit 1
+  # Gate on freshness; recover (build/update + force-retry) unless the caller
+  # explicitly requested a no-refresh run. --no-context-refresh may still use
+  # existing context; it just refuses to create/update it. --ignore-context is
+  # the stronger pure-baseline mode.
+  if [ "$no_context_refresh" -ne 1 ] && [ "$ignore_context" -ne 1 ]; then
+    recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
+      || exit 1
+  fi
 
   # Build review tasks now that context is fresh.
   local out
@@ -395,6 +415,9 @@ auto_mode() {
 build_mode() {
   local target="$1"; shift
   local baseline=""
+  local no_context_refresh=0
+  local ignore_context=0
+  local context_available=1
   local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
@@ -409,6 +432,14 @@ build_mode() {
         [ $# -ge 2 ] || { echo "ERROR: --context-mode requires a value" >&2; exit 2; }
         shift 2
         ;;
+      --no-context-refresh)
+        no_context_refresh=1
+        shift
+        ;;
+      --ignore-context)
+        ignore_context=1
+        shift
+        ;;
       *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
     esac
   done
@@ -417,28 +448,44 @@ build_mode() {
   local head
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; exit 2; }
 
-  if [ ! -f "$MANIFEST" ]; then
-    echo "CONTEXT_MISSING"
-    echo "No $MANIFEST found. Run edc-build before reviewing."
-    exit 1
-  fi
+  if [ "$ignore_context" -ne 1 ]; then
+    if [ ! -f "$MANIFEST" ]; then
+      if [ "$no_context_refresh" -eq 1 ]; then
+        context_available=0
+      else
+        echo "CONTEXT_MISSING"
+        echo "No $MANIFEST found. Run edc-build before reviewing."
+        exit 1
+      fi
+    fi
 
-  # Structural check: index.md must exist and contain ## headings. Absent or
-  # stubbed index.md means edc-build never finished (or wrote junk) — treat as
-  # missing so auto_mode's recovery re-runs edc-build to overwrite the stub.
-  local ctx="$EDC_INDEX"
-  if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
-    echo "CONTEXT_MISSING"
-    echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
-    exit 1
-  fi
+    # Structural check: index.md must exist and contain ## headings. Absent or
+    # stubbed index.md means edc-build never finished (or wrote junk). In
+    # --no-context-refresh mode, do not recover; fall back to a direct review
+    # task instead.
+    local ctx="$EDC_INDEX"
+    if [ "$context_available" -eq 1 ] && { [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; }; then
+      if [ "$no_context_refresh" -eq 1 ]; then
+        context_available=0
+      else
+        echo "CONTEXT_MISSING"
+        echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
+        exit 1
+      fi
+    fi
 
-  local source_commit
-  source_commit=$(read_manifest_source_commit)
-  if [ "$source_commit" != "$head" ]; then
-    echo "CONTEXT_STALE"
-    echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
-    exit 1
+    local source_commit=""
+    if [ "$context_available" -eq 1 ]; then
+      source_commit=$(read_manifest_source_commit)
+      if [ "$source_commit" != "$head" ] && [ "$no_context_refresh" -ne 1 ]; then
+        echo "CONTEXT_STALE"
+        echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
+        exit 1
+      fi
+      if [ "$source_commit" != "$head" ] && [ "$no_context_refresh" -eq 1 ]; then
+        echo "WARNING: context is stale (built at: $source_commit, HEAD: $head); using it because --no-context-refresh was requested" >&2
+      fi
+    fi
   fi
 
   # Step 2: get changed files
@@ -461,9 +508,9 @@ build_mode() {
     exit 2
   fi
 
-  # Filter out tool-internal paths. These are edc scratch state — reviewing
+  # Filter out tool-internal paths. These are edc scratch state - reviewing
   # them would make the tool eat its own tail (review the context dir,
-  # $EDC_REVIEW_TASKS_DIR/ — itself under $EDC_CONTEXT_DIR/ — or prior
+  # $EDC_REVIEW_TASKS_DIR/ - itself under $EDC_CONTEXT_DIR/ - or prior
   # review-*.md files as if they were source).
   files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
   files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
@@ -474,8 +521,72 @@ build_mode() {
     exit 2
   fi
 
+  if [ "$ignore_context" -eq 1 ] || [ "$context_available" -eq 0 ]; then
+    rm -rf "$EDC_REVIEW_TASKS_DIR"
+    mkdir -p "$EDC_REVIEW_TASKS_DIR"
+
+    local file_json file_list context_mode direct_module instruction_1 extra_instruction
+    file_json=$(echo "$files" \
+      | grep -v '^$' \
+      | sed 's/^/"/;s/$/"/' \
+      | tr '\n' ',' \
+      | sed 's/,$//')
+    file_list=$(echo "$files" | grep -v '^$' | sed 's/^/- /')
+
+    if [ "$ignore_context" -eq 1 ]; then
+      context_mode="ignored"
+      direct_module="ignore-context"
+      instruction_1="Do not read \`${EDC_INDEX}\`, \`${EDC_ISSUES}\`, or any \`${EDC_CONTEXT_DIR}/\` module docs."
+      extra_instruction=$'DO NOT use prebuilt EDC context, even if it exists in this repository.'
+    else
+      context_mode="no-refresh"
+      direct_module="no-context-refresh"
+      instruction_1="No usable EDC context was available without building/updating. Review the changed files directly."
+      extra_instruction=""
+    fi
+
+    cat > "$EDC_REVIEW_TASKS_MANIFEST" <<TASK_MANIFEST
+{
+  "target": "$target",
+  "baseline": "$baseline",
+  "head": "$head",
+  "contextMode": "$context_mode",
+  "modules": [
+    { "name": "$direct_module", "doc": "", "files": [$file_json] }
+  ]
+}
+TASK_MANIFEST
+
+    cat > "$EDC_REVIEW_TASKS_DIR/${direct_module}.md" <<TASK
+# Review Task: \`${direct_module}\`
+
+## Target
+${target}
+
+## Files to review
+${file_list}
+
+## Instructions
+
+1. ${instruction_1}
+2. Review only the changed files listed above and whatever adjacent source files are necessary to understand the diff.
+3. Use the embedded edc-review methodology to perform the full review on the files listed above.
+4. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${direct_module}.md\`
+
+DO NOT build or update EDC context.
+${extra_instruction}
+TASK
+
+    echo "routing summary: context=$context_mode files=$(echo "$files" | grep -cve '^$') modules=1" >&2
+    echo ""
+    echo "Review tasks ready."
+    echo ""
+    echo "TASK $EDC_REVIEW_TASKS_DIR/${direct_module}.md"
+    return 0
+  fi
+
   # Step 3: group by module via $EDC_MANIFEST routing.
-  # Use edc-route.sh — single source of truth, same logic the hooks use.
+  # Use edc-route.sh - single source of truth, same logic the hooks use.
   # Files with no module match go into a synthetic "unmapped" bucket and
   # are surfaced according to policy.unmatchedPathPolicy. Ambiguous routing
   # is a hard error (manifest bug, refuse to silently pick a winner).
@@ -529,7 +640,7 @@ build_mode() {
         mapped_count=$((mapped_count + 1))
         ;;
       1)
-        # No module match — group into "unmapped". Track unexpected ones for
+        # No module match - group into "unmapped". Track unexpected ones for
         # policy enforcement.
         MODULE_FILES["unmapped"]+="${file}"$'\n'
         unmapped_count=$((unmapped_count + 1))
@@ -551,14 +662,14 @@ build_mode() {
     rm -f "$route_err"
   done <<< "$files"
 
-  # Ambiguous routing is always fatal — manifest bug, not a runtime concern.
+  # Ambiguous routing is always fatal - manifest bug, not a runtime concern.
   if [ "$ambiguous_count" -gt 0 ]; then
     echo "ERROR: $ambiguous_count file(s) match multiple modules at top priority:" >&2
     local line
     for line in "${ambiguous_lines[@]}"; do
       echo "  $line" >&2
     done
-    echo "HINT: edit $MANIFEST — bump priority on the intended" >&2
+    echo "HINT: edit $MANIFEST - bump priority on the intended" >&2
     echo "      module or tighten its match.{exactFiles,prefixes,globs} rules" >&2
     exit 2
   fi
@@ -584,7 +695,7 @@ build_mode() {
         done
         ;;
       allow)
-        : # silent — counted in summary below only
+        : # silent - counted in summary below only
         ;;
     esac
   fi
@@ -604,6 +715,11 @@ build_mode() {
     echo "  \"target\": \"$target\","
     echo "  \"baseline\": \"$baseline\","
     echo "  \"head\": \"$head\","
+    if [ "$no_context_refresh" -eq 1 ]; then
+      echo "  \"contextMode\": \"no-refresh\","
+    else
+      echo "  \"contextMode\": \"context\","
+    fi
     echo "  \"modules\": ["
     local first=1
     while IFS= read -r module; do
@@ -638,7 +754,7 @@ build_mode() {
     if [ "$module" = "unmapped" ]; then
       module_context_line="3. NOTE: these files are not mapped to any module in ${EDC_MANIFEST}. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths."
     else
-      module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists — deep per-module context, invariants, call graphs"
+      module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists - deep per-module context, invariants, call graphs"
     fi
 
     cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
@@ -652,8 +768,8 @@ ${file_list}
 
 ## Instructions
 
-1. Read \`${EDC_INDEX}\` — module map, invariants, trust boundaries
-2. Read \`${EDC_ISSUES}\` if it exists — cross-reference known issues against the files above
+1. Read \`${EDC_INDEX}\` - module map, invariants, trust boundaries
+2. Read \`${EDC_ISSUES}\` if it exists - cross-reference known issues against the files above
 ${module_context_line}
 4. Use the edc-review skill to perform the full review on the files listed above
 5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
@@ -664,7 +780,7 @@ USE the edc-review skill.
 TASK
   done <<< "$sorted_modules"
 
-  # Done — emit TASK lines for the agent to iterate
+  # Done - emit TASK lines for the agent to iterate
   echo ""
   echo "Review tasks ready."
   echo ""
@@ -692,6 +808,14 @@ case "${1:-}" in
     fi
     auto_mode HEAD --base "$2" "${@:3}"
     ;;
+  --no-context-refresh)
+    # Shorthand: --no-context-refresh [extras...] → HEAD --no-context-refresh [extras...]
+    auto_mode HEAD --no-context-refresh "${@:2}"
+    ;;
+  --ignore-context)
+    # Shorthand: --ignore-context [extras...] → HEAD --ignore-context [extras...]
+    auto_mode HEAD --ignore-context "${@:2}"
+    ;;
   --check-context)
     check_context_mode
     ;;
@@ -703,10 +827,13 @@ case "${1:-}" in
     ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
+    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
     echo "                                                     full review pipeline (default)" >&2
-    echo "       edc-review.sh --base <ref>                         shorthand for HEAD --base <ref>" >&2
-    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]" >&2
+    echo "       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]" >&2
+    echo "                                                     shorthand for HEAD --base <ref>" >&2
+    echo "       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh" >&2
+    echo "       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context" >&2
+    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
     echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2

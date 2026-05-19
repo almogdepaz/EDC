@@ -1,7 +1,7 @@
 ---
 name: edc:edc-run-review
-description: Performs differential review of code changes using codebase context
-argument-hint: "--base <ref> | <target> [--base <ref>] | <pr-url>"
+description: Performs differential review of code changes, with optional EDC context
+argument-hint: "--base <ref> [--no-context-refresh|--ignore-context] | <target> [--base <ref>] [--no-context-refresh|--ignore-context] | <pr-url>"
 allowed-tools:
   - Bash
 ---
@@ -10,9 +10,10 @@ allowed-tools:
 
 **Arguments:** $ARGUMENTS
 
-The orchestrator script runs the full pipeline self-driven: it spawns fresh `claude -p`
-sessions for context build/update, per-module review, and consolidation. Your only job
-is to invoke it and surface its output. You have no other tools.
+The orchestrator script runs the full pipeline self-driven: it spawns fresh agent
+sessions for context build/update (unless `--no-context-refresh` or `--ignore-context`
+is passed), per-module review, and consolidation. Your only job is to invoke it and
+surface its output. You have no other tools.
 
 ```bash
 set -- $ARGUMENTS

@@ -5,7 +5,7 @@
   exit 2
 }
 # edc-audit orchestrator.
-# Deterministic control plane for /edc:edc-audit.
+# Deterministic control plane for terminal/orchestrated edc audit runs.
 #
 # Flow:
 #   1. dependency check (jq, git)

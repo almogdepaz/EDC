@@ -35,6 +35,7 @@ edc update --agent claude              # incremental refresh after HEAD moves
 # run the review pipeline in the current repo
 edc review --agent claude --base main
 edc review --agent cursor HEAD --base main
+edc review --agent codex --pr 42
 edc review --agent codex https://github.com/owner/repo/pull/42
 edc review --agent codex HEAD --base main --ignore 'generated/**'
 
@@ -52,7 +53,7 @@ edc doctor
 
 `--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout, and is mandatory for `build` / `update` / `review` / `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale. `build` defaults to the current directory if no path is passed. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
-Each agent also exposes the same actions as native slash commands (e.g. `/edc:edc-run-review` in Claude Code, `/edc-review` in Cursor, `$edc-review` in Codex) — they all shell out to the same orchestrators under `~/.edc/scripts/`.
+All supported agent UIs expose the same user-facing command surface: build, update, run-review, and doctor (for example `/edc:edc-run-review` in Claude Code, `/edc-run-review` in Cursor/Pi, `$edc-run-review` in Codex). Audit/review methodology is exposed as skills (`edc-audit`, `edc-review`) instead of slash commands. All command wrappers shell out to the same orchestrators under `~/.edc/scripts/`.
 
 ### Two runtime modes (Claude Code)
 
@@ -131,7 +132,7 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Exposes `/edc-build`, `/edc-update`, `/edc-audit`, `/edc-run-review`, `/edc-doctor`, `/edc-review` inside pi. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
+Exposes `/edc-build`, `/edc-update`, `/edc-run-review`, and `/edc-doctor` inside pi. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context skills stay hidden from pi autocomplete. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
 
 All installers (claude, cursor, codex, pi) also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|review|audit|update|mode|doctor` works from any shell.
 
@@ -177,12 +178,10 @@ EDC writes scratch state into your repo. Add these to your target repo's `.gitig
 
 ```
 edc-context/
-review-tasks/
 review-*.md
 ```
 
-- `edc-context/` — per-module deep context written by `edc-build`/`edc-update`
-- `review-tasks/` — per-module task files and reports from `edc-review`
+- `edc-context/` — per-module deep context written by `edc-build`/`edc-update`; review task IPC lives under `edc-context/review-tasks/`
 - `review-*.md` — consolidated review output
 
 If these get committed, `edc-review` filters them out of diffs automatically so the tool doesn't review its own output, but you'll still want them ignored to keep your git history clean.
@@ -193,26 +192,31 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 |---------|-------------|
 | `/edc:edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
 | `/edc:edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
-| `/edc:edc-audit` | Bloat, duplication, and overengineering detection |
-| `/edc:edc-run-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+| `/edc:edc-run-review` | Differential review using context (PR number/URL, branch, commit SHA, or diff path) |
 | `/edc:edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
 ### Cursor / Codex skill equivalents
 
-Cursor and Codex install the same four wrappers (just without the `edc:` prefix and without `doctor`/`review` internals):
+Cursor and Codex install the same user-facing wrappers (just without the `edc:` prefix):
 
-| Cursor command | Codex skill | Description |
-|----------------|-------------|-------------|
+| Cursor command | Codex command skill | Description |
+|----------------|---------------------|-------------|
 | `/edc-build` | `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
 | `/edc-update` | `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
-| `/edc-audit` | `$edc-audit` | Bloat, duplication, and overengineering detection |
-| `/edc-review` | `$edc-review` | Differential review using context (PR URL, commit SHA, or diff path) |
+| `/edc-run-review` | `$edc-run-review` | Differential review using context (PR number/URL, branch, commit SHA, or diff path) |
+| `/edc-doctor` | `$edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
 ### `/edc:edc-run-review` invocation examples
 
 ```bash
+# review a GitHub PR by number (uses `gh pr diff 42 --name-only`)
+/edc:edc-run-review --pr 42
+
 # review a GitHub PR by URL
 /edc:edc-run-review https://github.com/owner/repo/pull/42
+
+# review a PR without creating/updating/reading EDC context
+/edc:edc-run-review --pr 42 --base main --ignore-context
 
 # review current branch against main (shorthand: implies HEAD)
 /edc:edc-run-review --base main
@@ -233,7 +237,7 @@ Cursor and Codex install the same four wrappers (just without the `edc:` prefix 
 /edc:edc-run-review path/to/changes.patch
 ```
 
-Without `--base`, the target's parent (`<target>^`) is used — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--base main`.
+Without `--base`, the target's parent (`<target>^`) is used for git refs — this means you review only that commit, not the whole branch. To review a branch against main, always pass `--base main`. For PR targets, EDC uses `gh pr diff <number-or-url> --name-only`, so `gh` must be installed and authenticated. Use `--ignore-context` to skip context creation/update and forbid reading existing EDC context; use `--no-context-refresh` to skip creation/update but allow existing context if present.
 
 ## Repo Structure
 
@@ -244,19 +248,18 @@ edc/
   .claude-plugin/marketplace.json      # claude plugin marketplace manifest
   plugins/edc/                         # claude plugin + shared orchestrator (single source of truth)
     .claude-plugin/plugin.json
-    commands/                          # claude slash commands
+    commands/                          # user-facing slash commands
       edc-build.md
       edc-update.md
-      edc-audit.md
       edc-run-review.md                # user-facing: spawns orchestrator
-      edc-review.md                    # internal: per-module review subprocess
       edc-doctor.md                    # diagnose edc-context/ layout
-    skills/                            # canonical skill content (also installed for cursor/codex)
-      edc-context/                     # per-module deep analysis (TOB-derived)
-      edc-build-impl/                  # full-build orchestrator (v2 module fanout)
-      edc-update-impl/                 # incremental update from branch diff
-      edc-audit-impl/                  # bloat / duplication / overengineering audit
-      edc-review-impl/                 # differential review (TOB-derived)
+    skills/                            # user-facing methodology skills
+      edc-review/                      # differential review methodology
+      edc-audit/                       # bloat / duplication / overengineering methodology
+    prompt-bundles/                    # hidden prompt bundles for orchestrators
+      edc-module-context-impl/         # per-module context methodology
+      edc-build-impl/                  # full-build prompt bundle
+      edc-update-impl/                 # incremental-update prompt bundle
     scripts/                           # everything that ships to ~/.edc/scripts/
       edc                              # terminal CLI (build / update / review / audit / mode / doctor)
       edc-build.sh, edc-update.sh, edc-audit.sh, edc-review.sh   # action orchestrators

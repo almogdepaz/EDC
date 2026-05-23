@@ -26,16 +26,16 @@ trap 'rm -rf "$TMP"' EXIT
 
 SKILLS_DIR="$TMP/skills"
 mkdir -p "$SKILLS_DIR/edc-build-impl" "$SKILLS_DIR/edc-update-impl" \
-         "$SKILLS_DIR/edc-audit-impl" "$SKILLS_DIR/edc-review-impl"
+         "$SKILLS_DIR/edc-audit" "$SKILLS_DIR/edc-review"
 
 echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"
 echo "UPDATE_SKILL_MARKER" > "$SKILLS_DIR/edc-update-impl/SKILL.md"
-echo "AUDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-audit-impl/SKILL.md"
-echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review-impl/SKILL.md"
-echo "METHODOLOGY_MARKER" > "$SKILLS_DIR/edc-review-impl/methodology.md"
-echo "ADVERSARIAL_MARKER" > "$SKILLS_DIR/edc-review-impl/adversarial.md"
-echo "REPORTING_MARKER" > "$SKILLS_DIR/edc-review-impl/reporting.md"
-echo "PATTERNS_MARKER" > "$SKILLS_DIR/edc-review-impl/patterns.md"
+echo "AUDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-audit/SKILL.md"
+echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"
+echo "METHODOLOGY_MARKER" > "$SKILLS_DIR/edc-review/methodology.md"
+echo "ADVERSARIAL_MARKER" > "$SKILLS_DIR/edc-review/adversarial.md"
+echo "REPORTING_MARKER" > "$SKILLS_DIR/edc-review/reporting.md"
+echo "PATTERNS_MARKER" > "$SKILLS_DIR/edc-review/patterns.md"
 
 TASK_FILE="$TMP/task.md"
 echo "TASK_CONTENT_MARKER" > "$TASK_FILE"
@@ -91,14 +91,14 @@ done
 
 # ── 14.3: build/update arg-string forwarding ────────────────────────────────
 out=$(run_resolve claude build --force --focus broker)
-if echo "$out" | grep -qF "use these CLI arguments: --force --focus broker"; then
+if echo "$out" | grep -qF "CLI ARGUMENTS: --force --focus broker"; then
   check "claude build: arg-string prefixed when args provided" 1
 else
   check "claude build: arg-string prefixed when args provided" 0
 fi
 
 out=$(run_resolve claude build)
-if echo "$out" | grep -q "use these CLI arguments:"; then
+if echo "$out" | grep -q "CLI ARGUMENTS:"; then
   check "claude build: NO arg-string prefix when no args" 0
 else
   check "claude build: NO arg-string prefix when no args" 1
@@ -161,9 +161,9 @@ else
 fi
 
 # ── 14.8: missing review supporting file produces clear error ───────────────
-echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review-impl/SKILL.md"  # restore
+echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"  # restore
 echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"   # restore
-rm "$SKILLS_DIR/edc-review-impl/methodology.md"
+rm "$SKILLS_DIR/edc-review/methodology.md"
 out=$(run_resolve claude review "$TASK_FILE" 2>&1 || true)
 if echo "$out" | grep -q "review skill bundle incomplete"; then
   check "claude review: missing methodology.md produces clear error" 1

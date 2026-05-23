@@ -105,7 +105,7 @@ fi
 old_in_skills=$(grep -l "\.context/" \
   plugins/edc/skills/*/*.md \
   plugins/edc/skills/*/SKILL.md \
-  plugins/edc/skills/edc-context/resources/*.md \
+  plugins/edc/prompt-bundles/edc-module-context-impl/resources/*.md \
   2>/dev/null || true)
 if [ -z "$old_in_skills" ]; then
   check "16.7: no skill markdown contains the old '.context/' literal" 1

@@ -69,6 +69,8 @@ chmod +x "$FAKE_BIN/bash"
 run_cli() {
   PATH="$FAKE_BIN:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
+  EDC_BUILD_MODEL="t7-model" \
+  EDC_REVIEW_MODEL="t7-model" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }

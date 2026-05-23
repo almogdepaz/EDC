@@ -65,7 +65,7 @@ run_single_cve() {
         file_list="$file_list $f"
     done
 
-    local prompt="Run the edc:edc-context skill on ONLY these files: $file_list
+    local prompt="Apply the EDC module-context methodology on ONLY these files: $file_list
 
 This is a security-focused analysis. Perform ultra-granular line-by-line analysis \
 looking for all vulnerabilities including memory safety issues, state machine logic \

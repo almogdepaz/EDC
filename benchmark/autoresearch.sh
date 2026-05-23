@@ -35,10 +35,10 @@ WORK_DIR="${EDC_BENCH_WORKDIR:-/private/tmp/edc-bench}"
 CVE_CACHE="$WORK_DIR/cve-cache"
 
 SKILL_FILES=(
-    "plugins/edc/skills/edc-review-impl/SKILL.md"
-    "plugins/edc/skills/edc-review-impl/methodology.md"
-    "plugins/edc/skills/edc-review-impl/patterns.md"
-    "plugins/edc/skills/edc-review-impl/adversarial.md"
+    "plugins/edc/skills/edc-review/SKILL.md"
+    "plugins/edc/skills/edc-review/methodology.md"
+    "plugins/edc/skills/edc-review/patterns.md"
+    "plugins/edc/skills/edc-review/adversarial.md"
 )
 
 MODEL="${EDC_BENCH_MODEL:-sonnet}"
@@ -273,7 +273,7 @@ build_context_for_cve() {
     IFS=',' read -ra files <<< "$affected_files"
     for f in "${files[@]}"; do file_list+=" $(basename "$(echo "$f" | xargs)")"; done
 
-    local prompt="Run the edc:edc-context skill on these files:$file_list
+    local prompt="Apply the EDC module-context methodology on these files:$file_list
 
 Build complete architectural context. Write the full analysis to edc-context/full-context.md.
 This step is pure architectural context building only — do NOT identify security vulnerabilities."
@@ -368,7 +368,7 @@ run_cve() {
 
 Perform a full security review of these source files:$file_list
 
-Use the edc:edc-review skill. This is a FULL-FILE review — analyze the entire source for vulnerabilities.
+Use the edc-review methodology. This is a FULL-FILE review — analyze the entire source for vulnerabilities.
 Ignore any diff/PR-specific instructions in the skill.
 
 Write ALL findings to edc-context/reports/issues.md with:

@@ -1,5 +1,5 @@
 ---
-name: edc-review-impl
+name: edc-review
 description: >
   Performs differential review of code changes (PRs, commits, diffs).
   Adapts analysis depth to codebase size, uses git history for context, calculates
@@ -26,7 +26,7 @@ This skill has two entry modes. Check arguments **first**, before any other step
 
 ### Mode A — Scoped (`--task-file <path>`)
 
-Invoked by the `edc:edc-review` command for per-module reviews. The task file is written
+Invoked by the `edc-review.sh` orchestrator for per-module reviews. The task file is written
 by `scripts/edc-review.sh` and contains everything needed for a self-contained review.
 
 **Required steps when `--task-file` is present:**
@@ -157,9 +157,9 @@ Before delivering:
 
 ## Integration
 
-**`edc:edc-context` skill** (NOT `audit-context-building` — that is a different plugin):
-- Pre-Analysis: Build baseline context
-- Phase 4: Deep context on HIGH RISK changes
+**EDC context**:
+- If `edc-context/` exists, use it as the baseline context
+- If it does not exist, ask the user to run `/edc-build` for full context or build a lightweight manual baseline from changed files and git history
 
 **EDC context files (`edc-context/`):**
 - If `edc-context/index.md` exists, load it for architecture overview and module map
@@ -197,8 +197,8 @@ Time: ~3-4 hours
 ### Deep Audit (Large, Critical Change)
 ```
 Input: 450 files, auth system rewrite
-Strategy: SURGICAL + edc:edc-context
-1. Baseline context with edc:edc-context
+Strategy: SURGICAL + EDC context
+1. Build/load baseline context (`/edc-build` if needed)
 2. Deep analysis on auth changes only
 3. Blast radius analysis
 4. Adversarial modeling

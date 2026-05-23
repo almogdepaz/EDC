@@ -13,26 +13,21 @@ the user-facing tour.
 |---------|--------------|
 | `/edc:edc-build` | Build the v2 context tree (`AGENTS.md`, `edc-context/index.md`, `edc-context/manifest.json`, `edc-context/modules/*`) |
 | `/edc:edc-update` | Incrementally refresh the v2 context tree from branch diff |
-| `/edc:edc-audit` | Write `edc-context/reports/issues.md` and `edc-context/reports/complexity.md` from existing module docs |
-| `/edc:edc-run-review` | Run differential review on the current branch / commit / PR |
+| `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
-`edc:edc-review` exists but is **internal** — the orchestrator spawns it as
-a per-module subprocess. Users invoke `edc:edc-run-review`.
+Audit and review methodology are exposed as skills (`edc-audit`, `edc-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`), Codex (`$edc-*`), and pi (`/edc-*`) get the same actions
-through agent-specific wrappers emitted by `install.sh` and `agents/pi/`.
+Cursor (`/edc-*`), Codex (`$edc-*`), and Pi expose the same user-facing command set through wrappers emitted by `install.sh` / `agents/pi/`: build, update, run-review, and doctor.
 
 ## Internal structure
 
 ```
 plugins/edc/
-  commands/                            # claude slash commands
+  commands/                            # user-facing slash commands
     edc-build.md
     edc-update.md
-    edc-audit.md
     edc-run-review.md                  # user-facing review launcher
-    edc-review.md                      # internal per-module review subprocess
     edc-doctor.md
 
   scripts/                             # everything that ships to ~/.edc/scripts/
@@ -52,12 +47,14 @@ plugins/edc/
     edc-manifest.sh                    # manifest stdin/stdout filter
     edc-build-plan.sh                  # deterministic per-module task planner (jq)
 
-  skills/                              # canonical skill content
-    edc-context/                       # per-module deep analysis (TOB-derived)
-    edc-build-impl/                    # full-build skill (consumed as prompt by edc-build.sh)
-    edc-update-impl/                   # incremental update skill
-    edc-audit-impl/                    # bloat / duplication / overengineering audit skill
-    edc-review-impl/                   # differential review methodology + patterns
+  skills/                              # user-facing methodology skills
+    edc-review/                        # differential review methodology + patterns
+    edc-audit/                         # bloat / duplication / overengineering methodology
+
+  prompt-bundles/                      # hidden prompt bundles for orchestrators
+    edc-module-context-impl/           # per-module context methodology
+    edc-build-impl/                    # full-build prompt bundle
+    edc-update-impl/                   # incremental update prompt bundle
 
   hooks/                               # claude-only: automatic context injection
     hooks.json
@@ -68,9 +65,7 @@ plugins/edc/
 
 ## Design: script-as-orchestrator
 
-The user's claude session has ONLY `Bash` access for every command except the
-internal `edc:edc-review`. It runs the orchestrator (`edc-build.sh`,
-`edc-update.sh`, `edc-audit.sh`, `edc-review.sh`), which:
+The user's agent session uses thin command wrappers that call deterministic orchestrators (`edc-build.sh`, `edc-update.sh`, `edc-review.sh`, `edc-doctor.sh`; terminal CLI also exposes `edc-audit.sh`), which:
 
 1. Validates context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Auto-rebuilds or auto-updates context if stale (via `edc-recover-context.sh`)
@@ -84,7 +79,7 @@ their outputs.
 
 ## Skill files as prompt templates
 
-`skills/edc-review-impl/` contains:
+`skills/edc-review/` contains:
 
 - `SKILL.md` — main review workflow definition
 - `methodology.md` — phase-by-phase review process
@@ -96,9 +91,7 @@ These are **prompt material**. The orchestrator concatenates them into the
 subprocess prompt; they exist as separate files so each one can be tuned
 independently.
 
-`skills/edc-build-impl/`, `skills/edc-update-impl/`, `skills/edc-audit-impl/`
-have similar structure: a `SKILL.md` plus support docs, fed to subprocess
-agents as prompt content.
+`prompt-bundles/edc-build-impl/`, `prompt-bundles/edc-update-impl/`, and `prompt-bundles/edc-module-context-impl/` are hidden prompt bundles for orchestrator subprocesses. `skills/edc-audit/` is both a user-facing methodology skill and the audit prompt used by terminal/orchestrated audit flows.
 
 ## Multi-agent support
 
@@ -123,11 +116,14 @@ resolution, and codex-home isolation.
 ## Default invocation
 
 ```bash
-edc-review.sh                          # review current branch vs main
+edc-review.sh --base main              # review current branch vs main
 edc-review.sh feat-branch --base main  # review branch vs main
-edc-review.sh https://github.com/...   # review PR
+edc-review.sh --pr 42 --base main      # review PR by number (uses gh)
+edc-review.sh https://github.com/...   # review PR by URL (uses gh)
 edc-review.sh path/to/diff.patch       # review diff file
 ```
 
-No target = reviews current branch against main. No flags needed for the
-common case.
+For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.
+Use `--ignore-context` for a pure direct review with no context build/update and
+no reads from existing `edc-context/`; use `--no-context-refresh` to skip
+creation/update while still allowing existing context.

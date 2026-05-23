@@ -11,8 +11,11 @@
 #   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 #                                                     full review pipeline (default - spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
+#   edc-review.sh --pr <number-or-url> [extras...]      shorthand for: pr:<number-or-url> [extras...]
 #   edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 #                                                     task-generation only (emit TASK lines, no subprocess spawning)
+#   edc-review.sh --build --pr <number-or-url> [extras...]
+#                                                     task-generation for a PR without a full URL
 #   edc-review.sh --check-context                      assert <EDC_CONTEXT_DIR>/manifest.json fresh (no diff, no task gen)
 #   edc-review.sh --consolidate                        merge per-module reports into final review file
 #   edc-review.sh --verify                             assert context fresh + reports + final file exist
@@ -492,6 +495,8 @@ build_mode() {
   local files
   if [[ "$target" == https://* ]]; then
     files=$(gh pr diff "$target" --name-only 2>/dev/null)
+  elif [[ "$target" == pr:* ]]; then
+    files=$(gh pr diff "${target#pr:}" --name-only 2>/dev/null)
   elif [ -f "$target" ]; then
     files=$(grep '^+++ b/' "$target" | sed 's|^+++ b/||' || true)
     if [ -z "$files" ]; then
@@ -794,6 +799,16 @@ TASK
 case "${1:-}" in
   --build)
     shift
+    if [ "${1:-}" = "--pr" ]; then
+      if [ -z "${2:-}" ]; then
+        echo "ERROR: --build --pr requires a PR number or URL (e.g. --build --pr 147)" >&2
+        exit 2
+      fi
+      pr_target="$2"
+      shift 2
+      build_mode "pr:$pr_target" "$@"
+      exit $?
+    fi
     if [ -z "${1:-}" ]; then
       echo "ERROR: --build requires a target" >&2
       exit 2
@@ -807,6 +822,22 @@ case "${1:-}" in
       exit 2
     fi
     auto_mode HEAD --base "$2" "${@:3}"
+    ;;
+  --pr)
+    # Shorthand: --pr <number-or-url> [extras...] → pr:<number-or-url> [extras...]
+    if [ -z "${2:-}" ]; then
+      echo "ERROR: --pr requires a PR number or URL (e.g. --pr 147)" >&2
+      exit 2
+    fi
+    auto_mode "pr:$2" "${@:3}"
+    ;;
+  pr|PR)
+    # Shorthand: pr <number-or-url> [extras...] → pr:<number-or-url> [extras...]
+    if [ -z "${2:-}" ]; then
+      echo "ERROR: pr requires a PR number or URL (e.g. pr 147)" >&2
+      exit 2
+    fi
+    auto_mode "pr:$2" "${@:3}"
     ;;
   --no-context-refresh)
     # Shorthand: --no-context-refresh [extras...] → HEAD --no-context-refresh [extras...]
@@ -831,10 +862,14 @@ case "${1:-}" in
     echo "                                                     full review pipeline (default)" >&2
     echo "       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]" >&2
     echo "                                                     shorthand for HEAD --base <ref>" >&2
+    echo "       edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]" >&2
+    echo "                                                     shorthand for PR review without full URL" >&2
     echo "       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh" >&2
     echo "       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context" >&2
     echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
     echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
+    echo "       edc-review.sh --build --pr <number-or-url> [--ignore-context|--no-context-refresh]" >&2
+    echo "                                                     generate PR review tasks without full URL" >&2
     echo "       edc-review.sh --check-context" >&2
     echo "       edc-review.sh --consolidate" >&2
     echo "       edc-review.sh --verify" >&2

@@ -259,7 +259,7 @@ Decision is implemented in code/docs and matches what `build-value-report.md` sa
 
 - Lock the corpus + commit + models used in Phase 1 as a `build-value snapshot`.
 - Add `benchmark/build-value/run.sh` that reproduces Phases 1+2 in one command (drives `run-regression.sh` for every matrix cell, then generates the report).
-- Add to the hardening suite: any change to `plugins/edc/skills/edc-build-impl/**` or `plugins/edc/skills/edc-review-impl/**` must re-run this and not regress the decision criteria.
+- Add to the hardening suite: any change to `plugins/edc/prompt-bundles/edc-build-impl/**` or `plugins/edc/skills/edc-review/**` must re-run this and not regress the decision criteria.
 
 ### Phase 4 exit criterion
 

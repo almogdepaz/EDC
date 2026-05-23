@@ -30,12 +30,41 @@ After install, pi exposes:
 |---|---|
 | `/edc-build` | Build deep architectural context (`edc-context/`) |
 | `/edc-update` | Incrementally update context from branch diff |
-| `/edc-audit` | Overengineering / bloat / duplication audit |
-| `/edc-run-review` | Differential code review against a base ref |
+| `/edc-run-review` | Differential code review against a base ref or PR (`--pr <number>`) |
 | `/edc-doctor` | Validate the context tree, manifest, routing |
-| `/edc-review` | Internal — per-module review (used by orchestrator) |
 
-The command bodies are read verbatim from `plugins/edc/commands/*.md`, so behavior matches the Claude Code plugin.
+Pi intentionally exposes only user-facing pipeline commands. The single-module review worker and standalone audit pipeline are not registered as TUI commands; use the `edc-review` / `edc-audit` skills for methodology-only work.
+
+The command bodies are read verbatim from `plugins/edc/commands/*.md`, so behavior matches the Claude Code plugin where those commands are shared.
+
+Review examples:
+
+```text
+# current branch against main
+/edc-run-review --base main
+
+# PR by number; requires gh auth in the target repo
+/edc-run-review --pr 147 --base main
+
+# pure direct review: no context build/update, and do not read existing edc-context/
+/edc-run-review --pr 147 --base main --ignore-context
+
+# no context build/update, but allow existing context if present
+/edc-run-review --pr 147 --base main --no-context-refresh
+```
+
+`--ignore-context` is the hard skip: it neither creates/updates context nor reads existing `edc-context/`. `--no-context-refresh` only disables creation/update; stale or existing context may still be used.
+
+## Skills
+
+Pi exposes only the human-facing EDC methodology skills:
+
+| Skill | Use |
+|---|---|
+| `edc-review` | Apply the EDC differential review methodology directly in chat, without running the full orchestrator. |
+| `edc-audit` | Apply the EDC bloat / duplication / overengineering audit methodology directly in chat. |
+
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are still installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list.
 
 ## Modes
 
@@ -60,11 +89,11 @@ bash agents/pi/install.sh --context-mode inject
 | Slash commands | `pi.registerCommand(name, …)` |
 | `SessionStart` hook | `pi.on("session_start", …)` |
 | `PreToolUse` hook | `pi.on("tool_call", …)` filtered to `bash|edit|write` |
-| Skills | `pi.on("resources_discover", …)` returning `plugins/edc/skills/` |
+| Skills | `pi.on("resources_discover", …)` returning only `edc-review` and `edc-audit` |
 | Per-session dedup | `ctx.sessionManager.getSessionId()` + tmp file |
 
 The injection logic is shared with the Claude Code / Cursor hooks via `plugins/edc/hooks/lib/route.mjs` — single source of truth, no drift.
 
-## Untested
+## Testing note
 
-Pi exposes no public test harness for extension lifecycle events. The shared lib (`plugins/edc/hooks/lib/route.mjs`) is exercised by the existing hardening tests via the Claude Code hook entry points; the pi-specific wiring (event handlers, command registration) is verified manually on first install.
+Pi exposes no public lifecycle test harness, so `tests/hardening/t10-pi-extension.sh` exercises the extension factory with a fake `ExtensionAPI`. That pins command registration, visible skills, session-start script install, and tool-call context injection.

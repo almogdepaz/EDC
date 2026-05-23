@@ -8,7 +8,7 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
@@ -147,6 +147,7 @@ build_cmd() {
 
   [ -n "$agent" ] || die "--agent is required"
   require_command "$agent"
+  _check_model_or_prompt
 
   if [ -n "$positional_target" ]; then
     target="$positional_target"
@@ -210,6 +211,7 @@ review_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  _check_model_or_prompt
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
@@ -259,6 +261,7 @@ audit_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  _check_model_or_prompt
 
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
@@ -313,6 +316,7 @@ update_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  _check_model_or_prompt
 
   local update_script
   update_script="$(find_script edc-update.sh)" \
@@ -418,11 +422,6 @@ main() {
 
   local command="$1"
   shift
-
-  # Prompt-or-fail for agent-spawning subcommands only.
-  case "$command" in
-    build|review|audit|update) _check_model_or_prompt ;;
-  esac
 
   case "$command" in
     build)

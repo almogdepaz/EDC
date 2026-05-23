@@ -428,5 +428,70 @@ TMPDIR_T15K=$(mktemp -d)
   rm -rf "$TMPDIR_T15K"
 )
 
+# ── 15.13: PR shorthand target uses gh PR diff path ────────────────────────
+TMPDIR_T15L=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15L"
+  mkdir -p fake-bin src
+  cat > fake-bin/gh <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > gh-args.txt
+if [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "147" ] && [ "$4" = "--name-only" ]; then
+  echo "src/a.ts"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x fake-bin/gh
+  PATH="$PWD/fake-bin:$PATH" out=$(bash "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q "src/a.ts" edc-context/review-tasks/ignore-context.md; then
+    check "15.13a: pr:<number> target uses gh pr diff output" 1
+  else
+    check "15.13a: pr:<number> target uses gh pr diff output" 0
+    echo "$out"
+  fi
+  if grep -qx "pr" gh-args.txt && grep -qx "diff" gh-args.txt && grep -qx "147" gh-args.txt && grep -qx -- "--name-only" gh-args.txt; then
+    check "15.13b: pr:<number> invokes gh pr diff <number> --name-only" 1
+  else
+    check "15.13b: pr:<number> invokes gh pr diff <number> --name-only" 0
+    cat gh-args.txt 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15L"
+)
+
+# ── 15.14: --pr flag accepts a PR number without URL ───────────────────────
+TMPDIR_T15M=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15M"
+  mkdir -p fake-bin src
+  cat > fake-bin/gh <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > gh-args.txt
+if [ "$1" = "pr" ] && [ "$2" = "diff" ] && [ "$3" = "147" ] && [ "$4" = "--name-only" ]; then
+  echo "src/a.ts"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x fake-bin/gh
+  PATH="$PWD/fake-bin:$PATH" out=$(bash "$SCRIPT" --build --pr 147 --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q '"target": "pr:147"' edc-context/review-tasks/manifest.json; then
+    check "15.14a: --build --pr <number> normalizes target to pr:<number>" 1
+  else
+    check "15.14a: --build --pr <number> normalizes target to pr:<number>" 0
+    echo "$out"
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  if grep -qx "147" gh-args.txt; then
+    check "15.14b: --pr <number> passes number to gh pr diff" 1
+  else
+    check "15.14b: --pr <number> passes number to gh pr diff" 0
+    cat gh-args.txt 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15M"
+)
+
 cd "$ORIG_DIR"
 check_summary "T15"

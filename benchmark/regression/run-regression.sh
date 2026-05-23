@@ -8,7 +8,7 @@ set -uo pipefail
 #   run-regression.sh --commit <sha> --repo curl|redis [--attempts 3] [--smoke]
 #
 # Per repo per attempt: runs `/edc:edc-build` once on the target repo using the
-# EDC plugin AT --commit, snapshots edc-context/, then runs `/edc:edc-review` per
+# EDC plugin AT --commit, snapshots edc-context/, then runs the `edc-review` methodology per
 # CVE in cve-lists.conf on top of that snapshot.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -494,7 +494,7 @@ review_one_cve() {
 
 Perform a FULL-FILE security review of these source files:$file_list
 
-Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
+Use the edc-review methodology. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
 Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
   elif [[ "$MODE" == "v2" ]]; then
@@ -506,7 +506,7 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
 
 Perform a FULL-FILE security review of these source files:$file_list
 
-Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
+Use the edc-review methodology. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
 Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
   else
@@ -514,14 +514,14 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
     mkdir -p "$run_dir/edc-context/modules"
     local v1_prompt
     if [[ "$MODE" == "v1" ]]; then
-      v1_prompt="Run the edc:edc-context skill on these files:$file_list
+      v1_prompt="Apply the EDC module-context methodology on these files:$file_list
 
 Build complete architectural context. Write the full analysis to edc-context/full-context.md.
 This step is pure architectural context building only — do NOT identify security vulnerabilities."
     else
       # v2-per-cve: mirrors edc-build-plan.sh's per-module prompt verbatim,
       # but with a single synthetic module = the CVE's affected files.
-      v1_prompt="Build deep architectural context for module \`target\`. Files in scope: \`${affected_files}\`. Invoke the \`edc-context\` skill on these files. You may read sibling-module source if it materially improves this module's context. Write the deep doc directly to \`edc-context/modules/target.md\`. Return a ≤500-token summary for the orchestrator."
+      v1_prompt="Build deep architectural context for module \`target\`. Files in scope: \`${affected_files}\`. Apply the \`edc-module-context-impl\` methodology to these files. You may read sibling-module source if it materially improves this module's context. Write the deep doc directly to \`edc-context/modules/target.md\`. Return a ≤500-token summary for the orchestrator."
     fi
 
     local v1_tools=""
@@ -554,7 +554,7 @@ This step is pure architectural context building only — do NOT identify securi
 
 Perform a FULL-FILE security review of these source files:$file_list
 
-Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
+Use the edc-review methodology. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
 Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
     else
@@ -563,7 +563,7 @@ Write ALL findings to edc-context/reports/issues.md with: title, severity, categ
 
 Perform a FULL-FILE security review of these source files:$file_list
 
-Use the edc:edc-review skill. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
+Use the edc-review methodology. Treat this as full-file analysis (ignore any diff/PR-only language in the skill).
 
 Write ALL findings to edc-context/reports/issues.md with: title, severity, category, file:line, description, evidence."
     fi

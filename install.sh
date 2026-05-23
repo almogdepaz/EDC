@@ -68,18 +68,27 @@ done
 }
 
 SKILLS=(
-  "plugins/edc/skills/edc-context/SKILL.md"
-  "plugins/edc/skills/edc-context/resources/COMPLETENESS_CHECKLIST.md"
-  "plugins/edc/skills/edc-context/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
-  "plugins/edc/skills/edc-context/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/skills/edc-review-impl/SKILL.md"
-  "plugins/edc/skills/edc-review-impl/methodology.md"
-  "plugins/edc/skills/edc-review-impl/adversarial.md"
-  "plugins/edc/skills/edc-review-impl/reporting.md"
-  "plugins/edc/skills/edc-review-impl/patterns.md"
-  "plugins/edc/skills/edc-build-impl/SKILL.md"
-  "plugins/edc/skills/edc-update-impl/SKILL.md"
-  "plugins/edc/skills/edc-audit-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/COMPLETENESS_CHECKLIST.md"
+  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
+  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
+  "plugins/edc/skills/edc-review/SKILL.md"
+  "plugins/edc/skills/edc-review/methodology.md"
+  "plugins/edc/skills/edc-review/adversarial.md"
+  "plugins/edc/skills/edc-review/reporting.md"
+  "plugins/edc/skills/edc-review/patterns.md"
+  "plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
+  "plugins/edc/skills/edc-audit/SKILL.md"
+)
+
+PUBLIC_SKILLS=(
+  "plugins/edc/skills/edc-review/SKILL.md"
+  "plugins/edc/skills/edc-review/methodology.md"
+  "plugins/edc/skills/edc-review/adversarial.md"
+  "plugins/edc/skills/edc-review/reporting.md"
+  "plugins/edc/skills/edc-review/patterns.md"
+  "plugins/edc/skills/edc-audit/SKILL.md"
 )
 
 download() {
@@ -99,7 +108,11 @@ copy_or_download() {
 }
 
 skill_rel() {
-  echo "${1#plugins/edc/skills/}"
+  local rel="${1#plugins/edc/skills/}"
+  if [ "$rel" = "$1" ]; then
+    rel="${1#plugins/edc/prompt-bundles/}"
+  fi
+  echo "$rel"
 }
 
 install_terminal_cli() {
@@ -145,7 +158,11 @@ install_terminal_cli() {
 write_cursor_commands() {
   local target="$1"
   mkdir -p "$target/commands"
-  for action in build update audit review; do
+  rm -f "$target/commands/edc-audit.md" "$target/commands/edc-review.md"
+  local entry action script
+  for entry in build:build update:update run-review:review doctor:doctor; do
+    action="${entry%%:*}"
+    script="${entry##*:}"
     cat > "$target/commands/edc-$action.md" <<EOF
 ---
 description: edc $action via deterministic orchestrator (auto-installed by install.sh)
@@ -159,10 +176,10 @@ surface its output.
 \`\`\`bash
 set -- \$ARGUMENTS
 export EDC_AGENT_CLI=cursor
-if [ -f ".edc/scripts/edc-$action.sh" ]; then
-  bash .edc/scripts/edc-$action.sh "\$@"
-elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
-  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+if [ -f ".edc/scripts/edc-$script.sh" ]; then
+  bash .edc/scripts/edc-$script.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$script.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$script.sh" "\$@"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1
@@ -179,7 +196,10 @@ EOF
 # wrappers that delegate to ~/.edc/scripts/edc-*.sh with EDC_AGENT_CLI=codex.
 write_codex_skills() {
   local target="$1"
-  for action in build update audit review; do
+  local entry action script
+  for entry in build:build update:update run-review:review doctor:doctor; do
+    action="${entry%%:*}"
+    script="${entry##*:}"
     mkdir -p "$target/edc-$action"
     cat > "$target/edc-$action/SKILL.md" <<EOF
 ---
@@ -192,10 +212,10 @@ shell and surface its output. Pass through any user arguments verbatim.
 
 \`\`\`bash
 export EDC_AGENT_CLI=codex
-if [ -f ".edc/scripts/edc-$action.sh" ]; then
-  bash .edc/scripts/edc-$action.sh "\$@"
-elif [ -f "\$HOME/.edc/scripts/edc-$action.sh" ]; then
-  bash "\$HOME/.edc/scripts/edc-$action.sh" "\$@"
+if [ -f ".edc/scripts/edc-$script.sh" ]; then
+  bash .edc/scripts/edc-$script.sh "\$@"
+elif [ -f "\$HOME/.edc/scripts/edc-$script.sh" ]; then
+  bash "\$HOME/.edc/scripts/edc-$script.sh" "\$@"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1
@@ -233,8 +253,8 @@ print_cli_hint() {
       echo "  edc doctor                 # validate context"
       echo "  edc mode advisory|inject   # toggle runtime mode in edc-context/manifest.json"
       echo
-      echo "Build/review/audit from pi: use the slash commands inside pi:"
-      echo "  /edc-build, /edc-update, /edc-audit, /edc-run-review, /edc-doctor"
+      echo "Build/update/review from pi: use the slash commands inside pi:"
+      echo "  /edc-build, /edc-update, /edc-run-review, /edc-doctor"
       ;;
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
@@ -254,7 +274,27 @@ print_cli_hint() {
 install_edc_skills() {
   local target="$1"
   local f rel
+  rm -rf \
+    "$target/edc-review-impl" \
+    "$target/edc-audit-impl" \
+    "$target/edc-context"
   for f in "${SKILLS[@]}"; do
+    rel=$(skill_rel "$f")
+    copy_or_download "$f" "$target/$rel"
+  done
+}
+
+install_public_edc_skills() {
+  local target="$1"
+  local f rel
+  rm -rf \
+    "$target/edc-review-impl" \
+    "$target/edc-audit-impl" \
+    "$target/edc-context" \
+    "$target/edc-build-impl" \
+    "$target/edc-update-impl" \
+    "$target/edc-module-context-impl"
+  for f in "${PUBLIC_SKILLS[@]}"; do
     rel=$(skill_rel "$f")
     copy_or_download "$f" "$target/$rel"
   done
@@ -286,13 +326,12 @@ case "$AGENT" in
   cursor)
     TARGET="$HOME/.cursor"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
-    echo "Installing EDC skills globally for Cursor..."
-    for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/skills/$(skill_rel "$f")"
-    done
+    echo "Installing EDC public skills globally for Cursor..."
+    install_public_edc_skills "$TARGET/skills"
+    install_edc_skills "$HOME/.edc/skills"
     install_terminal_cli
     write_cursor_commands "$TARGET"
-    echo "Done. Skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + orchestrator at $SCRIPTS_TARGET/"
+    echo "Done. Public skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + private prompt bundle at $SCRIPTS_TARGET/ and $HOME/.edc/skills/"
     print_cli_hint cursor
     print_path_hint
     ;;
@@ -300,13 +339,12 @@ case "$AGENT" in
   codex)
     TARGET="$HOME/.codex/skills"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
-    echo "Installing EDC skills globally for Codex..."
-    for f in "${SKILLS[@]}"; do
-      download "$f" "$TARGET/$(skill_rel "$f")"
-    done
+    echo "Installing EDC public skills globally for Codex..."
+    install_public_edc_skills "$TARGET"
+    install_edc_skills "$HOME/.edc/skills"
     install_terminal_cli
     write_codex_skills "$TARGET"
-    echo "Done. Skills at $TARGET/, terminal CLI + orchestrator at $SCRIPTS_TARGET/. Use \$edc-build, \$edc-update, \$edc-audit, or \$edc-run-review."
+    echo "Done. Public skills at $TARGET/, terminal CLI + private prompt bundle at $SCRIPTS_TARGET/ and $HOME/.edc/skills/. Use \$edc-build, \$edc-update, \$edc-run-review, or \$edc-doctor."
     print_cli_hint codex
     print_path_hint
     ;;
@@ -322,6 +360,7 @@ case "$AGENT" in
       pi install "git:github.com/almogdepaz/edc"
     fi
     install_terminal_cli
+    install_edc_skills "$HOME/.edc/skills"
     echo "Done. Run /edc-build inside pi to create context. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi
     print_path_hint

@@ -540,10 +540,9 @@ find_installed_skill() {
 # Resolve <skill-name>/SKILL.md from the agent-specific install paths.
 #
 # Per-agent layout:
-#   claude: .edc/skills, ~/.edc/skills, plus a marketplace fallback so a
-#           plugin-only setup (no CLI install) still finds skill content.
-#   cursor: .cursor/skills, ~/.cursor/skills
-#   codex:  .codex/skills,  ~/.codex/skills
+#   claude: .edc/skills, ~/.edc/skills, plus marketplace fallbacks.
+#   cursor: private .edc/~/.edc prompt bundles first, then public cursor skills.
+#   codex:  private .edc/~/.edc prompt bundles first, then public codex skills.
 _find_skill_for_agent() {
   local name="$1"
   case "$EDC_AGENT_CLI" in
@@ -551,13 +550,14 @@ _find_skill_for_agent() {
       find_installed_skill "$name" \
         ".edc/skills" \
         "$HOME/.edc/skills" \
+        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/prompt-bundles" \
         "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/skills"
       ;;
     cursor)
-      find_installed_skill "$name" ".cursor/skills" "$HOME/.cursor/skills"
+      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".cursor/skills" "$HOME/.cursor/skills"
       ;;
     codex)
-      find_installed_skill "$name" ".codex/skills" "$HOME/.codex/skills"
+      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".codex/skills" "$HOME/.codex/skills"
       ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
@@ -617,7 +617,7 @@ _emit_skill_prompt() {
   case "$skill_name" in
     edc-build-impl)  task_verb="Build the v2 architectural context" ;;
     edc-update-impl) task_verb="Update the existing v2 architectural context" ;;
-    edc-audit-impl)  task_verb="Run the complexity / overengineering audit" ;;
+    edc-audit)       task_verb="Run the complexity / overengineering audit" ;;
   esac
   printf 'TASK: %s for the repository at the current working directory, following the skill below verbatim. Start immediately. Do not ask for clarification — the skill specifies everything.\n\n' "$task_verb"
   if [ -n "$args_string" ]; then
@@ -629,7 +629,7 @@ _emit_skill_prompt() {
 
 # _emit_review_prompt <task-path>
 # Emit the per-module review prompt: strict no-improvise prefix, the task
-# file's contents, then the full edc-review-impl skill bundle (SKILL.md +
+# file's contents, then the full edc-review skill bundle (SKILL.md +
 # methodology.md + adversarial.md + reporting.md + patterns.md) inline.
 # Embedding everything is intentional — past runs showed agents improvising
 # their own methodology when only a Read instruction was given.
@@ -641,7 +641,7 @@ _emit_review_prompt() {
   fi
 
   local skill_path skill_dir
-  skill_path=$(_find_skill_for_agent "edc-review-impl") || return 1
+  skill_path=$(_find_skill_for_agent "edc-review") || return 1
   skill_dir=$(dirname "$skill_path")
 
   local methodology="$skill_dir/methodology.md"
@@ -669,27 +669,27 @@ TASK FILE: $task_path
 $(cat "$task_path")
 
 ================================================================================
-SKILL: edc-review-impl/SKILL.md
+SKILL: edc-review/SKILL.md
 ================================================================================
 $(cat "$skill_path")
 
 ================================================================================
-SKILL: edc-review-impl/methodology.md
+SKILL: edc-review/methodology.md
 ================================================================================
 $(cat "$methodology")
 
 ================================================================================
-SKILL: edc-review-impl/adversarial.md
+SKILL: edc-review/adversarial.md
 ================================================================================
 $(cat "$adversarial")
 
 ================================================================================
-SKILL: edc-review-impl/reporting.md
+SKILL: edc-review/reporting.md
 ================================================================================
 $(cat "$reporting")
 
 ================================================================================
-SKILL: edc-review-impl/patterns.md
+SKILL: edc-review/patterns.md
 ================================================================================
 $(cat "$patterns")
 EOF
@@ -711,7 +711,7 @@ resolve_prompt() {
   case "$action" in
     build)  _emit_skill_prompt "edc-build-impl"  "$prompt_arg_string" ;;
     update) _emit_skill_prompt "edc-update-impl" "$prompt_arg_string" ;;
-    audit)  _emit_skill_prompt "edc-audit-impl" ;;
+    audit)  _emit_skill_prompt "edc-audit" ;;
     review) _emit_review_prompt "$1" ;;
     *)
       echo "ERROR: unknown action: $action" >&2

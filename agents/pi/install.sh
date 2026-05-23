@@ -86,10 +86,12 @@ cat <<EOF
 Done. Available commands in pi:
   /edc-build       build deep architectural context
   /edc-update      incremental update from branch diff
-  /edc-audit       overengineering / bloat audit
   /edc-run-review  differential code review
   /edc-doctor      validate context tree
-  /edc-review      internal: per-module review
+
+Visible skills:
+  edc-review       differential review methodology
+  edc-audit        overengineering / bloat audit methodology
 
 Mode toggle (per-project, after /edc-build has run):
   bash agents/pi/install.sh --context-mode advisory   # docs only (default)

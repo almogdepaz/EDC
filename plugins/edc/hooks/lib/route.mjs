@@ -17,6 +17,7 @@ import {
   statSync,
   chmodSync,
   mkdirSync,
+  readdirSync,
 } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -307,7 +308,7 @@ function isDuplicate(sessionId, moduleName) {
   return false;
 }
 
-// --- orchestrator script install ---
+// --- project-local runtime install ---
 
 function isEdcProject(projectRoot) {
   return (
@@ -317,37 +318,104 @@ function isEdcProject(projectRoot) {
 }
 
 /**
- * Copy plugins/edc/scripts/edc-review.sh into <projectRoot>/.edc/scripts/
- * if missing or stale. Idempotent. Best-effort (logs warnings, never throws).
+ * Copy runtime scripts and private prompt bundles into <projectRoot>/.edc/ if
+ * missing or stale. Idempotent. Best-effort (logs warnings, never throws).
+ *
+ * The project-local .edc/skills tree is intentionally NOT a pi skill location;
+ * it is private prompt material consumed by edc-lib.sh in spawned subprocesses.
  */
 export function installOrchestratorScript(projectRoot, pluginRoot) {
   if (!isEdcProject(projectRoot)) return;
 
-  const pluginScript = join(pluginRoot, "scripts", "edc-review.sh");
-  if (!existsSync(pluginScript)) return;
+  installScriptFiles(projectRoot, pluginRoot);
+  installPrivatePromptBundles(projectRoot, pluginRoot);
+}
+
+function shouldCopyFile(src, dst) {
+  if (!existsSync(dst)) return true;
+  try {
+    return statSync(src).mtimeMs > statSync(dst).mtimeMs;
+  } catch {
+    return true;
+  }
+}
+
+function installScriptFiles(projectRoot, pluginRoot) {
+  const sourceDir = join(pluginRoot, "scripts");
+  if (!existsSync(sourceDir)) return;
 
   const destDir = join(projectRoot, ".edc", "scripts");
-  const destScript = join(destDir, "edc-review.sh");
 
-  let shouldCopy = !existsSync(destScript);
-  if (!shouldCopy) {
-    try {
-      const srcMtime = statSync(pluginScript).mtimeMs;
-      const dstMtime = statSync(destScript).mtimeMs;
-      shouldCopy = srcMtime > dstMtime;
-    } catch {
-      shouldCopy = true;
-    }
+  let scriptNames;
+  try {
+    scriptNames = readdirSync(sourceDir).filter(
+      (name) => name === "edc" || name.endsWith(".sh"),
+    );
+  } catch {
+    return;
   }
 
-  if (shouldCopy) {
+  for (const scriptName of scriptNames) {
+    const pluginScript = join(sourceDir, scriptName);
+    const destScript = join(destDir, scriptName);
+    if (!shouldCopyFile(pluginScript, destScript)) continue;
+
     try {
       mkdirSync(destDir, { recursive: true });
       copyFileSync(pluginScript, destScript);
       chmodSync(destScript, 0o755);
     } catch (err) {
       process.stderr.write(
-        `[edc] WARNING: could not install edc-review.sh: ${err.message}\n`,
+        `[edc] WARNING: could not install ${scriptName}: ${err.message}\n`,
+      );
+    }
+  }
+}
+
+function installPrivatePromptBundles(projectRoot, pluginRoot) {
+  const bundleRoots = [join(pluginRoot, "prompt-bundles"), join(pluginRoot, "skills")];
+  const destRoot = join(projectRoot, ".edc", "skills");
+
+  for (const bundleRoot of bundleRoots) {
+    if (!existsSync(bundleRoot)) continue;
+    let bundleNames;
+    try {
+      bundleNames = readdirSync(bundleRoot).filter((name) =>
+        existsSync(join(bundleRoot, name, "SKILL.md")),
+      );
+    } catch {
+      continue;
+    }
+
+    for (const bundleName of bundleNames) {
+      copyTreeIfStale(join(bundleRoot, bundleName), join(destRoot, bundleName));
+    }
+  }
+}
+
+function copyTreeIfStale(sourceDir, destDir) {
+  let entries;
+  try {
+    entries = readdirSync(sourceDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const src = join(sourceDir, entry.name);
+    const dst = join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyTreeIfStale(src, dst);
+      continue;
+    }
+    if (!entry.isFile() || !shouldCopyFile(src, dst)) continue;
+
+    try {
+      mkdirSync(destDir, { recursive: true });
+      copyFileSync(src, dst);
+    } catch (err) {
+      process.stderr.write(
+        `[edc] WARNING: could not install prompt bundle file ${entry.name}: ${err.message}\n`,
       );
     }
   }

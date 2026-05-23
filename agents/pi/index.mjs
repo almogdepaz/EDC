@@ -2,12 +2,13 @@
  * EDC extension for pi (https://github.com/mariozechner/pi).
  *
  * Mirrors the Claude Code plugin:
- *   - registers slash commands (/edc-build, /edc-update, /edc-audit,
- *     /edc-run-review, /edc-doctor, /edc-review)
+ *   - registers user-facing slash commands (/edc-build, /edc-update,
+ *     /edc-run-review, /edc-doctor)
  *   - on session_start: installs the orchestrator script into the project
  *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
+ *   - exposes only human-facing skills (edc-review, edc-audit)
  *
  * Mode is controlled by edc-context/manifest.json's `policy.defaultMode`
  * ("advisory" | "inject"), same as for Claude Code.
@@ -43,12 +44,6 @@ const COMMANDS = [
     file: "edc-update.md",
   },
   {
-    name: "edc-audit",
-    description:
-      "Identify overengineering, bloat, and duplication via context audit",
-    file: "edc-audit.md",
-  },
-  {
     name: "edc-run-review",
     description: "Differential code review using codebase context",
     file: "edc-run-review.md",
@@ -58,13 +53,9 @@ const COMMANDS = [
     description: "Validate the context tree, manifest, and routing coverage",
     file: "edc-doctor.md",
   },
-  {
-    name: "edc-review",
-    description:
-      "Internal — single-module review (used by the orchestrator)",
-    file: "edc-review.md",
-  },
 ];
+
+const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
 
 /**
  * Strip YAML frontmatter from a markdown command file and return the body.
@@ -97,8 +88,11 @@ export default async function edcExtension(pi) {
   // -- skills ---------------------------------------------------------------
   pi.on("resources_discover", async () => {
     const skillsDir = join(PLUGIN_ROOT, "skills");
-    if (!existsSync(skillsDir)) return {};
-    return { skillPaths: [skillsDir] };
+    const skillPaths = VISIBLE_SKILLS.map((name) => join(skillsDir, name)).filter(
+      (path) => existsSync(join(path, "SKILL.md")),
+    );
+    if (skillPaths.length === 0) return {};
+    return { skillPaths };
   });
 
   // -- session start --------------------------------------------------------
@@ -157,7 +151,7 @@ export default async function edcExtension(pi) {
       description: cmd.description,
       handler: async (args, ctx) => {
         const prompt = renderCommandPrompt(cmd.file, args);
-        await ctx.sendUserMessage(prompt);
+        await pi.sendUserMessage(prompt);
       },
     });
   }

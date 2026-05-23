@@ -1,9 +1,9 @@
 ---
-name: edc-context
+name: edc-module-context-impl
 description: Enables ultra-granular, line-by-line code analysis to build deep architectural context for any codebase.
 ---
 
-# Deep Context Builder Skill (Ultra-Granular Pure Context Mode)
+# Module Context Methodology (Ultra-Granular Pure Context Mode)
 
 ## 1. Purpose
 

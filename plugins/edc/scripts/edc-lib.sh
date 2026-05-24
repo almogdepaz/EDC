@@ -143,6 +143,32 @@ ensure_codex_exec_home() {
   trap cleanup_codex_exec_home EXIT
 }
 
+edc_require_agent_cli() {
+  case "$EDC_AGENT_CLI" in
+    claude)
+      command -v claude > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
+      ;;
+    cursor)
+      command -v cursor > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
+      ;;
+    codex)
+      command -v codex > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
+      ensure_codex_exec_home || exit 1
+      ;;
+    pi)
+      command -v pi > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
+      ;;
+    *)
+      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
+      exit 2
+      ;;
+  esac
+}
+
 # ── stream filter ────────────────────────────────────────────────────────────
 
 # stream_filter: read NDJSON from agent CLI output and print human-readable

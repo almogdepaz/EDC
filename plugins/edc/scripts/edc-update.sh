@@ -16,13 +16,13 @@
 #        10 (partial / malformed)   → REFUSE: "run edc-build to rebuild"
 #        12 (v1 layout)             → already printed migration hint, exit
 #   4. auto-detect base if --base not given (git merge-base with main/master)
-#   5. spawn ONE update subprocess via edc_spawn (claude/cursor/codex).
+#   5. spawn ONE update subprocess via edc_spawn (claude/cursor/codex/pi).
 #      Skill internally re-runs git diff + edc-route.sh against the same
 #      base, refreshes affected modules + reports + manifest.
 #   6. validate via edc-doctor.sh — non-zero doctor → update failed
 #
 # Usage:
-#   EDC_AGENT_CLI=claude bash edc-update.sh [--base <ref>] [--ignore <glob>]...
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-update.sh [--base <ref>] [--ignore <glob>]...
 
 set -euo pipefail
 
@@ -68,7 +68,7 @@ CODEX_EXEC_HOME_OWNED=0
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex> edc-update.sh \
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-update.sh \
     [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 EOF
   exit 2
@@ -91,7 +91,7 @@ ERROR: no ${EDC_CONTEXT_DIR}/ to update.
 
 Run a full build first:
 
-  /edc:edc-build      # or: edc build --agent <claude|cursor|codex>
+  /edc:edc-build      # or: edc build --agent <claude|cursor|codex|pi>
 EOF
       return 1
       ;;
@@ -155,25 +155,7 @@ update_main() {
     esac
   done
 
-  case "$EDC_AGENT_CLI" in
-    claude)
-      command -v claude > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
-      ;;
-    cursor)
-      command -v cursor > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
-      ;;
-    codex)
-      command -v codex > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
-      ensure_codex_exec_home
-      ;;
-    *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
-      exit 2
-      ;;
-  esac
+  edc_require_agent_cli
 
   # Preflight: shell decides whether the on-disk state is updateable.
   preflight_check || exit 1

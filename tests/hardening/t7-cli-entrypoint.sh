@@ -180,6 +180,20 @@ else
   exit 1
 fi
 
+# Repos with an existing manifest default to policy.defaultMode. Advisory mode
+# must not block non-Claude backends from reaching the deterministic review
+# orchestrator.
+mkdir -p "$PROJECT/edc-context"
+printf '{"policy":{"defaultMode":"advisory"}}\n' > "$PROJECT/edc-context/manifest.json"
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli review --agent pi HEAD --base main --ignore generated/**)
+if [ "$(cat "$CAPTURE/review/agent")" = "pi" ]; then
+  echo "PASS: review allows pi with manifest advisory mode"
+else
+  echo "FAIL: pi review was blocked before orchestrator dispatch"
+  exit 1
+fi
+
 if [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ]; then
   echo "PASS: review invokes repo edc-review.sh"
 else

@@ -295,29 +295,7 @@ verify_mode() {
 # Set EDC_AGENT_CLI=claude|cursor|codex|pi before invoking.
 
 auto_mode() {
-  case "$EDC_AGENT_CLI" in
-    claude)
-      command -v claude > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
-      ;;
-    cursor)
-      command -v cursor > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
-      ;;
-    codex)
-      command -v codex > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
-      ensure_codex_exec_home || exit 1
-      ;;
-    pi)
-      command -v pi > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
-      ;;
-    *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
-      exit 2
-      ;;
-  esac
+  edc_require_agent_cli
 
   local target="$1"; shift
   local extra_args=("$@")

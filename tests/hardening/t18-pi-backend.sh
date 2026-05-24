@@ -22,9 +22,10 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-update-impl .edc/skills/edc-review
+  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review .edc/skills/edc-audit
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
+  printf '## Complexity\n' > edc-context/reports/complexity.md
   printf '# Core\n\n## Files\n' > edc-context/modules/core.md
   cat > edc-context/manifest.json <<EOF
 {
@@ -36,8 +37,10 @@ setup_repo() {
   ]
 }
 EOF
+  printf 'BUILD_SKILL_MARKER\n' > .edc/skills/edc-build-impl/SKILL.md
   printf 'UPDATE_SKILL_MARKER\n' > .edc/skills/edc-update-impl/SKILL.md
   printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
+  printf 'AUDIT_SKILL_MARKER\n' > .edc/skills/edc-audit/SKILL.md
   printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
   printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
   printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md
@@ -60,11 +63,26 @@ for arg in "$@"; do
     @*) prompt="$(cat "${arg#@}")" ;;
   esac
 done
-if printf '%s' "$prompt" | grep -q 'UPDATE_SKILL_MARKER'; then
+write_context() {
   head=$(git rev-parse HEAD)
-  tmp=$(mktemp)
-  jq --arg head "$head" '.sourceCommit = $head' edc-context/manifest.json > "$tmp"
-  mv "$tmp" edc-context/manifest.json
+  mkdir -p edc-context/modules edc-context/reports
+  printf '# Repo\n\n## Module Map\n' > edc-context/index.md
+  printf '# Core\n\n## Files\n' > edc-context/modules/core.md
+  printf '## Issues\n' > edc-context/reports/issues.md
+  printf '## Complexity\n' > edc-context/reports/complexity.md
+  printf '# Agents\n\n## Context\n' > AGENTS.md
+  cat > edc-context/manifest.json <<EOF
+{"schemaVersion":2,"sourceCommit":"$head","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"core","priority":10,"doc":"edc-context/modules/core.md","match":{"prefixes":["src/"]}}]}
+EOF
+}
+if printf '%s' "$prompt" | grep -q 'BUILD_SKILL_MARKER'; then
+  write_context
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
+  printf '{"type":"result","is_error":false,"result":"ok"}\n'
+  exit 0
+fi
+if printf '%s' "$prompt" | grep -q 'UPDATE_SKILL_MARKER'; then
+  write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
   printf '{"type":"result","is_error":false,"result":"ok"}\n'
   exit 0
@@ -73,6 +91,14 @@ if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
   mkdir -p edc-context/review-tasks
   printf '## Summary\n\nmock pi review\n' > edc-context/review-tasks/report-core.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
+  printf '{"type":"result","is_error":false,"result":"ok"}\n'
+  exit 0
+fi
+if printf '%s' "$prompt" | grep -q 'AUDIT_SKILL_MARKER'; then
+  mkdir -p edc-context/reports
+  printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
+  printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
   printf '{"type":"result","is_error":false,"result":"ok"}\n'
   exit 0
 fi
@@ -99,6 +125,33 @@ if [ -f pi-calls.log ] && grep -q -- '--mode json' pi-calls.log && grep -q -- '-
 else
   check "18.2: pi backend uses json clean-slate CLI mode" 0
   cat pi-calls.log 2>/dev/null || true
+fi
+
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >update.out 2>update.err
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' update.out; then
+  check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 1
+else
+  check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 0
+  cat update.out update.err
+fi
+
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-audit.sh" >audit.out 2>audit.err
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Audit reports:' audit.out; then
+  check "18.4: EDC_AGENT_CLI=pi runs audit orchestrator" 1
+else
+  check "18.4: EDC_AGENT_CLI=pi runs audit orchestrator" 0
+  cat audit.out audit.err
+fi
+
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-build.sh" --force >build.out 2>build.err
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Build OK' build.out; then
+  check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 1
+else
+  check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 0
+  cat build.out build.err
 fi
 
 echo

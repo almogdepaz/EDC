@@ -98,10 +98,17 @@ validate_context_mode() {
 enforce_agent_context_mode() {
   local agent="$1" mode="$2"
   [ -n "$mode" ] || return 0
-  if [ "$agent" != "claude" ]; then
-    echo "edc: $agent/$mode not yet implemented" >&2
-    exit 2
-  fi
+  case "$mode" in
+    advisory)
+      return 0
+      ;;
+    inject)
+      if [ "$agent" != "claude" ]; then
+        echo "edc: $agent/$mode not yet implemented" >&2
+        exit 2
+      fi
+      ;;
+  esac
 }
 
 build_cmd() {

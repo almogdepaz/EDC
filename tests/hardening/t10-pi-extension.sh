@@ -242,9 +242,22 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
-  // 6. tool_call injects context for a routed file
+  // 6. tool_call extends bash timeout for long-running edc orchestrators
   const tc = calls.events.find(e => e.event === "tool_call");
   const fakeCtx = { cwd, sessionManager: { getSessionId: () => sid } };
+  const edcBashEvent = {
+    type: "tool_call",
+    toolCallId: "bash-edc",
+    toolName: "bash",
+    input: { command: "export EDC_AGENT_CLI=pi\nbash .edc/scripts/edc-review.sh --base main", timeout: 1200 },
+  };
+  await tc.handler(edcBashEvent, fakeCtx);
+  if (edcBashEvent.input.timeout < 7200) {
+    console.log("EDC_BASH_TIMEOUT_FAIL:" + JSON.stringify(edcBashEvent.input));
+    process.exit(1);
+  }
+
+  // 7. tool_call injects context for a routed file
   const messagesBeforeToolCall = calls.messages.length;
   await tc.handler(
     { type: "tool_call", toolCallId: "x", toolName: "edit", input: { file_path: "src/foo.ts" } },
@@ -254,7 +267,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("INJECT_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
-  // 7. duplicate tool_call for the same module → no second injection
+  // 8. duplicate tool_call for the same module → no second injection
   await tc.handler(
     { type: "tool_call", toolCallId: "y", toolName: "edit", input: { file_path: "src/bar.ts" } },
     fakeCtx

@@ -57,6 +57,7 @@ const COMMANDS = [
 ];
 
 const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
+const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 
 /**
  * Strip YAML frontmatter from a markdown command file and return the body.
@@ -146,6 +147,21 @@ function reviewSkipsContextPrompt(args) {
   return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
 }
 
+function isEdcOrchestratorCommand(command) {
+  return /(?:^|[\s"'])\.edc\/scripts\/edc-(?:build|update|review|audit|doctor)\.sh(?:[\s"']|$)/.test(command)
+    || /\$HOME\/\.edc\/scripts\/edc-(?:build|update|review|audit|doctor)\.sh(?:[\s"']|$)/.test(command);
+}
+
+function extendEdcBashTimeout(event) {
+  const command = event?.input?.command;
+  if (typeof command !== "string" || !isEdcOrchestratorCommand(command)) return;
+
+  const currentTimeout = Number(event.input.timeout || 0);
+  if (!Number.isFinite(currentTimeout) || currentTimeout < EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS) {
+    event.input.timeout = EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS;
+  }
+}
+
 async function shouldProceedWithReview(args, ctx) {
   if (reviewSkipsContextPrompt(args)) return true;
 
@@ -214,6 +230,10 @@ export default async function edcExtension(pi) {
     // Only intercept file-touching tools.
     const t = String(event.toolName || "").toLowerCase();
     if (t !== "bash" && t !== "edit" && t !== "write") return;
+
+    if (t === "bash") {
+      extendEdcBashTimeout(event);
+    }
 
     let sessionId;
     try {

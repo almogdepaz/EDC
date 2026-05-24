@@ -47,6 +47,7 @@ exports_check=$(node --input-type=module -e '
       "installOrchestratorScript",
       "buildSessionStartContent",
       "buildToolCallInjection",
+      "getContextFreshness",
       "normalizePath",
       "routeFileSync"
     ];
@@ -91,7 +92,7 @@ SESSION_ID="t10-$$-$(date +%s%N 2>/dev/null || date +%s)"
 wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module -e '
   const cwd = process.env.EDC_TEST_CWD;
   const sid = process.env.EDC_TEST_SID;
-  const calls = { commands: [], events: [], messages: [], userMessages: [] };
+  const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [] };
   const fakePi = {
     on: (event, handler) => { calls.events.push({ event, handler }); },
     registerCommand: (name, opts) => { calls.commands.push({ name, opts }); },
@@ -117,6 +118,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   for (const want of ["resources_discover","session_start","tool_call"]) {
     if (!evs.includes(want)) { console.log("MISSING_EVENT:" + want); process.exit(1); }
   }
+  const fs = await import("node:fs");
+  const childProcess = await import("node:child_process");
+
   // 3. command handlers delegate command prompts back into the active pi session
   const runReview = calls.commands.find(c => c.name === "edc-run-review");
   await runReview.opts.handler("HEAD --base main --ignore-context", { cwd });
@@ -128,6 +132,78 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("COMMAND_BODY_FAIL:" + calls.userMessages[0].slice(0, 120));
     process.exit(1);
   }
+
+  // 3b. /edc-run-review -h shows help directly instead of launching an agent turn
+  const userMessagesAfterCommand = calls.userMessages.length;
+  await runReview.opts.handler("-h", { cwd });
+  if (calls.userMessages.length !== userMessagesAfterCommand) {
+    console.log("HELP_LAUNCHED_AGENT:" + JSON.stringify(calls.userMessages));
+    process.exit(1);
+  }
+  if (!calls.messages.at(-1)?.content?.includes("Usage: /edc-run-review")) {
+    console.log("HELP_MESSAGE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+
+  // 3c. no args default to HEAD, but missing context prompts before auto-build
+  const missingDir = `${cwd}/missing-context`;
+  fs.mkdirSync(missingDir, { recursive: true });
+  await runReview.opts.handler("", {
+    cwd: missingDir,
+    ui: { confirm: async (title, message) => {
+      calls.confirmations.push({ title, message });
+      return true;
+    } },
+  });
+  if (!calls.confirmations.at(-1)?.message?.includes("missing")) {
+    console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
+    process.exit(1);
+  }
+  if (!calls.userMessages.at(-1)?.includes("**Arguments:** HEAD")) {
+    console.log("DEFAULT_HEAD_FAIL:" + JSON.stringify(calls.userMessages.at(-1)));
+    process.exit(1);
+  }
+
+  // 3d. declining stale/missing context stops and teaches explicit no-context modes
+  const staleDir = `${cwd}/stale-context`;
+  fs.mkdirSync(`${staleDir}/edc-context`, { recursive: true });
+  fs.writeFileSync(`${staleDir}/file.txt`, "x\n");
+  childProcess.execFileSync("git", ["init"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
+  fs.writeFileSync(`${staleDir}/edc-context/index.md`, "# Repo\n## Modules\n");
+  fs.writeFileSync(`${staleDir}/edc-context/manifest.json`, JSON.stringify({
+    schemaVersion: 2,
+    policy: { defaultMode: "inject" },
+    sourceCommit: "0000000000000000000000000000000000000000",
+    modules: [],
+  }));
+  const userMessagesBeforeDecline = calls.userMessages.length;
+  await runReview.opts.handler("HEAD --base main", {
+    cwd: staleDir,
+    ui: { confirm: async (title, message) => {
+      calls.confirmations.push({ title, message });
+      return false;
+    } },
+  });
+  if (calls.userMessages.length !== userMessagesBeforeDecline) {
+    console.log("DECLINE_LAUNCHED_AGENT:" + JSON.stringify(calls.userMessages.slice(userMessagesBeforeDecline)));
+    process.exit(1);
+  }
+  const declineMessage = calls.messages.at(-1)?.content || "";
+  if (!declineMessage.includes("--no-context-refresh") || !declineMessage.includes("--ignore-context")) {
+    console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+
+  // 3e. explicit no-context modes skip the prompt
+  const confirmationsBeforeSkip = calls.confirmations.length;
+  await runReview.opts.handler("--no-context-refresh", { cwd: missingDir });
+  if (calls.confirmations.length !== confirmationsBeforeSkip || !calls.userMessages.at(-1)?.includes("--no-context-refresh")) {
+    console.log("NO_CONTEXT_REFRESH_SKIP_FAIL:" + JSON.stringify({ confirmations: calls.confirmations, last: calls.userMessages.at(-1) }));
+    process.exit(1);
+  }
+
   // 4. resources_discover returns only human-facing review/audit skills
   const rd = calls.events.find(e => e.event === "resources_discover");
   const r = await rd.handler({ type: "resources_discover", cwd, reason: "startup" }, { cwd });
@@ -144,12 +220,12 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 5. session_start injects edc-context/index.md when mode=inject
   const ss = calls.events.find(e => e.event === "session_start");
   const ssCtx = { cwd, sessionManager: { getSessionId: () => sid } };
+  const messagesBeforeSessionStart = calls.messages.length;
   await ss.handler({ type: "session_start", cwd, reason: "startup" }, ssCtx);
-  if (calls.messages.length !== 1 || !calls.messages[0].content.includes("Module Map")) {
+  if (calls.messages.length !== messagesBeforeSessionStart + 1 || !calls.messages.at(-1).content.includes("Module Map")) {
     console.log("SESSION_START_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
-  const fs = await import("node:fs");
   for (const requiredScript of ["edc-review.sh", "edc-lib.sh", "edc-assert-fresh.sh", "edc-recover-context.sh"]) {
     if (!fs.existsSync(`${cwd}/.edc/scripts/${requiredScript}`)) {
       console.log("SCRIPT_INSTALL_FAIL:" + requiredScript);
@@ -165,11 +241,12 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 6. tool_call injects context for a routed file
   const tc = calls.events.find(e => e.event === "tool_call");
   const fakeCtx = { cwd, sessionManager: { getSessionId: () => sid } };
+  const messagesBeforeToolCall = calls.messages.length;
   await tc.handler(
     { type: "tool_call", toolCallId: "x", toolName: "edit", input: { file_path: "src/foo.ts" } },
     fakeCtx
   );
-  if (calls.messages.length !== 2 || !calls.messages[1].content.includes("src-mod")) {
+  if (calls.messages.length !== messagesBeforeToolCall + 1 || !calls.messages.at(-1).content.includes("src-mod")) {
     console.log("INJECT_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
@@ -178,7 +255,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     { type: "tool_call", toolCallId: "y", toolName: "edit", input: { file_path: "src/bar.ts" } },
     fakeCtx
   );
-  if (calls.messages.length !== 2) {
+  if (calls.messages.length !== messagesBeforeToolCall + 1) {
     console.log("DEDUP_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }

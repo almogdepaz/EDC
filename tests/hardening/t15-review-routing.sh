@@ -17,6 +17,16 @@ SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-review.sh"
 check_init --file
 trap 'check_cleanup' EXIT
 
+# ── 15.0: review orchestrator help flag ─────────────────────────────────────
+out=$(bash "$SCRIPT" -h 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Usage: edc-review.sh"; then
+  check "15.0: edc-review.sh -h prints usage" 1
+else
+  check "15.0: edc-review.sh -h prints usage" 0
+  echo "$out"
+fi
+
 setup_repo() {
   local dir="$1"
   cd "$dir"

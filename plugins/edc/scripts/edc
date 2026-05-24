@@ -8,7 +8,7 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
   edc [--model <slug>] audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor

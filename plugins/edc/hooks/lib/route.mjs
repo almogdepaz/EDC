@@ -95,6 +95,40 @@ function checkStaleness(projectRoot, manifest) {
   }
 }
 
+export function getContextFreshness(projectRoot) {
+  const manifest = loadManifest(projectRoot);
+  if (!manifest) return { state: "missing", reason: "manifest" };
+
+  const indexPath = join(projectRoot, EDC_INDEX_REL);
+  if (!existsSync(indexPath)) return { state: "missing", reason: "index" };
+
+  try {
+    if (!/^##/m.test(readFileSync(indexPath, "utf-8"))) {
+      return { state: "missing", reason: "index-structure" };
+    }
+  } catch {
+    return { state: "missing", reason: "index" };
+  }
+
+  let headCommit;
+  try {
+    headCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: projectRoot,
+      timeout: 3000,
+      encoding: "utf-8",
+    }).trim();
+  } catch {
+    return { state: "unknown", reason: "git" };
+  }
+
+  const sourceCommit = manifest.sourceCommit || "";
+  if (sourceCommit !== headCommit) {
+    return { state: "stale", sourceCommit, headCommit };
+  }
+
+  return { state: "fresh", sourceCommit, headCommit };
+}
+
 // --- file path extraction ---
 
 /**

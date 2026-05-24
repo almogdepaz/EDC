@@ -794,6 +794,26 @@ TASK
   done <<< "$sorted_modules"
 }
 
+review_usage() {
+  cat <<EOF
+Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+                                                     full review pipeline (default)
+       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]
+                                                     shorthand for HEAD --base <ref>
+       edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]
+                                                     shorthand for PR review without full URL
+       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh
+       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context
+       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)
+       edc-review.sh --build --pr <number-or-url> [--ignore-context|--no-context-refresh]
+                                                     generate PR review tasks without full URL
+       edc-review.sh --check-context
+       edc-review.sh --consolidate
+       edc-review.sh --verify
+EOF
+}
+
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
@@ -856,23 +876,13 @@ case "${1:-}" in
   --verify)
     verify_mode
     ;;
+  -h|--help)
+    review_usage
+    exit 0
+    ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     full review pipeline (default)" >&2
-    echo "       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     shorthand for HEAD --base <ref>" >&2
-    echo "       edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     shorthand for PR review without full URL" >&2
-    echo "       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh" >&2
-    echo "       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context" >&2
-    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
-    echo "       edc-review.sh --build --pr <number-or-url> [--ignore-context|--no-context-refresh]" >&2
-    echo "                                                     generate PR review tasks without full URL" >&2
-    echo "       edc-review.sh --check-context" >&2
-    echo "       edc-review.sh --consolidate" >&2
-    echo "       edc-review.sh --verify" >&2
+    review_usage >&2
     exit 2
     ;;
   --*)

@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildSessionStartContent,
   buildToolCallInjection,
+  getContextFreshness,
   installOrchestratorScript,
 } from "../../plugins/edc/hooks/lib/route.mjs";
 
@@ -81,6 +82,78 @@ function renderCommandPrompt(file, args) {
     return `Command "${file}" is missing from the plugin bundle. Cannot proceed.`;
   }
   return body.replace(/\$ARGUMENTS/g, args || "");
+}
+
+function tokenizeArgs(args) {
+  return String(args || "").trim().split(/\s+/).filter(Boolean);
+}
+
+function isHelpRequest(args) {
+  return tokenizeArgs(args).some((arg) => arg === "-h" || arg === "--help");
+}
+
+function renderCommandHelp(cmd) {
+  if (cmd.name === "edc-run-review") {
+    return [
+      "Usage: /edc-run-review [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--no-context-refresh|--ignore-context]",
+      "",
+      "Runs differential review. With no arguments, reviews `HEAD`.",
+      "",
+      "Context behavior:",
+      "- default: prompt before building/updating stale or missing EDC context, then run review if accepted",
+      "- `--no-context-refresh`: do not build/update; use existing context if usable, otherwise review directly",
+      "- `--ignore-context`: pure direct review; do not read prebuilt `edc-context/`",
+    ].join("\n");
+  }
+
+  return [`Usage: /${cmd.name}`, "", cmd.description].join("\n");
+}
+
+function sendInfo(pi, customType, content) {
+  pi.sendMessage({ customType, content, display: true });
+}
+
+function reviewArgsWithDefaultTarget(args) {
+  const trimmed = String(args || "").trim();
+  return trimmed || "HEAD";
+}
+
+function reviewSkipsContextPrompt(args) {
+  const tokens = tokenizeArgs(args);
+  return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
+}
+
+async function shouldProceedWithReview(args, ctx) {
+  if (reviewSkipsContextPrompt(args)) return true;
+
+  const freshness = getContextFreshness(ctx.cwd);
+  if (freshness.state !== "missing" && freshness.state !== "stale") return true;
+
+  if (!ctx.ui?.confirm || ctx.hasUI === false) return true;
+
+  const isMissing = freshness.state === "missing";
+  const action = isMissing ? "build" : "update";
+  const detail = isMissing
+    ? "edc-context is missing or incomplete."
+    : `edc-context is stale (built at ${String(freshness.sourceCommit || "unknown").slice(0, 8)}, HEAD is ${String(freshness.headCommit || "unknown").slice(0, 8)}).`;
+
+  return ctx.ui.confirm(
+    `EDC context ${freshness.state}`,
+    `${detail}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses.`,
+  );
+}
+
+function reviewDeclinedMessage(args) {
+  const renderedArgs = reviewArgsWithDefaultTarget(args);
+  return [
+    "Review cancelled; EDC context was not refreshed.",
+    "",
+    "To review anyway without refreshing context, run:",
+    `\`/edc-run-review ${renderedArgs} --no-context-refresh\``,
+    "",
+    "For a pure direct review that ignores any existing `edc-context/`, run:",
+    `\`/edc-run-review ${renderedArgs} --ignore-context\``,
+  ].join("\n");
 }
 
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
@@ -150,7 +223,22 @@ export default async function edcExtension(pi) {
     pi.registerCommand(cmd.name, {
       description: cmd.description,
       handler: async (args, ctx) => {
-        const prompt = renderCommandPrompt(cmd.file, args);
+        if (isHelpRequest(args)) {
+          sendInfo(pi, "edc-command-help", renderCommandHelp(cmd));
+          return;
+        }
+
+        let renderedArgs = args || "";
+        if (cmd.name === "edc-run-review") {
+          renderedArgs = reviewArgsWithDefaultTarget(args);
+          const proceed = await shouldProceedWithReview(renderedArgs, ctx);
+          if (!proceed) {
+            sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
+            return;
+          }
+        }
+
+        const prompt = renderCommandPrompt(cmd.file, renderedArgs);
         await pi.sendUserMessage(prompt);
       },
     });

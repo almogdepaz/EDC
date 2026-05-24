@@ -84,6 +84,29 @@ function renderCommandPrompt(file, args) {
   return body.replace(/\$ARGUMENTS/g, args || "");
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function currentPiModelSlug(ctx) {
+  const provider = ctx?.model?.provider;
+  const id = ctx?.model?.id;
+  if (typeof provider !== "string" || typeof id !== "string") return "";
+  return `${provider}/${id}`;
+}
+
+function injectPiBackendEnv(prompt, ctx) {
+  const lines = ["export EDC_AGENT_CLI=pi"];
+  const model = currentPiModelSlug(ctx);
+  if (model) lines.push(`export EDC_PI_MODEL=${shellQuote(model)}`);
+
+  const injection = `${lines.join("\n")}\n`;
+  if (prompt.includes("```bash\n")) {
+    return prompt.replace("```bash\n", `\`\`\`bash\n${injection}`);
+  }
+  return `${injection}\n${prompt}`;
+}
+
 function tokenizeArgs(args) {
   return String(args || "").trim().split(/\s+/).filter(Boolean);
 }
@@ -158,6 +181,8 @@ function reviewDeclinedMessage(args) {
 
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
 export default async function edcExtension(pi) {
+  if (process.env.EDC_PI_SUBPROCESS === "1") return;
+
   // -- skills ---------------------------------------------------------------
   pi.on("resources_discover", async () => {
     const skillsDir = join(PLUGIN_ROOT, "skills");
@@ -238,7 +263,7 @@ export default async function edcExtension(pi) {
           }
         }
 
-        const prompt = renderCommandPrompt(cmd.file, renderedArgs);
+        const prompt = injectPiBackendEnv(renderCommandPrompt(cmd.file, renderedArgs), ctx);
         await pi.sendUserMessage(prompt);
       },
     });

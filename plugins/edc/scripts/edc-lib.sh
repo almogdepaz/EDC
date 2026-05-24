@@ -178,6 +178,23 @@ stream_filter() {
       printf '%s\n' "$err" >&2
       continue
     fi
+    # Pi JSON mode: stream text deltas and tool starts from AgentSession events.
+    pi_msg=$(printf '%s' "$line" | jq -r '
+      if .type == "message_update" and (.assistantMessageEvent.type // "") == "text_delta" then (.assistantMessageEvent.delta // "")
+      elif .type == "tool_execution_start" then "→ \(.toolName)(\((.args // {}) | to_entries[0] | .value // "" | tostring | .[0:80]))"
+      else empty end' 2>/dev/null)
+    if [ -n "$pi_msg" ]; then
+      printf '%s\n' "$pi_msg"
+      continue
+    fi
+    pi_err=$(printf '%s' "$line" | jq -r '
+      if .type == "tool_execution_end" and .isError == true then "ERROR (subprocess): \(.result.content // .result.error // .result // "tool execution failed" | tostring)"
+      elif .type == "auto_retry_end" and .success == false then "ERROR (subprocess): \(.finalError // "provider request failed")"
+      else empty end' 2>/dev/null)
+    if [ -n "$pi_err" ]; then
+      printf '%s\n' "$pi_err" >&2
+      continue
+    fi
     # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
     # agent_message carries the assistant text the user needs to see; without
     # this handler the pipeline runs silent under real `codex exec`.
@@ -223,7 +240,7 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
         # Only set if not already exported by the caller.
         if [ -z "${!key:-}" ]; then
           export "$key=$val"
@@ -243,6 +260,9 @@ resolve_model_for_phase() {
     edc-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
     *)           __resolved="${EDC_BUILD_MODEL:-}" ;;
   esac
+  if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
+    __resolved="${EDC_PI_MODEL:-}"
+  fi
   # Refuse to assign back into our own locals — caller must pass a unique var name.
   case "$__outvar" in
     __phase|__outvar|__resolved)
@@ -474,6 +494,32 @@ edc_spawn() {
         rc=${PIPESTATUS[0]}
       fi
       ;;
+    pi)
+      local effective_prompt_file="" cleanup_prompt_file=0
+      if [ -n "$prompt_file" ]; then
+        effective_prompt_file="$prompt_file"
+      else
+        effective_prompt_file=$(mktemp "${TMPDIR:-/tmp}/edc-pi-prompt-$$.XXXXXX.md") \
+          || { echo "ERROR: could not create pi prompt file" >&2; return 1; }
+        printf '%s' "$prompt" > "$effective_prompt_file"
+        cleanup_prompt_file=1
+      fi
+      local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
+      [ -n "$model" ] && cmd+=(--model "$model")
+      cmd+=("@$effective_prompt_file")
+      if [ -n "$capture" ]; then
+        run_with_timeout "$timeout_secs" "$phase" \
+          "${cmd[@]}" < /dev/null \
+          | tee "$capture" | stream_filter
+        rc=${PIPESTATUS[0]}
+      else
+        run_with_timeout "$timeout_secs" "$phase" \
+          "${cmd[@]}" < /dev/null \
+          | stream_filter
+        rc=${PIPESTATUS[0]}
+      fi
+      [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
+      ;;
     *)
       echo "ERROR: edc_spawn: unknown EDC_AGENT_CLI=$EDC_AGENT_CLI" >&2
       [ -n "$capture" ] && rm -f "$capture"
@@ -558,6 +604,9 @@ _find_skill_for_agent() {
       ;;
     codex)
       find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".codex/skills" "$HOME/.codex/skills"
+      ;;
+    pi)
+      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".pi/skills" "$HOME/.pi/agent/skills"
       ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
@@ -701,7 +750,7 @@ resolve_prompt() {
 
   # Validate agent up front so error messages are uniform.
   case "$EDC_AGENT_CLI" in
-    claude|cursor|codex) ;;
+    claude|cursor|codex|pi) ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2

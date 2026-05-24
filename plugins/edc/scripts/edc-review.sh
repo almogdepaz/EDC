@@ -292,7 +292,7 @@ verify_mode() {
 # Self-driving pipeline: detect context state, spawn agent subprocesses for each
 # phase, verify outputs, consolidate, verify. The orchestrator script owns every
 # decision; the spawned agents have one job each.
-# Set EDC_AGENT_CLI=claude|cursor|codex before invoking.
+# Set EDC_AGENT_CLI=claude|cursor|codex|pi before invoking.
 
 auto_mode() {
   case "$EDC_AGENT_CLI" in
@@ -309,8 +309,12 @@ auto_mode() {
         || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
       ensure_codex_exec_home || exit 1
       ;;
+    pi)
+      command -v pi > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
+      ;;
     *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
+      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
       exit 2
       ;;
   esac

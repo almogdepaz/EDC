@@ -123,13 +123,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
 
   // 3. command handlers delegate command prompts back into the active pi session
   const runReview = calls.commands.find(c => c.name === "edc-run-review");
-  await runReview.opts.handler("HEAD --base main --ignore-context", { cwd });
+  await runReview.opts.handler("HEAD --base main --ignore-context", { cwd, model: { provider: "test-provider", id: "test-model" } });
   if (calls.userMessages.length !== 1 || !calls.userMessages[0].includes("HEAD --base main --ignore-context")) {
     console.log("COMMAND_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
   }
   if (!calls.userMessages[0].includes("edc-review.sh")) {
     console.log("COMMAND_BODY_FAIL:" + calls.userMessages[0].slice(0, 120));
+    process.exit(1);
+  }
+  if (!calls.userMessages[0].includes("export EDC_AGENT_CLI=pi") || !calls.userMessages[0].includes("export EDC_PI_MODEL=") || !calls.userMessages[0].includes("test-provider/test-model")) {
+    console.log("PI_ENV_FAIL:" + calls.userMessages[0].slice(0, 240));
     process.exit(1);
   }
 
@@ -170,7 +174,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${staleDir}/file.txt`, "x\n");
   childProcess.execFileSync("git", ["init"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
-  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
   fs.writeFileSync(`${staleDir}/edc-context/index.md`, "# Repo\n## Modules\n");
   fs.writeFileSync(`${staleDir}/edc-context/manifest.json`, JSON.stringify({
     schemaVersion: 2,

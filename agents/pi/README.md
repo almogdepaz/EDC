@@ -35,7 +35,7 @@ After install, pi exposes:
 
 Pi intentionally exposes only user-facing pipeline commands. The single-module review worker and standalone audit pipeline are not registered as TUI commands; use the `edc-review` / `edc-audit` skills for methodology-only work.
 
-The command bodies are read verbatim from `plugins/edc/commands/*.md`, so behavior matches the Claude Code plugin where those commands are shared.
+The command bodies are read from `plugins/edc/commands/*.md`. The Pi adapter injects `EDC_AGENT_CLI=pi` before running them, so spawned build/update/review subprocesses use the `pi` CLI and whatever provider/model Pi is configured to use instead of falling back to Claude CLI.
 
 Review examples:
 
@@ -53,7 +53,7 @@ Review examples:
 /edc-run-review --pr 147 --base main --no-context-refresh
 ```
 
-`--ignore-context` is the hard skip: it neither creates/updates context nor reads existing `edc-context/`. `--no-context-refresh` only disables creation/update; stale or existing context may still be used.
+`--ignore-context` is the hard skip: it neither creates/updates context nor reads existing `edc-context/`. `--no-context-refresh` only disables creation/update; stale or existing context may still be used. Without either flag, Pi prompts before refreshing stale/missing context; declining cancels the review and shows these explicit flags.
 
 ## Skills
 

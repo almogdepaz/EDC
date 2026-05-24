@@ -6,10 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  edc [--model <slug>] build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
-  edc [--model <slug>] update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-  edc [--model <slug>] audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
@@ -50,8 +50,11 @@ require_command() {
     codex)
       command -v codex > /dev/null 2>&1 || die "--agent codex specified but 'codex' not found on PATH"
       ;;
+    pi)
+      command -v pi > /dev/null 2>&1 || die "--agent pi specified but 'pi' not found on PATH"
+      ;;
     *)
-      die "--agent must be one of: claude, cursor, codex"
+      die "--agent must be one of: claude, cursor, codex, pi"
       ;;
   esac
 }

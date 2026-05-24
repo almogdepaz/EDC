@@ -43,6 +43,7 @@ EOF
 make_fake_agent claude
 make_fake_agent cursor
 make_fake_agent codex
+make_fake_agent pi
 
 # Fake bash captures `bash <orchestrator-script> [args...]` invocations,
 # bucketed by which orchestrator was invoked. Lets us assert that plugins/edc/scripts/edc
@@ -118,7 +119,7 @@ fi
 # edc-spawn.sh and is exercised end-to-end by t6/t7-codex with real mocks.
 # Here we only check that plugins/edc/scripts/edc routes to the orchestrator correctly.
 
-for agent in claude cursor codex; do
+for agent in claude cursor codex pi; do
   rm -rf "$CAPTURE/build"
   run_cli build "$PROJECT" --agent "$agent" --force --ignore generated/**
 
@@ -147,7 +148,7 @@ for agent in claude cursor codex; do
     exit 1
   fi
 done
-echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex)"
+echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex/pi)"
 
 # ── 7f: review delegates to local orchestrator with EDC_AGENT_CLI ─────────────
 mkdir -p "$PROJECT/.edc/scripts"

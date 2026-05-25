@@ -6,9 +6,9 @@
 #   - agents/pi/index.mjs parses (node --check)
 #   - shared lib (plugins/edc/hooks/lib/route.mjs) exports the expected names
 #   - the extension factory runs end-to-end against a fake ExtensionAPI
-#     (registers user-facing pi commands, exposes only human-useful skills,
-#     subscribes to the expected events, and buildToolCallInjection produces
-#     module docs through the same code path)
+#     (registers only the interactive /edc command, exposes only human-useful
+#     skills, subscribes to the expected events, and buildToolCallInjection
+#     produces module docs through the same code path)
 set -uo pipefail
 
 PASS=0
@@ -105,7 +105,7 @@ SESSION_ID="t10-$$-$(date +%s%N 2>/dev/null || date +%s)"
 wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module -e '
   const cwd = process.env.EDC_TEST_CWD;
   const sid = process.env.EDC_TEST_SID;
-  const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [] };
+  const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [], selections: [] };
   const fakePi = {
     on: (event, handler) => { calls.events.push({ event, handler }); },
     registerCommand: (name, opts) => { calls.commands.push({ name, opts }); },
@@ -114,16 +114,15 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   };
   const factory = (await import("./agents/pi/index.mjs")).default;
   await factory(fakePi);
-  // 1. only user-facing pi commands are registered
-  const expectedCmds = ["edc-build","edc-update","edc-run-review","edc-doctor","edc-review-status"];
+
+  // 1. only the interactive /edc command is registered.
   const got = calls.commands.map(c => c.name).sort();
-  if (JSON.stringify(got) !== JSON.stringify(expectedCmds.sort())) {
+  if (JSON.stringify(got) !== JSON.stringify(["edc"])) {
     console.log("CMDS_FAIL:" + got.join(","));
     process.exit(1);
   }
-  for (const hidden of ["edc-audit", "edc-review"]) {
-    if (got.includes(hidden)) { console.log("HIDDEN_CMD_FAIL:" + hidden); process.exit(1); }
-  }
+  const edcCmd = calls.commands.find(c => c.name === "edc");
+
   // 2. expected events subscribed
   const evs = calls.events.map(e => e.event).sort();
   // Note: session_shutdown is no longer needed — dedup is file-based, not
@@ -131,41 +130,50 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   for (const want of ["resources_discover","session_start","tool_call"]) {
     if (!evs.includes(want)) { console.log("MISSING_EVENT:" + want); process.exit(1); }
   }
+
   const fs = await import("node:fs");
   const childProcess = await import("node:child_process");
 
-  // 3. pi command handlers execute deterministic scripts directly, without a model turn
-  const runReview = calls.commands.find(c => c.name === "edc-run-review");
   fs.mkdirSync(`${cwd}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
-  fs.chmodSync(`${cwd}/.edc/scripts/edc-review.sh`, 0o755);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-doctor.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "doctor args: $* agent=$EDC_AGENT_CLI"\n`);
+  for (const script of ["edc-review.sh", "edc-build.sh", "edc-update.sh", "edc-audit.sh", "edc-doctor.sh"]) {
+    fs.chmodSync(`${cwd}/.edc/scripts/${script}`, 0o755);
+  }
 
-  await runReview.opts.handler("HEAD --base main --ignore-context", { cwd, model: { provider: "test-provider", id: "test-model" } });
+  const menuCtx = (selection, extra = {}) => ({
+    cwd,
+    hasUI: true,
+    model: { provider: "test-provider", id: "test-model" },
+    ui: {
+      select: async (title, items) => {
+        calls.selections.push({ title, items });
+        return selection;
+      },
+      confirm: extra.confirm || (async (title, message) => {
+        calls.confirmations.push({ title, message });
+        return true;
+      }),
+    },
+  });
+
+  // 3. /edc menu review starts background review against HEAD --base main.
+  await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
   if (calls.userMessages.length !== 0) {
     console.log("DIRECT_COMMAND_USED_MODEL_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
   }
   const firstBackgroundMessage = calls.messages.at(-1)?.content || "";
-  if (!firstBackgroundMessage.includes("Background review started.") || !firstBackgroundMessage.includes("EDC context: fresh.") || !firstBackgroundMessage.includes("Check progress: `/edc-review-status`") || firstBackgroundMessage.includes("latest") || firstBackgroundMessage.includes(`/edc-review-status 20`)) {
-    console.log("ALWAYS_BACKGROUND_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
+  if (!firstBackgroundMessage.includes("Background review started.") || !firstBackgroundMessage.includes("EDC context: fresh.") || !firstBackgroundMessage.includes("Check progress: `/edc` → Review status.")) {
+    console.log("MENU_REVIEW_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
     process.exit(1);
   }
-
-  const buildCmd = calls.commands.find(c => c.name === "edc-build");
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
-  fs.chmodSync(`${cwd}/.edc/scripts/edc-build.sh`, 0o755);
-  await buildCmd.opts.handler("--force", { cwd });
-  const buildMessage = calls.messages.at(-1)?.content || "";
-  if (!buildMessage.includes("edc build completed") || !buildMessage.includes("build args: --force agent=pi")) {
-    console.log("BUILD_DIRECT_FAIL:" + JSON.stringify(buildMessage));
-    process.exit(1);
-  }
-
-  // 3b. background review is checkable by /edc-review-status
-  const backgroundMessage = firstBackgroundMessage;
-  const runId = (backgroundMessage.match(/Run ID: (\S+)/) || [])[1];
+  const runId = (firstBackgroundMessage.match(/Run ID: (\S+)/) || [])[1];
   if (!runId) {
-    console.log("RUN_ID_FAIL:" + backgroundMessage);
+    console.log("RUN_ID_FAIL:" + firstBackgroundMessage);
     process.exit(1);
   }
   const statusFile = `${cwd}/edc-context/runs/${runId}/status.txt`;
@@ -173,63 +181,90 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     if (fs.existsSync(statusFile) && fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  const statusCmd = calls.commands.find(c => c.name === "edc-review-status");
-  await statusCmd.opts.handler("", { cwd });
+  const reviewArgs = fs.readFileSync(`${cwd}/edc-context/runs/${runId}/args.txt`, "utf-8").trim().split(/\n/).join(" ");
+  if (reviewArgs !== "HEAD --base main") {
+    console.log("MENU_REVIEW_ARGS_FAIL:" + reviewArgs);
+    process.exit(1);
+  }
+
+  // 3b. /edc menu can show status for latest run.
+  await edcCmd.opts.handler("", menuCtx("Review status"));
   const statusMessage = calls.messages.at(-1)?.content || "";
   if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md")) {
     console.log("STATUS_CMD_FAIL:" + JSON.stringify(statusMessage));
     process.exit(1);
   }
 
+  // 3c. single-active-run guard refuses duplicate background reviews.
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=success", "status=running"));
-  await runReview.opts.handler("HEAD --base main --ignore-context", { cwd });
+  await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
   const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
-  if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc-review-status`")) {
+  if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Review status.")) {
     console.log("ALREADY_RUNNING_FAIL:" + JSON.stringify(alreadyRunningMessage));
     process.exit(1);
   }
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
-  await statusCmd.opts.handler("latest", { cwd });
-  const latestStatusMessage = calls.messages.at(-1)?.content || "";
-  if (!latestStatusMessage.includes("status: success")) {
-    console.log("LATEST_STATUS_FAIL:" + JSON.stringify(latestStatusMessage));
+
+  // 3d. direct script actions route from menu.
+  await edcCmd.opts.handler("", menuCtx("Build context"));
+  if (!calls.messages.at(-1)?.content?.includes("build args:  agent=pi")) {
+    console.log("BUILD_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+  await edcCmd.opts.handler("", menuCtx("Update context from main"));
+  if (!calls.messages.at(-1)?.content?.includes("update args: --base main agent=pi")) {
+    console.log("UPDATE_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+  await edcCmd.opts.handler("", menuCtx("Audit complexity"));
+  if (!calls.messages.at(-1)?.content?.includes("audit args:  agent=pi")) {
+    console.log("AUDIT_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+  await edcCmd.opts.handler("", menuCtx("Doctor / validate context"));
+  if (!calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
+    console.log("DOCTOR_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }
 
-  // 3c. /edc-run-review -h shows help directly instead of launching an agent turn
+  // 3e. /edc -h shows help directly instead of launching an agent turn.
   const userMessagesAfterCommand = calls.userMessages.length;
-  await runReview.opts.handler("-h", { cwd });
+  await edcCmd.opts.handler("-h", { cwd });
   if (calls.userMessages.length !== userMessagesAfterCommand) {
     console.log("HELP_LAUNCHED_AGENT:" + JSON.stringify(calls.userMessages));
     process.exit(1);
   }
-  if (!calls.messages.at(-1)?.content?.includes("Usage: /edc-run-review")) {
+  if (!calls.messages.at(-1)?.content?.includes("Usage: /edc")) {
     console.log("HELP_MESSAGE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }
 
-  // 3d. no args default to HEAD, but missing context prompts before auto-build
+  // 3f. /edc is interactive-only; non-interactive contexts are told to use the CLI.
+  await edcCmd.opts.handler("", { cwd, hasUI: false });
+  const nonInteractiveMessage = calls.messages.at(-1)?.content || "";
+  if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review --agent pi HEAD --base main")) {
+    console.log("NON_INTERACTIVE_FAIL:" + JSON.stringify(nonInteractiveMessage));
+    process.exit(1);
+  }
+
+  // 3g. missing context prompts before auto-build and carries state into start message.
   const missingDir = `${cwd}/missing-context`;
   fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
-  const confirmationsBeforeMissing = calls.confirmations.length;
-  await runReview.opts.handler("", {
+  const missingCtx = {
     cwd: missingDir,
-    ui: { confirm: async (title, message) => {
-      calls.confirmations.push({ title, message });
-      return true;
-    } },
-  });
-  if (calls.confirmations.length !== confirmationsBeforeMissing + 1) {
-    console.log("UNEXPECTED_REVIEW_MODE_PROMPT:" + JSON.stringify(calls.confirmations.slice(confirmationsBeforeMissing)));
-    process.exit(1);
-  }
+    hasUI: true,
+    ui: {
+      select: async () => "Review current branch vs main",
+      confirm: async (title, message) => {
+        calls.confirmations.push({ title, message });
+        return true;
+      },
+    },
+  };
+  await edcCmd.opts.handler("", missingCtx);
   if (!calls.confirmations.at(-1)?.message?.includes("EDC context: missing/incomplete") || !calls.confirmations.at(-1)?.message?.includes("reason: manifest")) {
-    console.log("MISSING_MODE_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
-    process.exit(1);
-  }
-  if (!calls.confirmations.at(-1)?.message?.includes("missing")) {
     console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
     process.exit(1);
   }
@@ -238,19 +273,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("MISSING_BACKGROUND_CONTEXT_FAIL:" + JSON.stringify(missingBackgroundMessage));
     process.exit(1);
   }
-  await new Promise(resolve => setTimeout(resolve, 100));
-  const missingRuns = fs.readdirSync(`${missingDir}/edc-context/runs`);
-  if (missingRuns.length !== 1) {
-    console.log("DEFAULT_HEAD_RUN_FAIL:" + JSON.stringify(missingRuns));
-    process.exit(1);
-  }
-  const missingArgs = fs.readFileSync(`${missingDir}/edc-context/runs/${missingRuns[0]}/args.txt`, "utf-8").trim();
-  if (missingArgs !== "HEAD") {
-    console.log("DEFAULT_HEAD_FAIL:" + missingArgs);
-    process.exit(1);
-  }
 
-  // 3e. declining stale/missing context stops and teaches explicit no-context modes
+  // 3h. declining stale/missing context stops and teaches explicit CLI no-context modes.
   const staleDir = `${cwd}/stale-context`;
   fs.mkdirSync(`${staleDir}/edc-context`, { recursive: true });
   fs.writeFileSync(`${staleDir}/file.txt`, "x\n");
@@ -268,37 +292,25 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     sourceCommit,
     modules: [],
   }));
-  const userMessagesBeforeDecline = calls.userMessages.length;
-  await runReview.opts.handler("HEAD --base main", {
+  await edcCmd.opts.handler("", {
     cwd: staleDir,
-    ui: { confirm: async (title, message) => {
-      calls.confirmations.push({ title, message });
-      return false;
-    } },
+    hasUI: true,
+    ui: {
+      select: async () => "Review current branch vs main",
+      confirm: async (title, message) => {
+        calls.confirmations.push({ title, message });
+        return false;
+      },
+    },
   });
-  if (calls.userMessages.length !== userMessagesBeforeDecline) {
-    console.log("DECLINE_LAUNCHED_AGENT:" + JSON.stringify(calls.userMessages.slice(userMessagesBeforeDecline)));
-    process.exit(1);
-  }
   const stalePrompt = calls.confirmations.at(-1)?.message || "";
   if (!stalePrompt.includes("EDC context: stale") || !stalePrompt.includes("behind by: 1 commit")) {
     console.log("STALE_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
     process.exit(1);
   }
   const declineMessage = calls.messages.at(-1)?.content || "";
-  if (!declineMessage.includes("--no-context-refresh") || !declineMessage.includes("--ignore-context")) {
+  if (!declineMessage.includes("edc review --agent pi HEAD --base main --no-context-refresh") || !declineMessage.includes("--ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
-    process.exit(1);
-  }
-
-  // 3f. explicit no-context modes skip the prompt
-  const confirmationsBeforeSkip = calls.confirmations.length;
-  await runReview.opts.handler("--no-context-refresh", { cwd: missingDir });
-  await new Promise(resolve => setTimeout(resolve, 100));
-  const skipRuns = fs.readdirSync(`${missingDir}/edc-context/runs`).sort();
-  const skipArgs = fs.readFileSync(`${missingDir}/edc-context/runs/${skipRuns.at(-1)}/args.txt`, "utf-8").trim();
-  if (calls.confirmations.length !== confirmationsBeforeSkip || skipArgs !== "--no-context-refresh") {
-    console.log("NO_CONTEXT_REFRESH_SKIP_FAIL:" + JSON.stringify({ confirmations: calls.confirmations, args: skipArgs }));
     process.exit(1);
   }
 
@@ -315,6 +327,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("SKILLS_FAIL:" + skillNames.join(","));
     process.exit(1);
   }
+
   // 5. session_start injects edc-context/index.md when mode=inject
   const ss = calls.events.find(e => e.event === "session_start");
   const ssCtx = { cwd, sessionManager: { getSessionId: () => sid } };
@@ -336,6 +349,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
+
   // 6. tool_call extends bash timeout for long-running edc orchestrators
   const tc = calls.events.find(e => e.event === "tool_call");
   const fakeCtx = { cwd, sessionManager: { getSessionId: () => sid } };
@@ -361,6 +375,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("INJECT_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
+
   // 8. duplicate tool_call for the same module → no second injection
   await tc.handler(
     { type: "tool_call", toolCallId: "y", toolName: "edit", input: { file_path: "src/bar.ts" } },
@@ -370,6 +385,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("DEDUP_FAIL:" + JSON.stringify(calls.messages));
     process.exit(1);
   }
+
   console.log("OK");
 ' 2>&1)
 

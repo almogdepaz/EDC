@@ -2,8 +2,7 @@
  * EDC extension for pi (https://github.com/mariozechner/pi).
  *
  * Mirrors the Claude Code plugin:
- *   - registers user-facing slash commands (/edc-build, /edc-update,
- *     /edc-run-review, /edc-doctor)
+ *   - registers one interactive /edc menu for user-facing workflows
  *   - on session_start: installs the orchestrator script into the project
  *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
@@ -31,66 +30,24 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // agents/pi/index.mjs → repo root → plugins/edc
 const PLUGIN_ROOT = join(__dirname, "..", "..", "plugins", "edc");
-const COMMANDS_DIR = join(PLUGIN_ROOT, "commands");
+const EDC_COMMAND = {
+  name: "edc",
+  description: "Open the interactive EDC menu",
+};
 
-const COMMANDS = [
-  {
-    name: "edc-build",
-    description:
-      "Build or update deep architectural context for the codebase",
-    file: "edc-build.md",
-  },
-  {
-    name: "edc-update",
-    description: "Incrementally update edc-context/ from branch changes",
-    file: "edc-update.md",
-  },
-  {
-    name: "edc-run-review",
-    description: "Differential code review using codebase context",
-    file: "edc-run-review.md",
-  },
-  {
-    name: "edc-doctor",
-    description: "Validate the context tree, manifest, and routing coverage",
-    file: "edc-doctor.md",
-  },
-  {
-    name: "edc-review-status",
-    description: "Check a background EDC review run",
-    file: null,
-  },
-];
+const EDC_MENU = {
+  REVIEW_MAIN: "Review current branch vs main",
+  REVIEW_STATUS: "Review status",
+  BUILD: "Build context",
+  UPDATE_MAIN: "Update context from main",
+  AUDIT: "Audit complexity",
+  DOCTOR: "Doctor / validate context",
+  CANCEL: "Cancel",
+};
 
 const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
-
-/**
- * Strip YAML frontmatter from a markdown command file and return the body.
- * Returns null if the file is missing.
- */
-function readCommandBody(file) {
-  const path = join(COMMANDS_DIR, file);
-  if (!existsSync(path)) return null;
-  const raw = readFileSync(path, "utf-8");
-  if (!raw.startsWith("---")) return raw;
-  const end = raw.indexOf("\n---", 3);
-  if (end < 0) return raw;
-  return raw.slice(end + 4).replace(/^\s*\n/, "");
-}
-
-/**
- * Build the prompt the agent receives when /<name> is invoked.
- * The original commands reference $ARGUMENTS — substitute with user-supplied args.
- */
-function renderCommandPrompt(file, args) {
-  const body = readCommandBody(file);
-  if (!body) {
-    return `Command "${file}" is missing from the plugin bundle. Cannot proceed.`;
-  }
-  return body.replace(/\$ARGUMENTS/g, args || "");
-}
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -103,19 +60,6 @@ function currentPiModelSlug(ctx) {
   return `${provider}/${id}`;
 }
 
-function injectPiBackendEnv(prompt, ctx, options = {}) {
-  const lines = ["export EDC_AGENT_CLI=pi"];
-  const model = currentPiModelSlug(ctx);
-  if (model) lines.push(`export EDC_PI_MODEL=${shellQuote(model)}`);
-  if (options.reviewRunMode) lines.push(`export EDC_REVIEW_RUN_MODE=${shellQuote(options.reviewRunMode)}`);
-
-  const injection = `${lines.join("\n")}\n`;
-  if (prompt.includes("```bash\n")) {
-    return prompt.replace("```bash\n", `\`\`\`bash\n${injection}`);
-  }
-  return `${injection}\n${prompt}`;
-}
-
 function tokenizeArgs(args) {
   return String(args || "").trim().split(/\s+/).filter(Boolean);
 }
@@ -124,36 +68,25 @@ function isHelpRequest(args) {
   return tokenizeArgs(args).some((arg) => arg === "-h" || arg === "--help");
 }
 
-function renderCommandHelp(cmd) {
-  if (cmd.name === "edc-review-status") {
-    return [
-      "Usage: /edc-review-status [run-id|latest]",
-      "",
-      "Shows status for a background review started by /edc-run-review.",
-      "With no argument, checks the latest run.",
-    ].join("\n");
-  }
-
-  if (cmd.name === "edc-run-review") {
-    return [
-      "Usage: /edc-run-review [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--no-context-refresh|--ignore-context]",
-      "",
-      "Runs differential review. With no arguments, reviews `HEAD`.",
-      "",
-      "Run mode:",
-      "- pi always starts review in the background so long reviews do not block the session",
-      "- use /edc-review-status to check progress and final review path",
-      "- only one background review may run per repo at a time",
-      "",
-      "Context behavior:",
-      "- default: prompt before building/updating stale or missing EDC context, then run review if accepted",
-      "- context build/update can take several minutes",
-      "- `--no-context-refresh`: do not build/update; use existing context if usable, otherwise review directly",
-      "- `--ignore-context`: pure direct review; do not read prebuilt `edc-context/`",
-    ].join("\n");
-  }
-
-  return [`Usage: /${cmd.name}`, "", cmd.description].join("\n");
+function renderEdcHelp() {
+  return [
+    "Usage: /edc",
+    "",
+    "Opens the interactive EDC menu.",
+    "",
+    "Menu actions:",
+    "- Review current branch vs main",
+    "- Review status",
+    "- Build context",
+    "- Update context from main",
+    "- Audit complexity",
+    "- Doctor / validate context",
+    "",
+    "Non-interactive use is intentionally CLI-only:",
+    "  edc review --agent pi HEAD --base main",
+    "  edc build --agent pi",
+    "  edc update --agent pi --base main",
+  ].join("\n");
 }
 
 function sendInfo(pi, customType, content) {
@@ -248,27 +181,12 @@ function reviewDeclinedMessage(args) {
   return [
     "Review cancelled; EDC context was not refreshed.",
     "",
-    "To review anyway without refreshing context, run:",
-    `\`/edc-run-review ${renderedArgs} --no-context-refresh\``,
+    "To review anyway without refreshing context, use the CLI:",
+    `\`edc review --agent pi ${renderedArgs} --no-context-refresh\``,
     "",
     "For a pure direct review that ignores any existing `edc-context/`, run:",
-    `\`/edc-run-review ${renderedArgs} --ignore-context\``,
+    `\`edc review --agent pi ${renderedArgs} --ignore-context\``,
   ].join("\n");
-}
-
-function commandScriptName(commandName) {
-  switch (commandName) {
-    case "edc-build":
-      return "edc-build.sh";
-    case "edc-update":
-      return "edc-update.sh";
-    case "edc-run-review":
-      return "edc-review.sh";
-    case "edc-doctor":
-      return "edc-doctor.sh";
-    default:
-      return "";
-  }
 }
 
 function findEdcScript(cwd, scriptName) {
@@ -374,29 +292,8 @@ function combinedOutput(result) {
   return tailText(`${result.stdout || ""}${result.stderr || ""}`.trim());
 }
 
-function extractFinalReviewPath(output) {
-  let consolidated = "";
-  let verified = "";
-  for (const line of output.split(/\r?\n/)) {
-    if (line.startsWith("Consolidated: ")) consolidated = line.slice("Consolidated: ".length).trim();
-    if (line.startsWith("Verified: ")) verified = line.slice("Verified: ".length).trim();
-  }
-  return verified || consolidated;
-}
-
 function renderDirectCommandResult(commandName, args, result) {
   const output = combinedOutput(result);
-  if (commandName === "edc-run-review") {
-    const finalReview = extractFinalReviewPath(`${result.stdout}\n${result.stderr}`);
-    if (result.code === 0 && finalReview) {
-      return [`Review complete.`, "", `Final review: ${finalReview}`].join("\n");
-    }
-    if (result.code === 0) {
-      return [`Review completed, but no final review path was found.`, "", "Output:", "```text", output, "```"].join("\n");
-    }
-    return [`Review failed with exit code ${result.code}.`, "", "Output:", "```text", output, "```"].join("\n");
-  }
-
   const label = commandName.replace(/^edc-/, "edc ");
   if (result.code === 0) {
     return [`${label} completed.`, output ? "" : "", output ? "```text" : "", output, output ? "```" : ""].filter(Boolean).join("\n");
@@ -532,7 +429,7 @@ function renderReviewStatus(args, cwd) {
   } else if (status.status === "failed") {
     lines.push("Review failed. Open the log above for details.");
   } else {
-    lines.push("Still running. Check again with `/edc-review-status`.");
+    lines.push("Still running. Check again with `/edc` → Review status.");
   }
   return lines.join("\n");
 }
@@ -548,7 +445,7 @@ function backgroundReviewStartedMessage(result, contextSummary = "") {
     `Log: ${result.logFile}`,
     `Status: ${result.statusFile}`,
     "",
-    "Check progress: `/edc-review-status`",
+    "Check progress: `/edc` → Review status.",
   ].filter((line) => line !== null).join("\n");
 }
 
@@ -559,8 +456,90 @@ function backgroundReviewAlreadyRunningMessage(result) {
     `Run ID: ${result.runId}`,
     result.status?.log ? `Log: ${result.status.log}` : "",
     "",
-    "Check progress: `/edc-review-status`",
+    "Check progress: `/edc` → Review status.",
   ].filter(Boolean).join("\n");
+}
+
+function interactiveOnlyMessage() {
+  return [
+    "/edc is interactive-only.",
+    "",
+    "Use the EDC CLI for non-interactive runs:",
+    "  edc review --agent pi HEAD --base main",
+    "  edc build --agent pi",
+    "  edc update --agent pi --base main",
+  ].join("\n");
+}
+
+async function runReviewAgainstMain(pi, ctx) {
+  const renderedArgs = "HEAD --base main";
+  const freshness = getContextFreshness(ctx.cwd);
+  const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
+  if (!proceed) {
+    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
+    return;
+  }
+
+  const result = startBackgroundReview(renderedArgs, ctx);
+  if (result.error) {
+    sendInfo(pi, "edc-review-background", result.error);
+  } else if (result.alreadyRunning) {
+    sendInfo(pi, "edc-review-background", backgroundReviewAlreadyRunningMessage(result));
+  } else {
+    sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result, reviewContextSummary(ctx, freshness)));
+  }
+}
+
+async function runScriptAction(pi, ctx, label, scriptName, args = "") {
+  sendInfo(pi, "edc-command-start", `Running ${label}...`);
+  const result = await runEdcScript(scriptName, args, ctx);
+  sendInfo(pi, "edc-command-result", renderDirectCommandResult(label, args, result));
+}
+
+async function handleEdcMenu(pi, args, ctx) {
+  if (isHelpRequest(args)) {
+    sendInfo(pi, "edc-command-help", renderEdcHelp());
+    return;
+  }
+
+  if (!ctx.hasUI || !ctx.ui?.select) {
+    sendInfo(pi, "edc-command-help", interactiveOnlyMessage());
+    return;
+  }
+
+  const choice = await ctx.ui.select("EDC", [
+    EDC_MENU.REVIEW_MAIN,
+    EDC_MENU.REVIEW_STATUS,
+    EDC_MENU.BUILD,
+    EDC_MENU.UPDATE_MAIN,
+    EDC_MENU.AUDIT,
+    EDC_MENU.DOCTOR,
+    EDC_MENU.CANCEL,
+  ]);
+
+  switch (choice) {
+    case EDC_MENU.REVIEW_MAIN:
+      await runReviewAgainstMain(pi, ctx);
+      break;
+    case EDC_MENU.REVIEW_STATUS:
+      sendInfo(pi, "edc-review-status", renderReviewStatus("", ctx.cwd));
+      break;
+    case EDC_MENU.BUILD:
+      await runScriptAction(pi, ctx, "edc build", "edc-build.sh");
+      break;
+    case EDC_MENU.UPDATE_MAIN:
+      await runScriptAction(pi, ctx, "edc update", "edc-update.sh", "--base main");
+      break;
+    case EDC_MENU.AUDIT:
+      await runScriptAction(pi, ctx, "edc audit", "edc-audit.sh");
+      break;
+    case EDC_MENU.DOCTOR:
+      await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");
+      break;
+    default:
+      sendInfo(pi, "edc-menu", "EDC menu cancelled.");
+      break;
+  }
 }
 
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
@@ -632,46 +611,10 @@ export default async function edcExtension(pi) {
   });
 
   // -- slash commands -------------------------------------------------------
-  for (const cmd of COMMANDS) {
-    pi.registerCommand(cmd.name, {
-      description: cmd.description,
-      handler: async (args, ctx) => {
-        if (isHelpRequest(args)) {
-          sendInfo(pi, "edc-command-help", renderCommandHelp(cmd));
-          return;
-        }
-
-        if (cmd.name === "edc-review-status") {
-          sendInfo(pi, "edc-review-status", renderReviewStatus(args, ctx.cwd));
-          return;
-        }
-
-        let renderedArgs = args || "";
-        if (cmd.name === "edc-run-review") {
-          renderedArgs = reviewArgsWithDefaultTarget(args);
-          const freshness = getContextFreshness(ctx.cwd);
-          const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
-          if (!proceed) {
-            sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
-            return;
-          }
-          const result = startBackgroundReview(renderedArgs, ctx);
-          if (result.error) {
-            sendInfo(pi, "edc-review-background", result.error);
-          } else if (result.alreadyRunning) {
-            sendInfo(pi, "edc-review-background", backgroundReviewAlreadyRunningMessage(result));
-          } else {
-            sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result, reviewContextSummary(ctx, freshness)));
-          }
-          return;
-        } else {
-          sendInfo(pi, "edc-command-start", `Running /${cmd.name}...`);
-        }
-
-        const scriptName = commandScriptName(cmd.name);
-        const result = await runEdcScript(scriptName, renderedArgs, ctx);
-        sendInfo(pi, "edc-command-result", renderDirectCommandResult(cmd.name, renderedArgs, result));
-      },
-    });
-  }
+  pi.registerCommand(EDC_COMMAND.name, {
+    description: EDC_COMMAND.description,
+    handler: async (args, ctx) => {
+      await handleEdcMenu(pi, args, ctx);
+    },
+  });
 }

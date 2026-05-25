@@ -141,9 +141,9 @@ function renderCommandHelp(cmd) {
       "Runs differential review. With no arguments, reviews `HEAD`.",
       "",
       "Run mode:",
-      "- pi prompts you to choose foreground or background before launching",
-      "- foreground streams progress here and blocks until the final review path is available",
-      "- background returns run id, pid, log path, and status path immediately",
+      "- pi always starts review in the background so long reviews do not block the session",
+      "- use /edc-review-status to check progress and final review path",
+      "- only one background review may run per repo at a time",
       "",
       "Context behavior:",
       "- default: prompt before building/updating stale or missing EDC context, then run review if accepted",
@@ -185,41 +185,61 @@ function extendEdcBashTimeout(event) {
   }
 }
 
-async function chooseReviewRunMode(ctx) {
-  if (!ctx.ui?.confirm || ctx.hasUI === false) return "foreground";
-
-  const foreground = await ctx.ui.confirm(
-    "EDC review run mode",
-    [
-      "Run review in foreground?",
-      "",
-      "Yes: foreground — stream progress here, block the session, return the final review path.",
-      "No: background — return immediately with run id, pid, log path, and status path.",
-      "",
-      "Warning: if EDC context is missing or stale, review may first build/update context and can take several minutes.",
-    ].join("\n"),
-  );
-
-  return foreground ? "foreground" : "background";
+function commitDistance(cwd, sourceCommit, headCommit) {
+  if (!sourceCommit || !headCommit) return "unknown";
+  try {
+    return execFileSync("git", ["rev-list", "--count", `${sourceCommit}..${headCommit}`], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf-8",
+    }).trim() || "0";
+  } catch {
+    return "unknown";
+  }
 }
 
-async function shouldProceedWithReview(args, ctx) {
+function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cwd)) {
+  switch (freshness.state) {
+    case "fresh":
+      return "EDC context: fresh.";
+    case "missing":
+      return [
+        "EDC context: missing/incomplete.",
+        `reason: ${freshness.reason || "unknown"}`,
+        "review will build context before reviewing unless you pass --no-context-refresh or --ignore-context.",
+      ].join("\n");
+    case "stale": {
+      const source = String(freshness.sourceCommit || "unknown");
+      const head = String(freshness.headCommit || "unknown");
+      const behind = commitDistance(ctx.cwd, freshness.sourceCommit, freshness.headCommit);
+      return [
+        "EDC context: stale.",
+        `built at: ${source.slice(0, 8)}`,
+        `HEAD: ${head.slice(0, 8)}`,
+        `behind by: ${behind} commit${behind === "1" ? "" : "s"}`,
+        "review will update context before reviewing unless you pass --no-context-refresh or --ignore-context.",
+      ].join("\n");
+    }
+    case "unknown":
+      return [`EDC context: unknown.`, `reason: ${freshness.reason || "unknown"}`].join("\n");
+    default:
+      return `EDC context: ${freshness.state || "unknown"}.`;
+  }
+}
+
+async function shouldProceedWithReview(args, ctx, freshness = getContextFreshness(ctx.cwd)) {
   if (reviewSkipsContextPrompt(args)) return true;
 
-  const freshness = getContextFreshness(ctx.cwd);
   if (freshness.state !== "missing" && freshness.state !== "stale") return true;
 
   if (!ctx.ui?.confirm || ctx.hasUI === false) return true;
 
   const isMissing = freshness.state === "missing";
   const action = isMissing ? "build" : "update";
-  const detail = isMissing
-    ? "edc-context is missing or incomplete."
-    : `edc-context is stale (built at ${String(freshness.sourceCommit || "unknown").slice(0, 8)}, HEAD is ${String(freshness.headCommit || "unknown").slice(0, 8)}).`;
 
   return ctx.ui.confirm(
     `EDC context ${freshness.state}`,
-    `${detail}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses and can take several minutes.`,
+    `${reviewContextSummary(ctx, freshness)}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses and can take several minutes.`,
   );
 }
 
@@ -384,7 +404,28 @@ function renderDirectCommandResult(commandName, args, result) {
   return [`${label} failed with exit code ${result.code}.`, "", "Output:", "```text", output, "```"].join("\n");
 }
 
+function runningReview(cwd) {
+  const runsDir = join(cwd, "edc-context", "runs");
+  if (!existsSync(runsDir)) return null;
+
+  const runIds = readdirSync(runsDir)
+    .filter((name) => existsSync(join(runsDir, name, "status.txt")))
+    .sort((a, b) => statSync(join(runsDir, b)).mtimeMs - statSync(join(runsDir, a)).mtimeMs);
+
+  for (const runId of runIds) {
+    const statusPath = join(runsDir, runId, "status.txt");
+    const status = parseStatus(readFileSync(statusPath, "utf-8"));
+    if (status.status === "running") return { runId, status };
+  }
+  return null;
+}
+
 function startBackgroundReview(args, ctx) {
+  const existing = runningReview(ctx.cwd);
+  if (existing) {
+    return { alreadyRunning: true, ...existing };
+  }
+
   const reviewScript = findEdcScript(ctx.cwd, "edc-review.sh");
   if (!reviewScript) {
     return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
@@ -491,23 +532,35 @@ function renderReviewStatus(args, cwd) {
   } else if (status.status === "failed") {
     lines.push("Review failed. Open the log above for details.");
   } else {
-    lines.push(`Still running. Check again with \`/edc-review-status ${runId}\`.`);
+    lines.push("Still running. Check again with `/edc-review-status`.");
   }
   return lines.join("\n");
 }
 
-function backgroundReviewStartedMessage(result) {
+function backgroundReviewStartedMessage(result, contextSummary = "") {
   return [
     "Background review started.",
+    contextSummary ? "" : null,
+    contextSummary || null,
     "",
     `Run ID: ${result.runId}`,
     `PID: ${result.pid}`,
     `Log: ${result.logFile}`,
     `Status: ${result.statusFile}`,
     "",
-    `Check progress: \`/edc-review-status ${result.runId}\``,
-    "Latest run: `/edc-review-status latest`",
-  ].join("\n");
+    "Check progress: `/edc-review-status`",
+  ].filter((line) => line !== null).join("\n");
+}
+
+function backgroundReviewAlreadyRunningMessage(result) {
+  return [
+    "A background EDC review is already running for this repo.",
+    "",
+    `Run ID: ${result.runId}`,
+    result.status?.log ? `Log: ${result.status.log}` : "",
+    "",
+    "Check progress: `/edc-review-status`",
+  ].filter(Boolean).join("\n");
 }
 
 /** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
@@ -596,22 +649,21 @@ export default async function edcExtension(pi) {
         let renderedArgs = args || "";
         if (cmd.name === "edc-run-review") {
           renderedArgs = reviewArgsWithDefaultTarget(args);
-          const reviewRunMode = await chooseReviewRunMode(ctx);
-          const proceed = await shouldProceedWithReview(renderedArgs, ctx);
+          const freshness = getContextFreshness(ctx.cwd);
+          const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
           if (!proceed) {
             sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
             return;
           }
-          if (reviewRunMode === "background") {
-            const result = startBackgroundReview(renderedArgs, ctx);
-            if (result.error) {
-              sendInfo(pi, "edc-review-background", result.error);
-            } else {
-              sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result));
-            }
-            return;
+          const result = startBackgroundReview(renderedArgs, ctx);
+          if (result.error) {
+            sendInfo(pi, "edc-review-background", result.error);
+          } else if (result.alreadyRunning) {
+            sendInfo(pi, "edc-review-background", backgroundReviewAlreadyRunningMessage(result));
+          } else {
+            sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result, reviewContextSummary(ctx, freshness)));
           }
-          sendInfo(pi, "edc-command-start", "Running EDC review in foreground. If context is missing or stale, context build/update can take several minutes.");
+          return;
         } else {
           sendInfo(pi, "edc-command-start", `Running /${cmd.name}...`);
         }

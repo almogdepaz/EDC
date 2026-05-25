@@ -84,6 +84,19 @@ cat > "$TMP/edc-context/index.md" <<'EOF'
 ## Module Map
 - src-mod
 EOF
+(
+  cd "$TMP" || exit 1
+  git init -q
+  git config user.email a@example.com
+  git config user.name a
+  touch tracked.txt
+  git add tracked.txt
+  git -c commit.gpgsign=false commit -q -m init
+  head_commit=$(git rev-parse HEAD)
+  tmp_manifest=$(mktemp)
+  jq --arg head "$head_commit" '.sourceCommit = $head' edc-context/manifest.json > "$tmp_manifest"
+  mv "$tmp_manifest" edc-context/manifest.json
+)
 
 # Unique session id per test run so the file-based dedup (rooted in os.tmpdir())
 # doesn't poison a re-run.
@@ -124,7 +137,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3. pi command handlers execute deterministic scripts directly, without a model turn
   const runReview = calls.commands.find(c => c.name === "edc-run-review");
   fs.mkdirSync(`${cwd}/.edc/scripts`, { recursive: true });
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${cwd}/.edc/scripts/edc-review.sh`, 0o755);
 
   await runReview.opts.handler("HEAD --base main --ignore-context", { cwd, model: { provider: "test-provider", id: "test-model" } });
@@ -132,14 +145,14 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("DIRECT_COMMAND_USED_MODEL_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
   }
-  const foregroundMessage = calls.messages.at(-1)?.content || "";
-  if (!foregroundMessage.includes("Review complete.") || !foregroundMessage.includes("Final review: review-HEAD.md")) {
-    console.log("FOREGROUND_DIRECT_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
+  const firstBackgroundMessage = calls.messages.at(-1)?.content || "";
+  if (!firstBackgroundMessage.includes("Background review started.") || !firstBackgroundMessage.includes("EDC context: fresh.") || !firstBackgroundMessage.includes("Check progress: `/edc-review-status`") || firstBackgroundMessage.includes("latest") || firstBackgroundMessage.includes(`/edc-review-status 20`)) {
+    console.log("ALWAYS_BACKGROUND_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
     process.exit(1);
   }
 
   const buildCmd = calls.commands.find(c => c.name === "edc-build");
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.chmodSync(`${cwd}/.edc/scripts/edc-build.sh`, 0o755);
   await buildCmd.opts.handler("--force", { cwd });
   const buildMessage = calls.messages.at(-1)?.content || "";
@@ -148,26 +161,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3b. pi interactive choice launches background mode directly, without a model turn
-  const userMessagesBeforeBackground = calls.userMessages.length;
-  await runReview.opts.handler("HEAD --base main --ignore-context", {
-    cwd,
-    model: { provider: "test-provider", id: "test-model" },
-    ui: { confirm: async (title, message) => {
-      calls.confirmations.push({ title, message });
-      return false;
-    } },
-  });
-  const backgroundMessage = calls.messages.at(-1)?.content || "";
-  if (calls.userMessages.length !== userMessagesBeforeBackground || !backgroundMessage.includes("Background review started.") || !backgroundMessage.includes("/edc-review-status")) {
-    console.log("BACKGROUND_MODE_FAIL:" + JSON.stringify({ userMessages: calls.userMessages.slice(userMessagesBeforeBackground), backgroundMessage }));
-    process.exit(1);
-  }
-  const modePrompt = calls.confirmations.at(-1)?.message || "";
-  if (!modePrompt.includes("Yes: foreground") || !modePrompt.includes("No: background") || !modePrompt.includes("can take several minutes")) {
-    console.log("MODE_CONFIRM_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
-    process.exit(1);
-  }
+  // 3b. background review is checkable by /edc-review-status
+  const backgroundMessage = firstBackgroundMessage;
   const runId = (backgroundMessage.match(/Run ID: (\S+)/) || [])[1];
   if (!runId) {
     console.log("RUN_ID_FAIL:" + backgroundMessage);
@@ -179,10 +174,25 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   const statusCmd = calls.commands.find(c => c.name === "edc-review-status");
-  await statusCmd.opts.handler(runId, { cwd });
+  await statusCmd.opts.handler("", { cwd });
   const statusMessage = calls.messages.at(-1)?.content || "";
   if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md")) {
     console.log("STATUS_CMD_FAIL:" + JSON.stringify(statusMessage));
+    process.exit(1);
+  }
+
+  fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=success", "status=running"));
+  await runReview.opts.handler("HEAD --base main --ignore-context", { cwd });
+  const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
+  if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc-review-status`")) {
+    console.log("ALREADY_RUNNING_FAIL:" + JSON.stringify(alreadyRunningMessage));
+    process.exit(1);
+  }
+  fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
+  await statusCmd.opts.handler("latest", { cwd });
+  const latestStatusMessage = calls.messages.at(-1)?.content || "";
+  if (!latestStatusMessage.includes("status: success")) {
+    console.log("LATEST_STATUS_FAIL:" + JSON.stringify(latestStatusMessage));
     process.exit(1);
   }
 
@@ -203,6 +213,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
+  const confirmationsBeforeMissing = calls.confirmations.length;
   await runReview.opts.handler("", {
     cwd: missingDir,
     ui: { confirm: async (title, message) => {
@@ -210,12 +221,32 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       return true;
     } },
   });
+  if (calls.confirmations.length !== confirmationsBeforeMissing + 1) {
+    console.log("UNEXPECTED_REVIEW_MODE_PROMPT:" + JSON.stringify(calls.confirmations.slice(confirmationsBeforeMissing)));
+    process.exit(1);
+  }
+  if (!calls.confirmations.at(-1)?.message?.includes("EDC context: missing/incomplete") || !calls.confirmations.at(-1)?.message?.includes("reason: manifest")) {
+    console.log("MISSING_MODE_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
+    process.exit(1);
+  }
   if (!calls.confirmations.at(-1)?.message?.includes("missing")) {
     console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
     process.exit(1);
   }
-  if (fs.readFileSync(`${missingDir}/review-args.txt`, "utf-8").trim() !== "HEAD") {
-    console.log("DEFAULT_HEAD_FAIL:" + fs.readFileSync(`${missingDir}/review-args.txt`, "utf-8"));
+  const missingBackgroundMessage = calls.messages.at(-1)?.content || "";
+  if (!missingBackgroundMessage.includes("Background review started.") || !missingBackgroundMessage.includes("EDC context: missing/incomplete") || !missingBackgroundMessage.includes("reason: manifest")) {
+    console.log("MISSING_BACKGROUND_CONTEXT_FAIL:" + JSON.stringify(missingBackgroundMessage));
+    process.exit(1);
+  }
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const missingRuns = fs.readdirSync(`${missingDir}/edc-context/runs`);
+  if (missingRuns.length !== 1) {
+    console.log("DEFAULT_HEAD_RUN_FAIL:" + JSON.stringify(missingRuns));
+    process.exit(1);
+  }
+  const missingArgs = fs.readFileSync(`${missingDir}/edc-context/runs/${missingRuns[0]}/args.txt`, "utf-8").trim();
+  if (missingArgs !== "HEAD") {
+    console.log("DEFAULT_HEAD_FAIL:" + missingArgs);
     process.exit(1);
   }
 
@@ -226,11 +257,15 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   childProcess.execFileSync("git", ["init"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
+  const sourceCommit = childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: staleDir, encoding: "utf-8" }).trim();
+  fs.writeFileSync(`${staleDir}/file.txt`, "y\n");
+  childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "change"], { cwd: staleDir, stdio: "ignore" });
   fs.writeFileSync(`${staleDir}/edc-context/index.md`, "# Repo\n## Modules\n");
   fs.writeFileSync(`${staleDir}/edc-context/manifest.json`, JSON.stringify({
     schemaVersion: 2,
     policy: { defaultMode: "inject" },
-    sourceCommit: "0000000000000000000000000000000000000000",
+    sourceCommit,
     modules: [],
   }));
   const userMessagesBeforeDecline = calls.userMessages.length;
@@ -245,6 +280,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("DECLINE_LAUNCHED_AGENT:" + JSON.stringify(calls.userMessages.slice(userMessagesBeforeDecline)));
     process.exit(1);
   }
+  const stalePrompt = calls.confirmations.at(-1)?.message || "";
+  if (!stalePrompt.includes("EDC context: stale") || !stalePrompt.includes("behind by: 1 commit")) {
+    console.log("STALE_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
+    process.exit(1);
+  }
   const declineMessage = calls.messages.at(-1)?.content || "";
   if (!declineMessage.includes("--no-context-refresh") || !declineMessage.includes("--ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
@@ -254,8 +294,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3f. explicit no-context modes skip the prompt
   const confirmationsBeforeSkip = calls.confirmations.length;
   await runReview.opts.handler("--no-context-refresh", { cwd: missingDir });
-  if (calls.confirmations.length !== confirmationsBeforeSkip || fs.readFileSync(`${missingDir}/review-args.txt`, "utf-8").trim() !== "--no-context-refresh") {
-    console.log("NO_CONTEXT_REFRESH_SKIP_FAIL:" + JSON.stringify({ confirmations: calls.confirmations, args: fs.readFileSync(`${missingDir}/review-args.txt`, "utf-8") }));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const skipRuns = fs.readdirSync(`${missingDir}/edc-context/runs`).sort();
+  const skipArgs = fs.readFileSync(`${missingDir}/edc-context/runs/${skipRuns.at(-1)}/args.txt`, "utf-8").trim();
+  if (calls.confirmations.length !== confirmationsBeforeSkip || skipArgs !== "--no-context-refresh") {
+    console.log("NO_CONTEXT_REFRESH_SKIP_FAIL:" + JSON.stringify({ confirmations: calls.confirmations, args: skipArgs }));
     process.exit(1);
   }
 

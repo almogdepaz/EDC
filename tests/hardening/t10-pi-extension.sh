@@ -176,12 +176,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("RUN_ID_FAIL:" + firstBackgroundMessage);
     process.exit(1);
   }
-  const statusFile = `${cwd}/edc-context/runs/${runId}/status.txt`;
+  const statusFile = `${cwd}/.git/edc/status`;
+  const logFile = `${cwd}/.git/edc/review.log`;
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(statusFile) && fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  const reviewArgs = fs.readFileSync(`${cwd}/edc-context/runs/${runId}/args.txt`, "utf-8").trim().split(/\n/).join(" ");
+  if (!fs.existsSync(logFile) || !fs.readFileSync(logFile, "utf-8").includes("Verified: review-HEAD.md")) {
+    console.log("REVIEW_LOG_FAIL:" + (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf-8") : "missing"));
+    process.exit(1);
+  }
+  const reviewArgs = (fs.readFileSync(statusFile, "utf-8").match(/^args=(.+)$/m) || [])[1] || "";
   if (reviewArgs !== "HEAD --base main") {
     console.log("MENU_REVIEW_ARGS_FAIL:" + reviewArgs);
     process.exit(1);
@@ -190,7 +195,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3b. /edc menu can show status for latest run.
   await edcCmd.opts.handler("", menuCtx("Review status"));
   const statusMessage = calls.messages.at(-1)?.content || "";
-  if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md")) {
+  if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md") || !statusMessage.includes("log: .git/edc/review.log")) {
     console.log("STATUS_CMD_FAIL:" + JSON.stringify(statusMessage));
     process.exit(1);
   }
@@ -250,6 +255,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3g. missing context prompts before auto-build and carries state into start message.
   const missingDir = `${cwd}/missing-context`;
   fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: missingDir, stdio: "ignore" });
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
   const missingCtx = {

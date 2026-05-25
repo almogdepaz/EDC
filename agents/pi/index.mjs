@@ -16,9 +16,9 @@
  *   "pi": { "extensions": ["./agents/pi/index.mjs"] }
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildSessionStartContent,
@@ -48,6 +48,8 @@ const EDC_MENU = {
 const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
+const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
+const EDC_BACKGROUND_REVIEW_LOG_GIT_PATH = "edc/review.log";
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -301,19 +303,37 @@ function renderDirectCommandResult(commandName, args, result) {
   return [`${label} failed with exit code ${result.code}.`, "", "Output:", "```text", output, "```"].join("\n");
 }
 
-function runningReview(cwd) {
-  const runsDir = join(cwd, "edc-context", "runs");
-  if (!existsSync(runsDir)) return null;
-
-  const runIds = readdirSync(runsDir)
-    .filter((name) => existsSync(join(runsDir, name, "status.txt")))
-    .sort((a, b) => statSync(join(runsDir, b)).mtimeMs - statSync(join(runsDir, a)).mtimeMs);
-
-  for (const runId of runIds) {
-    const statusPath = join(runsDir, runId, "status.txt");
-    const status = parseStatus(readFileSync(statusPath, "utf-8"));
-    if (status.status === "running") return { runId, status };
+function backgroundGitPath(cwd, gitRelativePath) {
+  try {
+    const gitPath = execFileSync("git", ["rev-parse", "--git-path", gitRelativePath], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf-8",
+    }).trim();
+    if (!gitPath) return null;
+    return {
+      path: isAbsolute(gitPath) ? gitPath : join(cwd, gitPath),
+      display: gitPath,
+    };
+  } catch {
+    return null;
   }
+}
+
+function backgroundStatusPath(cwd) {
+  return backgroundGitPath(cwd, EDC_BACKGROUND_STATUS_GIT_PATH);
+}
+
+function backgroundReviewLogPath(cwd) {
+  return backgroundGitPath(cwd, EDC_BACKGROUND_REVIEW_LOG_GIT_PATH);
+}
+
+function runningReview(cwd) {
+  const statusPath = backgroundStatusPath(cwd);
+  if (!statusPath || !existsSync(statusPath.path)) return null;
+
+  const status = parseStatus(readFileSync(statusPath.path, "utf-8"));
+  if (status.status === "running") return { runId: status.run_id || "current", status };
   return null;
 }
 
@@ -333,42 +353,48 @@ function startBackgroundReview(args, ctx) {
     return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
   }
 
-  const runId = nowRunId();
-  const runDir = join(ctx.cwd, "edc-context", "runs", runId);
-  mkdirSync(runDir, { recursive: true });
+  const statusPath = backgroundStatusPath(ctx.cwd);
+  const logPath = backgroundReviewLogPath(ctx.cwd);
+  if (!statusPath || !logPath) {
+    return { error: "ERROR: background EDC review requires a git repo" };
+  }
 
-  const relRunDir = `edc-context/runs/${runId}`;
-  const logFile = `${relRunDir}/review.log`;
-  const statusFile = `${relRunDir}/status.txt`;
-  const argsFile = `${relRunDir}/args.txt`;
-  const pidFile = `${relRunDir}/pid`;
+  const runId = nowRunId();
+  mkdirSync(dirname(statusPath.path), { recursive: true });
+  mkdirSync(dirname(logPath.path), { recursive: true });
 
   const script = `
 set -- ${args}
+status_file=${shellQuote(statusPath.path)}
+log_file=${shellQuote(logPath.path)}
+status_dir=${shellQuote(dirname(statusPath.path))}
+mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-printf '%s\n' "$@" > ${shellQuote(argsFile)}
+args_text="$(printf '%s ' "$@" | sed 's/ $//')"
 {
   echo "status=running"
   echo "started_at=$started_at"
   echo "run_id=${runId}"
-  echo "log=${logFile}"
-  echo "args_file=${argsFile}"
-} > ${shellQuote(statusFile)}
+  echo "pid=$$"
+  echo "args=$args_text"
+  echo "log=${logPath.display}"
+} > "$status_file"
 
-${shellQuote(bashPath)} ${shellQuote(reviewScript)} "$@" > ${shellQuote(logFile)} 2>&1
+${shellQuote(bashPath)} ${shellQuote(reviewScript)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' ${shellQuote(logFile)})"
+final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
 {
   if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
   echo "exit_code=$rc"
   echo "started_at=$started_at"
   echo "finished_at=$finished_at"
   echo "run_id=${runId}"
-  echo "log=${logFile}"
-  echo "args_file=${argsFile}"
+  echo "pid=$$"
+  echo "args=$args_text"
+  echo "log=${logPath.display}"
   [ -n "$final_review" ] && echo "final_review=$final_review"
-} > ${shellQuote(statusFile)}
+} > "$status_file"
 `;
 
   const child = spawn(bashPath, ["-lc", script], {
@@ -378,9 +404,8 @@ final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} EN
     env: piSubprocessEnv(ctx, bashPath),
   });
   child.unref();
-  writeFileSync(join(runDir, "pid"), `${child.pid}\n`);
 
-  return { runId, pid: child.pid, logFile, statusFile, argsFile, pidFile };
+  return { runId, pid: child.pid, logFile: logPath.display, statusFile: statusPath.display };
 }
 
 function parseStatus(content) {
@@ -393,27 +418,19 @@ function parseStatus(content) {
   return status;
 }
 
-function latestRunId(cwd) {
-  const runsDir = join(cwd, "edc-context", "runs");
-  if (!existsSync(runsDir)) return "";
-  return readdirSync(runsDir)
-    .filter((name) => existsSync(join(runsDir, name, "status.txt")))
-    .sort((a, b) => statSync(join(runsDir, b)).mtimeMs - statSync(join(runsDir, a)).mtimeMs)[0] || "";
-}
-
 function renderReviewStatus(args, cwd) {
   const requested = String(args || "").trim();
-  const runId = !requested || requested === "latest" ? latestRunId(cwd) : requested;
-  if (!runId) {
+  if (requested && requested !== "latest" && requested !== "current") {
+    return "EDC keeps only the current background review status. Use `/edc` → Review status without a run id.";
+  }
+
+  const statusPath = backgroundStatusPath(cwd);
+  if (!statusPath || !existsSync(statusPath.path)) {
     return "No background EDC review runs found.";
   }
 
-  const statusPath = join(cwd, "edc-context", "runs", runId, "status.txt");
-  if (!existsSync(statusPath)) {
-    return `No status found for background review run \`${runId}\`.`;
-  }
-
-  const status = parseStatus(readFileSync(statusPath, "utf-8"));
+  const status = parseStatus(readFileSync(statusPath.path, "utf-8"));
+  const runId = status.run_id || "current";
   const lines = [
     `EDC review run: ${runId}`,
     `status: ${status.status || "unknown"}`,
@@ -422,6 +439,8 @@ function renderReviewStatus(args, cwd) {
   if (status.started_at) lines.push(`started: ${status.started_at}`);
   if (status.finished_at) lines.push(`finished: ${status.finished_at}`);
   if (status.final_review) lines.push(`final review: ${status.final_review}`);
+  if (status.args) lines.push(`args: ${status.args}`);
+  if (status.pid) lines.push(`pid: ${status.pid}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
   if (status.status === "success") {

@@ -75,32 +75,36 @@ write_context() {
 {"schemaVersion":2,"sourceCommit":"$head","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"core","priority":10,"doc":"edc-context/modules/core.md","match":{"prefixes":["src/"]}}]}
 EOF
 }
+finish_ok() {
+  printf '{"type":"result","is_error":false,"result":"ok"}\n'
+  if [ "${PI_FAKE_HANG_AFTER_AGENT_END:-0}" = "1" ]; then
+    printf '{"type":"agent_end"}\n'
+    sleep 5
+  fi
+  exit 0
+}
 if printf '%s' "$prompt" | grep -q 'BUILD_SKILL_MARKER'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
-  printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  exit 0
+  finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'UPDATE_SKILL_MARKER'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
-  printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  exit 0
+  finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
   mkdir -p edc-context/review-tasks
   printf '## Summary\n\nmock pi review\n' > edc-context/review-tasks/report-core.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
-  printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  exit 0
+  finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'AUDIT_SKILL_MARKER'; then
   mkdir -p edc-context/reports
   printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
   printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
-  printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  exit 0
+  finish_ok
 fi
 printf '{"type":"result","is_error":true,"result":"unexpected prompt"}\n'
 exit 1
@@ -152,6 +156,15 @@ if [ "$rc" -eq 0 ] && grep -q 'Build OK' build.out; then
 else
   check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 0
   cat build.out build.err
+fi
+
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=1 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
+  check "18.6: pi backend stops reading after agent_end" 1
+else
+  check "18.6: pi backend stops reading after agent_end" 0
+  cat hang-update.out hang-update.err
 fi
 
 echo

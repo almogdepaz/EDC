@@ -86,8 +86,9 @@ cat <<EOF
 Done. Available commands in pi:
   /edc-build       build deep architectural context
   /edc-update      incremental update from branch diff
-  /edc-run-review  differential code review
-  /edc-doctor      validate context tree
+  /edc-run-review    differential code review
+  /edc-review-status check background review progress
+  /edc-doctor        validate context tree
 
 Visible skills:
   edc-review       differential review methodology

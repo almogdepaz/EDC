@@ -161,12 +161,87 @@ edc_require_agent_cli() {
     pi)
       command -v pi > /dev/null 2>&1 \
         || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
+      command -v python3 > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi requires python3 for JSON subprocess supervision" >&2; exit 2; }
       ;;
     *)
       echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
       exit 2
       ;;
   esac
+}
+
+write_pi_json_supervisor() {
+  local path="$1"
+  cat > "$path" <<'PY'
+#!/usr/bin/env python3
+import json
+import signal
+import subprocess
+import sys
+
+proc = None
+
+
+def stop(signum, _frame):
+    global proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    sys.exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+cmd = sys.argv[1:]
+if not cmd:
+    print("ERROR: missing pi command", file=sys.stderr)
+    sys.exit(2)
+
+proc = subprocess.Popen(
+    cmd,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=None,
+    text=True,
+    bufsize=1,
+)
+
+try:
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        try:
+            event_type = json.loads(line).get("type")
+        except Exception:
+            event_type = None
+        if event_type == "agent_end":
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+            sys.exit(0)
+
+    sys.exit(proc.wait())
+finally:
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+PY
+  chmod +x "$path"
 }
 
 # ── stream filter ────────────────────────────────────────────────────────────
@@ -533,17 +608,22 @@ edc_spawn() {
       local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
       [ -n "$model" ] && cmd+=(--model "$model")
       cmd+=("@$effective_prompt_file")
+      local pi_supervisor
+      pi_supervisor=$(mktemp "${TMPDIR:-/tmp}/edc-pi-supervisor-$$.XXXXXX.py") \
+        || { echo "ERROR: could not create pi supervisor" >&2; return 1; }
+      write_pi_json_supervisor "$pi_supervisor"
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" < /dev/null \
+          "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | tee "$capture" | stream_filter
         rc=${PIPESTATUS[0]}
       else
         run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" < /dev/null \
+          "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | stream_filter
         rc=${PIPESTATUS[0]}
       fi
+      rm -f "$pi_supervisor"
       [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
       ;;
     *)

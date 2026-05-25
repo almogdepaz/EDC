@@ -17,7 +17,8 @@
  *   "pi": { "extensions": ["./agents/pi/index.mjs"] }
  */
 
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -54,10 +55,16 @@ const COMMANDS = [
     description: "Validate the context tree, manifest, and routing coverage",
     file: "edc-doctor.md",
   },
+  {
+    name: "edc-review-status",
+    description: "Check a background EDC review run",
+    file: null,
+  },
 ];
 
 const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
+const MAX_COMMAND_OUTPUT_CHARS = 12000;
 
 /**
  * Strip YAML frontmatter from a markdown command file and return the body.
@@ -96,10 +103,11 @@ function currentPiModelSlug(ctx) {
   return `${provider}/${id}`;
 }
 
-function injectPiBackendEnv(prompt, ctx) {
+function injectPiBackendEnv(prompt, ctx, options = {}) {
   const lines = ["export EDC_AGENT_CLI=pi"];
   const model = currentPiModelSlug(ctx);
   if (model) lines.push(`export EDC_PI_MODEL=${shellQuote(model)}`);
+  if (options.reviewRunMode) lines.push(`export EDC_REVIEW_RUN_MODE=${shellQuote(options.reviewRunMode)}`);
 
   const injection = `${lines.join("\n")}\n`;
   if (prompt.includes("```bash\n")) {
@@ -117,14 +125,29 @@ function isHelpRequest(args) {
 }
 
 function renderCommandHelp(cmd) {
+  if (cmd.name === "edc-review-status") {
+    return [
+      "Usage: /edc-review-status [run-id|latest]",
+      "",
+      "Shows status for a background review started by /edc-run-review.",
+      "With no argument, checks the latest run.",
+    ].join("\n");
+  }
+
   if (cmd.name === "edc-run-review") {
     return [
       "Usage: /edc-run-review [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--no-context-refresh|--ignore-context]",
       "",
       "Runs differential review. With no arguments, reviews `HEAD`.",
       "",
+      "Run mode:",
+      "- pi prompts you to choose foreground or background before launching",
+      "- foreground streams progress here and blocks until the final review path is available",
+      "- background returns run id, pid, log path, and status path immediately",
+      "",
       "Context behavior:",
       "- default: prompt before building/updating stale or missing EDC context, then run review if accepted",
+      "- context build/update can take several minutes",
       "- `--no-context-refresh`: do not build/update; use existing context if usable, otherwise review directly",
       "- `--ignore-context`: pure direct review; do not read prebuilt `edc-context/`",
     ].join("\n");
@@ -162,6 +185,24 @@ function extendEdcBashTimeout(event) {
   }
 }
 
+async function chooseReviewRunMode(ctx) {
+  if (!ctx.ui?.confirm || ctx.hasUI === false) return "foreground";
+
+  const foreground = await ctx.ui.confirm(
+    "EDC review run mode",
+    [
+      "Run review in foreground?",
+      "",
+      "Yes: foreground — stream progress here, block the session, return the final review path.",
+      "No: background — return immediately with run id, pid, log path, and status path.",
+      "",
+      "Warning: if EDC context is missing or stale, review may first build/update context and can take several minutes.",
+    ].join("\n"),
+  );
+
+  return foreground ? "foreground" : "background";
+}
+
 async function shouldProceedWithReview(args, ctx) {
   if (reviewSkipsContextPrompt(args)) return true;
 
@@ -178,7 +219,7 @@ async function shouldProceedWithReview(args, ctx) {
 
   return ctx.ui.confirm(
     `EDC context ${freshness.state}`,
-    `${detail}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses.`,
+    `${detail}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses and can take several minutes.`,
   );
 }
 
@@ -192,6 +233,238 @@ function reviewDeclinedMessage(args) {
     "",
     "For a pure direct review that ignores any existing `edc-context/`, run:",
     `\`/edc-run-review ${renderedArgs} --ignore-context\``,
+  ].join("\n");
+}
+
+function commandScriptName(commandName) {
+  switch (commandName) {
+    case "edc-build":
+      return "edc-build.sh";
+    case "edc-update":
+      return "edc-update.sh";
+    case "edc-run-review":
+      return "edc-review.sh";
+    case "edc-doctor":
+      return "edc-doctor.sh";
+    default:
+      return "";
+  }
+}
+
+function findEdcScript(cwd, scriptName) {
+  const localScript = join(cwd, ".edc", "scripts", scriptName);
+  if (existsSync(localScript)) return localScript;
+
+  const home = process.env.HOME || "";
+  if (home) {
+    const homeScript = join(home, ".edc", "scripts", scriptName);
+    if (existsSync(homeScript)) return homeScript;
+  }
+
+  return "";
+}
+
+function nowRunId() {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+  return `${stamp}-review-${process.pid}`;
+}
+
+function piSubprocessEnv(ctx) {
+  const env = { ...process.env, EDC_AGENT_CLI: "pi" };
+  const model = currentPiModelSlug(ctx);
+  if (model) env.EDC_PI_MODEL = model;
+  return env;
+}
+
+function runEdcScript(scriptName, args, ctx) {
+  const edcScript = findEdcScript(ctx.cwd, scriptName);
+  if (!edcScript) {
+    return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: install EDC orchestrator first\n" });
+  }
+
+  const script = `set -- ${args || ""}\nexec bash ${shellQuote(edcScript)} "$@"`;
+  return new Promise((resolve) => {
+    const child = spawn("/bin/bash", ["-lc", script], {
+      cwd: ctx.cwd,
+      env: piSubprocessEnv(ctx),
+      stdio: ["ignore", "pipe", "pipe"],
+      signal: ctx.signal,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => {
+      resolve({ code: 1, stdout, stderr: `${stderr}${error.message}\n` });
+    });
+    child.on("close", (code, signal) => {
+      const exitCode = typeof code === "number" ? code : 1;
+      const signalText = signal ? `terminated by ${signal}\n` : "";
+      resolve({ code: exitCode, stdout, stderr: `${stderr}${signalText}` });
+    });
+  });
+}
+
+function tailText(text, maxChars = MAX_COMMAND_OUTPUT_CHARS) {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, 1000)}\n\n... output truncated ...\n\n${text.slice(-maxChars)}`;
+}
+
+function combinedOutput(result) {
+  return tailText(`${result.stdout || ""}${result.stderr || ""}`.trim());
+}
+
+function extractFinalReviewPath(output) {
+  let consolidated = "";
+  let verified = "";
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith("Consolidated: ")) consolidated = line.slice("Consolidated: ".length).trim();
+    if (line.startsWith("Verified: ")) verified = line.slice("Verified: ".length).trim();
+  }
+  return verified || consolidated;
+}
+
+function renderDirectCommandResult(commandName, args, result) {
+  const output = combinedOutput(result);
+  if (commandName === "edc-run-review") {
+    const finalReview = extractFinalReviewPath(`${result.stdout}\n${result.stderr}`);
+    if (result.code === 0 && finalReview) {
+      return [`Review complete.`, "", `Final review: ${finalReview}`].join("\n");
+    }
+    if (result.code === 0) {
+      return [`Review completed, but no final review path was found.`, "", "Output:", "```text", output, "```"].join("\n");
+    }
+    return [`Review failed with exit code ${result.code}.`, "", "Output:", "```text", output, "```"].join("\n");
+  }
+
+  const label = commandName.replace(/^edc-/, "edc ");
+  if (result.code === 0) {
+    return [`${label} completed.`, output ? "" : "", output ? "```text" : "", output, output ? "```" : ""].filter(Boolean).join("\n");
+  }
+  return [`${label} failed with exit code ${result.code}.`, "", "Output:", "```text", output, "```"].join("\n");
+}
+
+function startBackgroundReview(args, ctx) {
+  const reviewScript = findEdcScript(ctx.cwd, "edc-review.sh");
+  if (!reviewScript) {
+    return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
+  }
+
+  const runId = nowRunId();
+  const runDir = join(ctx.cwd, "edc-context", "runs", runId);
+  mkdirSync(runDir, { recursive: true });
+
+  const relRunDir = `edc-context/runs/${runId}`;
+  const logFile = `${relRunDir}/review.log`;
+  const statusFile = `${relRunDir}/status.txt`;
+  const argsFile = `${relRunDir}/args.txt`;
+  const pidFile = `${relRunDir}/pid`;
+
+  const script = `
+set -- ${args}
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '%s\n' "$@" > ${shellQuote(argsFile)}
+{
+  echo "status=running"
+  echo "started_at=$started_at"
+  echo "run_id=${runId}"
+  echo "log=${logFile}"
+  echo "args_file=${argsFile}"
+} > ${shellQuote(statusFile)}
+
+bash ${shellQuote(reviewScript)} "$@" > ${shellQuote(logFile)} 2>&1
+rc=$?
+finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' ${shellQuote(logFile)})"
+{
+  if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
+  echo "exit_code=$rc"
+  echo "started_at=$started_at"
+  echo "finished_at=$finished_at"
+  echo "run_id=${runId}"
+  echo "log=${logFile}"
+  echo "args_file=${argsFile}"
+  [ -n "$final_review" ] && echo "final_review=$final_review"
+} > ${shellQuote(statusFile)}
+`;
+
+  const child = spawn("/bin/bash", ["-lc", script], {
+    cwd: ctx.cwd,
+    detached: true,
+    stdio: "ignore",
+    env: piSubprocessEnv(ctx),
+  });
+  child.unref();
+  writeFileSync(join(runDir, "pid"), `${child.pid}\n`);
+
+  return { runId, pid: child.pid, logFile, statusFile, argsFile, pidFile };
+}
+
+function parseStatus(content) {
+  const status = {};
+  for (const line of content.split(/\r?\n/)) {
+    const index = line.indexOf("=");
+    if (index <= 0) continue;
+    status[line.slice(0, index)] = line.slice(index + 1);
+  }
+  return status;
+}
+
+function latestRunId(cwd) {
+  const runsDir = join(cwd, "edc-context", "runs");
+  if (!existsSync(runsDir)) return "";
+  return readdirSync(runsDir)
+    .filter((name) => existsSync(join(runsDir, name, "status.txt")))
+    .sort((a, b) => statSync(join(runsDir, b)).mtimeMs - statSync(join(runsDir, a)).mtimeMs)[0] || "";
+}
+
+function renderReviewStatus(args, cwd) {
+  const requested = String(args || "").trim();
+  const runId = !requested || requested === "latest" ? latestRunId(cwd) : requested;
+  if (!runId) {
+    return "No background EDC review runs found.";
+  }
+
+  const statusPath = join(cwd, "edc-context", "runs", runId, "status.txt");
+  if (!existsSync(statusPath)) {
+    return `No status found for background review run \`${runId}\`.`;
+  }
+
+  const status = parseStatus(readFileSync(statusPath, "utf-8"));
+  const lines = [
+    `EDC review run: ${runId}`,
+    `status: ${status.status || "unknown"}`,
+  ];
+  if (status.exit_code) lines.push(`exit code: ${status.exit_code}`);
+  if (status.started_at) lines.push(`started: ${status.started_at}`);
+  if (status.finished_at) lines.push(`finished: ${status.finished_at}`);
+  if (status.final_review) lines.push(`final review: ${status.final_review}`);
+  if (status.log) lines.push(`log: ${status.log}`);
+  lines.push("");
+  if (status.status === "success") {
+    lines.push("Review complete.");
+  } else if (status.status === "failed") {
+    lines.push("Review failed. Open the log above for details.");
+  } else {
+    lines.push(`Still running. Check again with \`/edc-review-status ${runId}\`.`);
+  }
+  return lines.join("\n");
+}
+
+function backgroundReviewStartedMessage(result) {
+  return [
+    "Background review started.",
+    "",
+    `Run ID: ${result.runId}`,
+    `PID: ${result.pid}`,
+    `Log: ${result.logFile}`,
+    `Status: ${result.statusFile}`,
+    "",
+    `Check progress: \`/edc-review-status ${result.runId}\``,
+    "Latest run: `/edc-review-status latest`",
   ].join("\n");
 }
 
@@ -273,18 +546,37 @@ export default async function edcExtension(pi) {
           return;
         }
 
+        if (cmd.name === "edc-review-status") {
+          sendInfo(pi, "edc-review-status", renderReviewStatus(args, ctx.cwd));
+          return;
+        }
+
         let renderedArgs = args || "";
         if (cmd.name === "edc-run-review") {
           renderedArgs = reviewArgsWithDefaultTarget(args);
+          const reviewRunMode = await chooseReviewRunMode(ctx);
           const proceed = await shouldProceedWithReview(renderedArgs, ctx);
           if (!proceed) {
             sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
             return;
           }
+          if (reviewRunMode === "background") {
+            const result = startBackgroundReview(renderedArgs, ctx);
+            if (result.error) {
+              sendInfo(pi, "edc-review-background", result.error);
+            } else {
+              sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result));
+            }
+            return;
+          }
+          sendInfo(pi, "edc-command-start", "Running EDC review in foreground. If context is missing or stale, context build/update can take several minutes.");
+        } else {
+          sendInfo(pi, "edc-command-start", `Running /${cmd.name}...`);
         }
 
-        const prompt = injectPiBackendEnv(renderCommandPrompt(cmd.file, renderedArgs), ctx);
-        await pi.sendUserMessage(prompt);
+        const scriptName = commandScriptName(cmd.name);
+        const result = await runEdcScript(scriptName, renderedArgs, ctx);
+        sendInfo(pi, "edc-command-result", renderDirectCommandResult(cmd.name, renderedArgs, result));
       },
     });
   }

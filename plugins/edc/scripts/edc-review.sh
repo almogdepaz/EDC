@@ -345,7 +345,7 @@ auto_mode() {
 
   # Build review tasks now that context is fresh.
   local out
-  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
+  out=$("$EDC_BASH" "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
@@ -378,8 +378,8 @@ auto_mode() {
   done <<< "$tasks"
 
   # Consolidate + verify
-  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
-  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  "$EDC_BASH" "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
+  "$EDC_BASH" "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
 
   # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
   # review-<target>.md at the repo root is the durable artifact. On success,
@@ -619,7 +619,7 @@ TASK
     [ -z "$file" ] && continue
     local module route_err route_rc=0
     route_err=$(mktemp)
-    module=$(bash "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
+    module=$("$EDC_BASH" "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
 
     case "$route_rc" in
       0)

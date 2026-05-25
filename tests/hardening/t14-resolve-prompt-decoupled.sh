@@ -13,6 +13,7 @@ set -uo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-lib.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
+SCRIPT_ABS="$(pwd)/$SCRIPT"
 
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
@@ -39,6 +40,8 @@ echo "PATTERNS_MARKER" > "$SKILLS_DIR/edc-review/patterns.md"
 
 TASK_FILE="$TMP/task.md"
 echo "TASK_CONTENT_MARKER" > "$TASK_FILE"
+WORK="$TMP/work"
+mkdir -p "$WORK"
 
 # Override HOME so find_*_skill resolves into our hermetic tree.
 # All three agents look at $HOME/.<runtime>/skills (claude also at .edc/skills)
@@ -52,8 +55,8 @@ ln -s "$TMP/home/.edc-skills-real" "$TMP/home/.codex/skills"
 
 run_resolve() {
   local agent="$1"; shift
-  HOME="$TMP/home" EDC_AGENT_CLI="$agent" \
-    bash -c ". $PWD/$SCRIPT && resolve_prompt $*" 2>&1
+  (cd "$WORK" && HOME="$TMP/home" EDC_AGENT_CLI="$agent" \
+    bash -c ". $SCRIPT_ABS && resolve_prompt $*" 2>&1)
 }
 
 # ── 14.1: claude branch never emits slash commands ──────────────────────────

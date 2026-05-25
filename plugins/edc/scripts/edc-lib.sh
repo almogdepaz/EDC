@@ -51,6 +51,13 @@ EDC_COMPLEXITY="$EDC_REPORTS_DIR/complexity.md"
 EDC_BUILD_INFO="$EDC_BUILD_DIR/build.json"
 EDC_REVIEW_TASKS_MANIFEST="$EDC_REVIEW_TASKS_DIR/manifest.json"
 
+# Single bash contract for all nested EDC script invocations. Orchestrators
+# require bash >= 4, so once an entrypoint is running in a valid bash, child
+# script calls must reuse that interpreter instead of resolving bare `bash`
+# from ambient PATH (macOS login shells can make that `/bin/bash` 3.2).
+EDC_BASH="${EDC_BASH:-$BASH}"
+export EDC_BASH
+
 # ════════════════════════════════════════════════════════════════════════════
 # 2. RUNTIME — subprocess runtime helpers.
 # ════════════════════════════════════════════════════════════════════════════
@@ -738,9 +745,10 @@ dev repo. In this repo it is not. The orchestrator scripts actually live at:
     $EDC_SCRIPTS_DIR
 
 Whenever the skill tells you to invoke or reference a script under
-\`plugins/edc/scripts/\`, substitute the absolute path above. For example:
+\`plugins/edc/scripts/\`, substitute the absolute path above and run it with
+\`$EDC_BASH\` (the resolved bash >=4 interpreter). For example:
   skill says:  bash plugins/edc/scripts/edc-manifest.sh
-  you run:     bash $EDC_SCRIPTS_DIR/edc-manifest.sh
+  you run:     "$EDC_BASH" $EDC_SCRIPTS_DIR/edc-manifest.sh
 
 The scripts to substitute include (at least):
 edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-route.sh,
@@ -748,8 +756,9 @@ edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
 
 Do not rewrite the skill text. Do not fail the build because
 \`plugins/edc/scripts/\` is empty — that is expected; use the absolute path
-above instead. \$EDC_SCRIPTS_DIR is also exported in this subprocess if you
-prefer the env-var form, but the literal absolute path is authoritative.
+above instead. \$EDC_SCRIPTS_DIR and \$EDC_BASH are also exported in this
+subprocess if you prefer the env-var form, but the literal absolute script path
+and resolved bash interpreter are authoritative.
 
 EOF
 }

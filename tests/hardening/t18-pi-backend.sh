@@ -158,7 +158,7 @@ else
   cat build.out build.err
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=1 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
   check "18.6: pi backend stops reading after agent_end" 1

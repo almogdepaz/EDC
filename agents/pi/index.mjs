@@ -18,7 +18,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -269,11 +269,43 @@ function nowRunId() {
   return `${stamp}-review-${process.pid}`;
 }
 
-function piSubprocessEnv(ctx) {
+function piSubprocessEnv(ctx, bashPath = "") {
   const env = { ...process.env, EDC_AGENT_CLI: "pi" };
+  if (bashPath) {
+    env.EDC_BASH = bashPath;
+    env.PATH = `${dirname(bashPath)}:${env.PATH || ""}`;
+  }
   const model = currentPiModelSlug(ctx);
   if (model) env.EDC_PI_MODEL = model;
   return env;
+}
+
+function isBash4OrNewer(path) {
+  try {
+    const version = execFileSync(path, ["-lc", "printf '%s' \"${BASH_VERSINFO[0]}\""], {
+      timeout: 3000,
+      encoding: "utf-8",
+    }).trim();
+    return Number(version) >= 4;
+  } catch {
+    return false;
+  }
+}
+
+function resolveBashExecutable() {
+  const candidates = [];
+  const pathBash = process.env.PATH
+    ? process.env.PATH.split(":").map((dir) => join(dir, "bash"))
+    : [];
+  candidates.push(...pathBash, "/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash");
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate) || !existsSync(candidate)) continue;
+    seen.add(candidate);
+    if (isBash4OrNewer(candidate)) return candidate;
+  }
+  return "";
 }
 
 function runEdcScript(scriptName, args, ctx) {
@@ -282,11 +314,16 @@ function runEdcScript(scriptName, args, ctx) {
     return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: install EDC orchestrator first\n" });
   }
 
-  const script = `set -- ${args || ""}\nexec bash ${shellQuote(edcScript)} "$@"`;
+  const bashPath = resolveBashExecutable();
+  if (!bashPath) {
+    return Promise.resolve({ code: 2, stdout: "", stderr: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)\n" });
+  }
+
+  const script = `set -- ${args || ""}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
   return new Promise((resolve) => {
-    const child = spawn("/bin/bash", ["-lc", script], {
+    const child = spawn(bashPath, ["-lc", script], {
       cwd: ctx.cwd,
-      env: piSubprocessEnv(ctx),
+      env: piSubprocessEnv(ctx, bashPath),
       stdio: ["ignore", "pipe", "pipe"],
       signal: ctx.signal,
     });
@@ -353,6 +390,11 @@ function startBackgroundReview(args, ctx) {
     return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
   }
 
+  const bashPath = resolveBashExecutable();
+  if (!bashPath) {
+    return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
+  }
+
   const runId = nowRunId();
   const runDir = join(ctx.cwd, "edc-context", "runs", runId);
   mkdirSync(runDir, { recursive: true });
@@ -375,7 +417,7 @@ printf '%s\n' "$@" > ${shellQuote(argsFile)}
   echo "args_file=${argsFile}"
 } > ${shellQuote(statusFile)}
 
-bash ${shellQuote(reviewScript)} "$@" > ${shellQuote(logFile)} 2>&1
+${shellQuote(bashPath)} ${shellQuote(reviewScript)} "$@" > ${shellQuote(logFile)} 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' ${shellQuote(logFile)})"
@@ -391,11 +433,11 @@ final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} EN
 } > ${shellQuote(statusFile)}
 `;
 
-  const child = spawn("/bin/bash", ["-lc", script], {
+  const child = spawn(bashPath, ["-lc", script], {
     cwd: ctx.cwd,
     detached: true,
     stdio: "ignore",
-    env: piSubprocessEnv(ctx),
+    env: piSubprocessEnv(ctx, bashPath),
   });
   child.unref();
   writeFileSync(join(runDir, "pid"), `${child.pid}\n`);

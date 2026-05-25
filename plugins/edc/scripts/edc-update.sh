@@ -80,7 +80,7 @@ EOF
 # the on-disk state cannot be safely updated.
 preflight_check() {
   local rc=0
-  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  "$EDC_BASH" "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
   case "$rc" in
     11) # healthy v2 — good to go
       return 0
@@ -184,7 +184,7 @@ update_main() {
     echo "ERROR: edc-doctor.sh not found at $DOCTOR_SH" >&2
     exit 1
   fi
-  if ! bash "$DOCTOR_SH"; then
+  if ! "$EDC_BASH" "$DOCTOR_SH"; then
     echo "ERROR: update produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi

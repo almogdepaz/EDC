@@ -18,7 +18,7 @@ the user-facing tour.
 
 Audit and review methodology are exposed as skills (`edc-audit`, `edc-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`), Codex (`$edc-*`), and Pi expose the same user-facing command set through wrappers emitted by `install.sh` / `agents/pi/`: build, update, run-review, and doctor.
+Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes those workflows through one interactive `/edc` menu (review/status/build/update/audit/doctor) registered by `agents/pi/`.
 
 ## Internal structure
 
@@ -101,9 +101,10 @@ spawns subprocesses:
 - `claude` → `claude -p`
 - `cursor` → `cursor agent -p`
 - `codex`  → `codex exec`
+- `pi`     → `pi --mode json`
 
 `scripts/edc-lib.sh` centralizes the per-agent subprocess dispatch, prompt
-resolution, and codex-home isolation.
+resolution, pi JSON supervision, and codex-home isolation.
 
 ## Context lifecycle
 
@@ -112,6 +113,8 @@ resolution, and codex-home isolation.
 - **stale** when `edc-context/manifest.json.sourceCommit != HEAD`
 - review / audit / update require fresh context — orchestrators auto-recover
   via `edc-recover-context.sh`, and `edc-doctor.sh` validates the result
+- `edc-context/` is generated and disposable; recovery may wipe and rebuild it
+- Pi background review operational state is deliberately outside `edc-context/`: current status lives at `.git/edc/status`, current raw log at `.git/edc/review.log` (resolved via `git rev-parse --git-path`)
 
 ## Default invocation
 

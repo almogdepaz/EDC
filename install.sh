@@ -248,13 +248,14 @@ print_cli_hint() {
   echo "Terminal CLI (run from any repo, after PATH is set):"
   case "$agent" in
     pi)
-      # pi has its own slash-command surface and is not yet supported as an
-      # --agent value for the orchestrators (claude/cursor/codex only).
-      echo "  edc doctor                 # validate context"
-      echo "  edc mode advisory|inject   # toggle runtime mode in edc-context/manifest.json"
+      echo "  edc build  --agent pi             # build or update edc-context/"
+      echo "  edc update --agent pi --base main # force incremental update"
+      echo "  edc review --agent pi HEAD --base main # differential review of current branch"
+      echo "  edc audit  --agent pi             # complexity / bloat audit"
+      echo "  edc doctor                        # validate context"
+      echo "  edc mode advisory|inject          # toggle runtime mode"
       echo
-      echo "Build/update/review from pi: use the slash commands inside pi:"
-      echo "  /edc-build, /edc-update, /edc-run-review, /edc-doctor"
+      echo "Inside pi, use /edc for the interactive menu (review/status/build/update/audit/doctor)."
       ;;
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
@@ -361,7 +362,7 @@ case "$AGENT" in
     fi
     install_terminal_cli
     install_edc_skills "$HOME/.edc/skills"
-    echo "Done. Run /edc-build inside pi to create context. Toggle mode with 'edc mode advisory|inject'."
+    echo "Done. Run /edc inside pi for review/status/build/update/audit/doctor. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi
     print_path_hint
     ;;

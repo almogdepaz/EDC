@@ -36,13 +36,15 @@ edc update --agent claude              # incremental refresh after HEAD moves
 edc review --agent claude --base main
 edc review --agent cursor HEAD --base main
 edc review --agent codex --pr 42
+edc review --agent pi HEAD --base main
 edc review --agent codex https://github.com/owner/repo/pull/42
 edc review --agent codex HEAD --base main --ignore 'generated/**'
 
 # complexity / bloat / duplication audit
 edc audit  --agent claude
+edc audit  --agent pi
 
-# claude runtime-mode toggle (no-op for cursor/codex)
+# runtime-mode toggle (used by Claude Code and pi inject/advisory hooks)
 edc mode                # show current mode
 edc mode inject         # turn on auto-injection
 edc mode advisory       # turn it off
@@ -51,13 +53,13 @@ edc mode advisory       # turn it off
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex`) drives the per-module subprocess fanout, and is mandatory for `build` / `update` / `review` / `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale. `build` defaults to the current directory if no path is passed. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives the per-module subprocess fanout, and is mandatory for `build` / `update` / `review` / `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it's missing or stale. `build` defaults to the current directory if no path is passed. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
-All supported agent UIs expose the same user-facing command surface: build, update, run-review, and doctor (for example `/edc:edc-run-review` in Claude Code, `/edc-run-review` in Cursor/Pi, `$edc-run-review` in Codex). Audit/review methodology is exposed as skills (`edc-audit`, `edc-review`) instead of slash commands. All command wrappers shell out to the same orchestrators under `~/.edc/scripts/`.
+Claude, Cursor, and Codex expose wrapper commands for build/update/run-review/doctor (for example `/edc:edc-run-review` in Claude Code, `/edc-run-review` in Cursor, `$edc-run-review` in Codex). Pi exposes one interactive `/edc` menu with review/status/build/update/audit/doctor actions. Audit/review methodology is exposed as skills (`edc-audit`, `edc-review`) instead of slash commands. All command wrappers shell out to the same orchestrators under `~/.edc/scripts/`.
 
-### Two runtime modes (Claude Code)
+### Two runtime modes (Claude Code and pi)
 
-EDC ships two modes for Claude Code, controlled by `policy.defaultMode` in `edc-context/manifest.json`. See [Install → Claude Code](#claude-code) for how to flip them.
+EDC ships two modes for Claude Code and pi, controlled by `policy.defaultMode` in `edc-context/manifest.json`. See [Install → Claude Code](#claude-code) for how to flip them.
 
 - **`advisory`** (default) — pure docs. The plugin installs hooks but they no-op. The agent reads `edc-context/index.md` and the relevant `edc-context/modules/<name>.md` on its own (slash commands prompt for it; otherwise it's the user's call). Zero token overhead per tool call.
 - **`inject`** — auto-loaded context. Two hooks fire:
@@ -89,7 +91,7 @@ Both paths install the plugin (slash commands + hooks + skills) and the terminal
 
 #### Picking a mode
 
-After running `/edc:edc-build` once in a target repo, choose how aggressive context loading should be:
+After building context once in a target repo (`/edc:edc-build`, pi's `/edc` → Build context, or `edc build --agent <agent>`), choose how aggressive context loading should be:
 
 ```bash
 edc mode               # show the current mode
@@ -97,7 +99,7 @@ edc mode advisory      # default — docs only, hooks no-op
 edc mode inject        # auto-load context via hooks
 ```
 
-- **`advisory`** if you want minimum token overhead and prefer to drive context loading via slash commands (`/edc:edc-run-review` etc.) or by reading `edc-context/` files yourself.
+- **`advisory`** if you want minimum token overhead and prefer to drive context loading via commands/menus (`/edc:edc-run-review`, pi's `/edc`, etc.) or by reading `edc-context/` files yourself.
 - **`inject`** if you want the agent to always have the architecture overview at session start and to automatically receive the relevant module doc the first time it touches a file in each module during the session.
 
 The flag is a `jq` write to `edc-context/manifest.json`; flip it as often as you like. Rebuilds preserve the chosen mode.
@@ -132,7 +134,7 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Exposes a single interactive `/edc` menu inside pi (review current branch vs `main`, review status, build, update, audit, doctor). Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context skills stay hidden from pi autocomplete. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
+Exposes a single interactive `/edc` menu inside pi (review current branch vs `main`, review status, build, update, audit, doctor). The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context skills stay hidden from pi autocomplete. Honors `policy.defaultMode` in `edc-context/manifest.json` for advisory/inject — see `agents/pi/README.md`.
 
 All installers (claude, cursor, codex, pi) also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|review|audit|update|mode|doctor` works from any shell.
 
@@ -172,19 +174,26 @@ either, both, or neither — they don't depend on each other.
   from the terminal, the plugin handles slash commands inside an interactive
   claude session.
 
-## Gitignore
+## Generated files and local state
 
-EDC writes scratch state into your repo. Add these to your target repo's `.gitignore`:
+EDC writes generated context and local runtime state in a few places:
+
+- `edc-context/` — generated per-module deep context written by `edc-build`/`edc-update`; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may wipe and rebuild it.
+- `AGENTS.md` — short generated orientation pointing agents at `edc-context/`.
+- `review-*.md` — consolidated review output.
+- `.edc/` — project-local runtime copy used by hooks/extensions when they need deterministic access to orchestrator scripts and private prompt bundles. Global installs also live under `~/.edc/`.
+- `.git/edc/status` and `.git/edc/review.log` — pi's current background review status/log. These are git metadata files, not worktree files, and need no `.gitignore` entry.
+
+For repos where you don't want generated EDC artifacts tracked, add:
 
 ```
+AGENTS.md
 edc-context/
 review-*.md
+.edc/
 ```
 
-- `edc-context/` — per-module deep context written by `edc-build`/`edc-update`; review task IPC lives under `edc-context/review-tasks/`
-- `review-*.md` — consolidated review output
-
-If these get committed, `edc-review` filters them out of diffs automatically so the tool doesn't review its own output, but you'll still want them ignored to keep your git history clean.
+If generated context or review outputs get committed, `edc-review` filters them out of diffs automatically so the tool doesn't review its own output, but you'll still usually want them ignored to keep history clean.
 
 ## Commands
 
@@ -195,16 +204,16 @@ If these get committed, `edc-review` filters them out of diffs automatically so 
 | `/edc:edc-run-review` | Differential review using context (PR number/URL, branch, commit SHA, or diff path) |
 | `/edc:edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
-### Cursor / Codex skill equivalents
+### Cursor / Codex / pi equivalents
 
-Cursor and Codex install the same user-facing wrappers (just without the `edc:` prefix):
+Cursor and Codex install user-facing wrappers (without the `edc:` prefix). Pi exposes the same workflows through one interactive `/edc` menu instead of separate slash commands.
 
-| Cursor command | Codex command skill | Description |
-|----------------|---------------------|-------------|
-| `/edc-build` | `$edc-build` | Full context build (or `--force` to rebuild, `--focus <module>` for one module) |
-| `/edc-update` | `$edc-update` | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
-| `/edc-run-review` | `$edc-run-review` | Differential review using context (PR number/URL, branch, commit SHA, or diff path) |
-| `/edc-doctor` | `$edc-doctor` | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
+| Cursor command | Codex command skill | Pi menu action | Description |
+|----------------|---------------------|----------------|-------------|
+| `/edc-build` | `$edc-build` | Build context | Full context build (or `--force` to rebuild, `--focus <module>` for one module via CLI) |
+| `/edc-update` | `$edc-update` | Update context from main | Incremental update from branch diff (`--base <ref>` to set comparison ref) |
+| `/edc-run-review` | `$edc-run-review` | Review current branch vs main | Differential review using context. Pi starts this in the background and stores current status/log under `.git/edc/`. |
+| `/edc-doctor` | `$edc-doctor` | Doctor / validate context | Diagnoses `edc-context/` layout, flags v1 leftovers / partial v2 state |
 
 ### `/edc:edc-run-review` invocation examples
 

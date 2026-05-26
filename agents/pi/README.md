@@ -31,7 +31,7 @@ Pi exposes one interactive command:
 Menu actions:
 
 - Review current branch vs `main` — starts a background review with `HEAD --base main`
-- Review status — shows latest background review status
+- Review status — shows current background review status
 - Build context
 - Update context from `main`
 - Audit complexity
@@ -47,6 +47,19 @@ edc update --agent pi --base main
 
 Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
+## Background review state
+
+Pi reviews run in the background so the TUI stays usable. EDC keeps exactly one current run slot per git repo:
+
+| File | Purpose |
+|---|---|
+| `.git/edc/status` | Machine-readable current run status (`status`, `run_id`, `pid`, `args`, `final_review`, etc.) |
+| `.git/edc/review.log` | Raw stdout/stderr from the current `edc-review.sh` run |
+
+Both paths are resolved with `git rev-parse --git-path`, so they work with normal repos and worktrees. They are under git metadata, not the worktree, so they are never tracked and need no `.gitignore` entry. Starting a new background review overwrites the previous status/log.
+
+`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi review status/logs survive because they live under `.git/edc/`.
+
 ## Skills
 
 Pi exposes only the human-facing EDC methodology skills:
@@ -56,7 +69,7 @@ Pi exposes only the human-facing EDC methodology skills:
 | `edc-review` | Apply the EDC differential review methodology directly in chat, without running the full orchestrator. |
 | `edc-audit` | Apply the EDC bloat / duplication / overengineering audit methodology directly in chat. |
 
-Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are still installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list.
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
 
 ## Modes
 

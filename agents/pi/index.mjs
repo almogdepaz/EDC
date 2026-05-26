@@ -370,6 +370,7 @@ log_file=${shellQuote(logPath.path)}
 status_dir=${shellQuote(dirname(statusPath.path))}
 mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+started_head="$(git rev-parse HEAD 2>/dev/null || true)"
 args_text="$(printf '%s ' "$@" | sed 's/ $//')"
 {
   echo "status=running"
@@ -378,12 +379,28 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
   echo "pid=$$"
   echo "args=$args_text"
   echo "log=${logPath.display}"
+  [ -n "$started_head" ] && echo "started_head=$started_head"
 } > "$status_file"
 
 ${shellQuote(bashPath)} ${shellQuote(reviewScript)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
 final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
+failure_reason=""
+failure_hint=""
+if [ "$rc" -ne 0 ]; then
+  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+    failure_reason="HEAD changed during background review"
+    failure_hint="rerun the review after the working branch stops changing"
+  elif [ ! -f edc-context/manifest.json ] || [ ! -f edc-context/index.md ] || [ ! -f AGENTS.md ]; then
+    failure_reason="context recovery did not produce a complete edc-context layout"
+    failure_hint="run edc doctor, inspect the log, then rerun edc review or edc build --agent pi"
+  else
+    failure_reason="review pipeline failed"
+    failure_hint="inspect the log for the subprocess error and rerun after fixing it"
+  fi
+fi
 {
   if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
   echo "exit_code=$rc"
@@ -393,6 +410,10 @@ final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} EN
   echo "pid=$$"
   echo "args=$args_text"
   echo "log=${logPath.display}"
+  [ -n "$started_head" ] && echo "started_head=$started_head"
+  [ -n "$finished_head" ] && echo "finished_head=$finished_head"
+  [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
+  [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
   [ -n "$final_review" ] && echo "final_review=$final_review"
 } > "$status_file"
 `;
@@ -441,6 +462,10 @@ function renderReviewStatus(args, cwd) {
   if (status.final_review) lines.push(`final review: ${status.final_review}`);
   if (status.args) lines.push(`args: ${status.args}`);
   if (status.pid) lines.push(`pid: ${status.pid}`);
+  if (status.started_head) lines.push(`started HEAD: ${status.started_head.slice(0, 8)}`);
+  if (status.finished_head && status.finished_head !== status.started_head) lines.push(`finished HEAD: ${status.finished_head.slice(0, 8)}`);
+  if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
+  if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
   if (status.status === "success") {

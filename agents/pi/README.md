@@ -53,12 +53,12 @@ Pi reviews run in the background so the TUI stays usable. EDC keeps exactly one 
 
 | File | Purpose |
 |---|---|
-| `.git/edc/status` | Machine-readable current run status (`status`, `run_id`, `pid`, `args`, `final_review`, etc.) |
+| `.git/edc/status` | Machine-readable current run status (`status`, `run_id`, `pid`, `args`, `started_head`, `finished_head`, `failure_reason`, `failure_hint`, `final_review`, etc.) |
 | `.git/edc/review.log` | Raw stdout/stderr from the current `edc-review.sh` run |
 
 Both paths are resolved with `git rev-parse --git-path`, so they work with normal repos and worktrees. They are under git metadata, not the worktree, so they are never tracked and need no `.gitignore` entry. Starting a new background review overwrites the previous status/log.
 
-`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi review status/logs survive because they live under `.git/edc/`.
+`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi review status/logs survive because they live under `.git/edc/`. If the background review fails, `/edc` → Review status reports a classified reason when EDC can determine one, e.g. HEAD changed during the run or context recovery did not produce a complete layout.
 
 ## Skills
 

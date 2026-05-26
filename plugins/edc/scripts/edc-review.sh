@@ -191,6 +191,29 @@ assert_report_valid() {
   fi
 }
 
+write_allowed_unmapped_report() {
+  local files="$1"
+  local report="$EDC_REVIEW_TASKS_DIR/report-unmapped.md"
+
+  {
+    echo "# Differential Review Report: unmapped"
+    echo ""
+    echo "## What Changed"
+    echo ""
+    echo "The following changed paths match \`$MANIFEST\` \`unmapped.allowedGlobs\` and are intentionally outside module ownership:"
+    echo ""
+    echo "$files" | grep -v '^$' | sed 's/^/- `/' | sed 's/$/`/'
+    echo ""
+    echo "## Findings"
+    echo ""
+    echo "No module review was spawned for these paths. They are explicitly allowed as unmapped, so they should not block review consolidation."
+    echo ""
+    echo "## Coverage Notes"
+    echo ""
+    echo "Unexpected unmapped source files are still routed through the synthetic \`unmapped\` review task according to \`policy.unmatchedPathPolicy\`."
+  } > "$report"
+}
+
 # ── check-context mode ───────────────────────────────────────────────────────
 
 check_context_mode() {
@@ -353,12 +376,20 @@ auto_mode() {
     exit 1
   fi
 
-  # Parse TASK lines
+  # Parse TASK lines. Some allowed-unmapped buckets are satisfied by
+  # deterministic prewritten reports and intentionally emit no subprocess task.
   local tasks
-  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //')
+  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //' || true)
   if [ -z "$tasks" ]; then
-    echo "ERROR: no TASK lines in script output" >&2
-    exit 1
+    local module prewritten_missing=0
+    while IFS= read -r module; do
+      [ -z "$module" ] && continue
+      assert_report_valid "$module" || prewritten_missing=1
+    done <<< "$(manifest_modules)"
+    if [ "$prewritten_missing" -ne 0 ]; then
+      echo "ERROR: no TASK lines in script output and no complete prewritten reports" >&2
+      exit 1
+    fi
   fi
 
   # Spawn one agent subprocess per module.
@@ -611,7 +642,8 @@ TASK
   }
 
   declare -A MODULE_FILES
-  local ambiguous_count=0 unmapped_count=0 mapped_count=0
+  local ambiguous_count=0 unmapped_count=0 mapped_count=0 allowed_unmapped_count=0
+  local allowed_unmapped_files=""
   local -a unmapped_unexpected=()
   local -a ambiguous_lines=()
 
@@ -627,11 +659,16 @@ TASK
         mapped_count=$((mapped_count + 1))
         ;;
       1)
-        # No module match - group into "unmapped". Track unexpected ones for
-        # policy enforcement.
-        MODULE_FILES["unmapped"]+="${file}"$'\n'
+        # No module match. Expected unmapped paths are intentionally outside
+        # module ownership, so they get a deterministic skipped report instead
+        # of a fragile spawned reviewer task. Unexpected ones still route to
+        # the synthetic "unmapped" module for policy enforcement/review.
         unmapped_count=$((unmapped_count + 1))
-        if ! _is_expected_unmapped "$file"; then
+        if _is_expected_unmapped "$file"; then
+          allowed_unmapped_files+="${file}"$'\n'
+          allowed_unmapped_count=$((allowed_unmapped_count + 1))
+        else
+          MODULE_FILES["unmapped"]+="${file}"$'\n'
           unmapped_unexpected+=("$file")
         fi
         ;;
@@ -687,7 +724,13 @@ TASK
     esac
   fi
 
-  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count modules=${#MODULE_FILES[@]}" >&2
+  local deterministic_unmapped_report=0
+  if [ "$allowed_unmapped_count" -gt 0 ] && [ -z "${MODULE_FILES[unmapped]+x}" ]; then
+    MODULE_FILES["unmapped"]="$allowed_unmapped_files"
+    deterministic_unmapped_report=1
+  fi
+
+  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
 
   # Step 4: write $EDC_REVIEW_TASKS_DIR/
   rm -rf "$EDC_REVIEW_TASKS_DIR"
@@ -735,6 +778,12 @@ TASK
   while IFS= read -r module; do
     local file_list baseline_line module_context_line
     file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
+
+    if [ "$module" = "unmapped" ] && [ "$deterministic_unmapped_report" -eq 1 ]; then
+      write_allowed_unmapped_report "${MODULE_FILES[$module]}"
+      continue
+    fi
+
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
@@ -767,11 +816,15 @@ USE the edc-review skill.
 TASK
   done <<< "$sorted_modules"
 
-  # Done - emit TASK lines for the agent to iterate
+  # Done - emit TASK lines for the agent to iterate. Deterministic skipped
+  # reports are already complete and must not spawn an agent subprocess.
   echo ""
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
+    if [ "$module" = "unmapped" ] && [ "$deterministic_unmapped_report" -eq 1 ]; then
+      continue
+    fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"
   done <<< "$sorted_modules"
 }

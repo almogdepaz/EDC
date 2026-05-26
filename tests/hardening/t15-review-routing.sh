@@ -170,17 +170,31 @@ TMPDIR_T15D=$(mktemp -d)
 
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
-  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/unmapped.md ]; then
-    check "15.4a: README.md (allowedGlobs) groups under 'unmapped'" 1
+  if [ "$rc" -eq 0 ] && [ ! -f edc-context/review-tasks/unmapped.md ]; then
+    check "15.4a: README.md (allowedGlobs) does not spawn an unmapped review task" 1
   else
-    check "15.4a: README.md (allowedGlobs) groups under 'unmapped'" 0
+    check "15.4a: README.md (allowedGlobs) does not spawn an unmapped review task" 0
+    echo "$out"
+    ls edc-context/review-tasks 2>/dev/null || true
+  fi
+  if [ -f edc-context/review-tasks/report-unmapped.md ] && grep -q '^## Findings' edc-context/review-tasks/report-unmapped.md; then
+    check "15.4b: allowedGlobs writes deterministic validating skipped report" 1
+  else
+    check "15.4b: allowedGlobs writes deterministic validating skipped report" 0
+    cat edc-context/review-tasks/report-unmapped.md 2>/dev/null || true
   fi
   # README is in allowedGlobs — should NOT trigger a WARNING line at all.
   if echo "$out" | grep -qE '^WARNING:.*not mapped'; then
-    check "15.4b: allowedGlobs match suppresses WARNING" 0
+    check "15.4c: allowedGlobs match suppresses WARNING" 0
     echo "$out"
   else
-    check "15.4b: allowedGlobs match suppresses WARNING" 1
+    check "15.4c: allowedGlobs match suppresses WARNING" 1
+  fi
+  if echo "$out" | grep -q '^TASK .*unmapped.md'; then
+    check "15.4d: allowedGlobs skipped report is not emitted as a subprocess task" 0
+    echo "$out"
+  else
+    check "15.4d: allowedGlobs skipped report is not emitted as a subprocess task" 1
   fi
   rm -rf "$TMPDIR_T15D"
 )

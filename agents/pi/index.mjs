@@ -393,6 +393,17 @@ if [ "$rc" -ne 0 ]; then
   if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background review"
     failure_hint="rerun the review after the working branch stops changing"
+  elif grep -q 'report validation failed for module' "$log_file" 2>/dev/null; then
+    failed_module="$(awk '/report validation failed for module/{print $NF}' "$log_file" | tail -1)"
+    if [ -n "$failed_module" ]; then
+      failure_reason="review report validation failed for module $failed_module"
+    else
+      failure_reason="review report validation failed"
+    fi
+    failure_hint="inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report"
+  elif grep -q "has no '## ' headings" "$log_file" 2>/dev/null; then
+    failure_reason="review report validation failed"
+    failure_hint="inspect the module reviewer output in the log; the report is missing required headings"
   elif [ ! -f edc-context/manifest.json ] || [ ! -f edc-context/index.md ] || [ ! -f AGENTS.md ]; then
     failure_reason="context recovery did not produce a complete edc-context layout"
     failure_hint="run edc doctor, inspect the log, then rerun edc review or edc build --agent pi"

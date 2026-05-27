@@ -4,6 +4,23 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/plugins/edc/scripts/edc-review.sh"
+
+resolve_bash4() {
+  local candidate
+  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+BASH_BIN="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
+export EDC_BASH="$BASH_BIN"
+
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
 TMP="$(mktemp -d)"
@@ -118,7 +135,7 @@ MOCK
 
 setup_repo
 write_mock_pi
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 >out.log 2>err.log
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 >out.log 2>err.log
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md; then
@@ -135,7 +152,7 @@ else
   cat pi-calls.log 2>/dev/null || true
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >update.out 2>update.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >update.out 2>update.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' update.out; then
   check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 1
@@ -144,7 +161,7 @@ else
   cat update.out update.err
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-audit.sh" >audit.out 2>audit.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-audit.sh" >audit.out 2>audit.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Audit reports:' audit.out; then
   check "18.4: EDC_AGENT_CLI=pi runs audit orchestrator" 1
@@ -153,7 +170,7 @@ else
   cat audit.out audit.err
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-build.sh" --force >build.out 2>build.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-build.sh" --force >build.out 2>build.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Build OK' build.out; then
   check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 1
@@ -162,7 +179,7 @@ else
   cat build.out build.err
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
   check "18.6: pi backend stops reading after agent_end" 1
@@ -171,7 +188,7 @@ else
   cat hang-update.out hang-update.err
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >agent-end-error.out 2>agent-end-error.err
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >agent-end-error.out 2>agent-end-error.err
 rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'provider down' agent-end-error.err; then
   check "18.7: pi backend fails on agent_end assistant error" 1

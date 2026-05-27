@@ -16,7 +16,7 @@
  *   "pi": { "extensions": ["./agents/pi/index.mjs"] }
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,7 @@ const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
 const EDC_BACKGROUND_REVIEW_LOG_GIT_PATH = "edc/review.log";
+const EDC_BACKGROUND_REVIEW_STALE_MS = 12 * 60 * 60 * 1000;
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -106,8 +107,10 @@ function reviewSkipsContextPrompt(args) {
 }
 
 function isEdcOrchestratorCommand(command) {
-  return /(?:^|[\s"'])\.edc\/scripts\/edc-(?:build|update|review|audit|doctor)\.sh(?:[\s"']|$)/.test(command)
-    || /\$HOME\/\.edc\/scripts\/edc-(?:build|update|review|audit|doctor)\.sh(?:[\s"']|$)/.test(command);
+  const scriptName = "edc-(?:build|update|review|audit|doctor)\\.sh";
+  return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
+    || new RegExp(`(?:^|[\\s"'])\\$HOME/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
+    || new RegExp(`(?:^|[\\s"'])/[^\\s"']*/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command);
 }
 
 function extendEdcBashTimeout(event) {
@@ -328,13 +331,91 @@ function backgroundReviewLogPath(cwd) {
   return backgroundGitPath(cwd, EDC_BACKGROUND_REVIEW_LOG_GIT_PATH);
 }
 
+function isPidAlive(pidText) {
+  const pid = Number(pidText);
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+function isStatusStale(status) {
+  const startedAt = Date.parse(status.started_at || "");
+  return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_REVIEW_STALE_MS;
+}
+
+function serializeStatus(fields) {
+  return Object.entries(fields)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n") + "\n";
+}
+
+function currentHead(cwd) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function markRunningReviewFailed(statusPath, status, reason, hint) {
+  writeFileSync(statusPath.path, serializeStatus({
+    status: "failed",
+    exit_code: 1,
+    started_at: status.started_at,
+    finished_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    run_id: status.run_id || "current",
+    pid: status.pid,
+    args: status.args,
+    log: status.log,
+    started_head: status.started_head,
+    failure_reason: reason,
+    failure_hint: hint,
+  }));
+}
+
 function runningReview(cwd) {
   const statusPath = backgroundStatusPath(cwd);
   if (!statusPath || !existsSync(statusPath.path)) return null;
 
   const status = parseStatus(readFileSync(statusPath.path, "utf-8"));
-  if (status.status === "running") return { runId: status.run_id || "current", status };
+  if (status.status !== "running") return null;
+
+  const alive = isPidAlive(status.pid);
+  if (alive === true) return { runId: status.run_id || "current", status };
+  if (alive === null && !isStatusStale(status)) return { runId: status.run_id || "current", status };
+
+  const reason = alive === false
+    ? "background review process is no longer running"
+    : "background review status is stale";
+  markRunningReviewFailed(
+    statusPath,
+    status,
+    reason,
+    "starting a new review is allowed; inspect the previous log if needed",
+  );
   return null;
+}
+
+function writeRunningReviewStatus(statusPath, logPath, fields) {
+  writeFileSync(statusPath.path, serializeStatus({
+    status: "running",
+    started_at: fields.startedAt,
+    run_id: fields.runId,
+    pid: fields.pid,
+    args: fields.args,
+    log: logPath.display,
+    started_head: fields.startedHead,
+  }));
 }
 
 function startBackgroundReview(args, ctx) {
@@ -362,6 +443,15 @@ function startBackgroundReview(args, ctx) {
   const runId = nowRunId();
   mkdirSync(dirname(statusPath.path), { recursive: true });
   mkdirSync(dirname(logPath.path), { recursive: true });
+  const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const startedHead = currentHead(ctx.cwd);
+  writeRunningReviewStatus(statusPath, logPath, {
+    startedAt,
+    runId,
+    pid: "starting",
+    args,
+    startedHead,
+  });
 
   const script = `
 set -- ${args}

@@ -77,6 +77,15 @@ run_cli() {
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
 
+run_cli_pi_model_only() {
+  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  HOME="$FAKE_HOME" \
+  EDC_PI_MODEL="t7-pi-model" \
+  EDC_BASH="$FAKE_BIN/bash" \
+  EDC_TEST_CAPTURE_DIR="$CAPTURE" \
+  "$BASH_BIN" "$SCRIPT_ABS" "$@"
+}
+
 eval "$(awk '/^find_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_ABS")" && pwd)"
 
@@ -114,7 +123,17 @@ else
   exit 1
 fi
 
-# ── 7c: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args ──
+# ── 7c: pi accepts EDC_PI_MODEL without phase model variables ───────────────
+rm -rf "$CAPTURE/build"
+run_cli_pi_model_only build "$PROJECT" --agent pi --force
+if [ "$(cat "$CAPTURE/build/agent")" = "pi" ]; then
+  echo "PASS: pi build accepts EDC_PI_MODEL-only configuration"
+else
+  echo "FAIL: pi build rejected EDC_PI_MODEL-only configuration"
+  exit 1
+fi
+
+# ── 7d: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args ──
 #
 # Per-agent CLI dispatch (claude -p / cursor agent -p / codex exec) lives in
 # edc-spawn.sh and is exercised end-to-end by t6/t7-codex with real mocks.

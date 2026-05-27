@@ -10,6 +10,8 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import edcExtension from "./agents/pi/index.mjs";
 
+delete process.env.EDC_PI_SUBPROCESS;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

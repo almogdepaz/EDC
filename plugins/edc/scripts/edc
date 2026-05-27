@@ -157,7 +157,7 @@ build_cmd() {
 
   [ -n "$agent" ] || die "--agent is required"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   if [ -n "$positional_target" ]; then
     target="$positional_target"
@@ -221,7 +221,7 @@ review_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
@@ -271,7 +271,7 @@ audit_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
@@ -326,7 +326,7 @@ update_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local update_script
   update_script="$(find_script edc-update.sh)" \
@@ -389,7 +389,11 @@ _load_config() {
 # before delegating to a subcommand that spawns agent work. "mode" and
 # "doctor" don't spawn agents so they skip this.
 _check_model_or_prompt() {
+  local agent="${1:-}"
   if [ -n "${EDC_BUILD_MODEL:-}" ] || [ -n "${EDC_REVIEW_MODEL:-}" ]; then
+    return 0
+  fi
+  if [ "$agent" = "pi" ] && [ -n "${EDC_PI_MODEL:-}" ]; then
     return 0
   fi
   if [ -t 0 ] && [ -t 1 ]; then

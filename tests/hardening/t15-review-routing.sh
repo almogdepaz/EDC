@@ -11,6 +11,22 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-review.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
+resolve_bash4() {
+  local candidate
+  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
+    [ -n "$candidate" ] || continue
+    [ -x "$candidate" ] || continue
+    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+BASH_BIN="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
+export EDC_BASH="$BASH_BIN"
+
 # Counters live in temp files so subshell-scoped checks aggregate correctly.
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
@@ -18,7 +34,7 @@ check_init --file
 trap 'check_cleanup' EXIT
 
 # ── 15.0: review orchestrator help flag ─────────────────────────────────────
-out=$(bash "$SCRIPT" -h 2>&1)
+out=$("$BASH_BIN" "$SCRIPT" -h 2>&1)
 rc=$?
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Usage: edc-review.sh"; then
   check "15.0: edc-review.sh -h prints usage" 1
@@ -86,7 +102,7 @@ trap 'rm -rf "$TMPDIR_T15A"' EXIT
     {"name":"server","doc":"edc-context/modules/server.md","priority":100,"match":{"prefixes":["src/server/"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
 
   if [ -f edc-context/review-tasks/broker-client.md ] && [ -f edc-context/review-tasks/server.md ]; then
     check "15.1: src/broker/* → broker-client, src/server/* → server" 1
@@ -116,7 +132,7 @@ TMPDIR_T15B=$(mktemp -d)
     {"name":"core","doc":"edc-context/modules/core.md","priority":100,"match":{"exactFiles":["src/auth.ts"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || rc=$?
   if [ -f edc-context/review-tasks/core.md ]; then
     check "15.2: exactFiles match routes file to declared module" 1
   else
@@ -138,7 +154,7 @@ TMPDIR_T15C=$(mktemp -d)
     {"name":"server","doc":"edc-context/modules/server.md","priority":100,"match":{"prefixes":["src/server/"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/unmapped.md ]; then
     check "15.3a: warn-allow groups unmapped file into 'unmapped' bucket" 1
@@ -168,7 +184,7 @@ TMPDIR_T15D=$(mktemp -d)
     {"name":"server","doc":"edc-context/modules/server.md","priority":100,"match":{"prefixes":["src/server/"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ ! -f edc-context/review-tasks/unmapped.md ]; then
     check "15.4a: README.md (allowedGlobs) does not spawn an unmapped review task" 1
@@ -213,7 +229,7 @@ TMPDIR_T15D2=$(mktemp -d)
     {"name":"server","doc":"edc-context/modules/server.md","priority":100,"match":{"prefixes":["src/server/"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] \
      && [ -f edc-context/review-tasks/unmapped.md ] \
@@ -265,7 +281,7 @@ TMPDIR_T15E=$(mktemp -d)
   ]'
 
   set +e
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
   set -e
 
@@ -301,7 +317,7 @@ TMPDIR_T15F=$(mktemp -d)
   ]'
 
   set +e
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
   rc=$?
   set -e
 
@@ -337,7 +353,7 @@ TMPDIR_T15G=$(mktemp -d)
     {"name":"core","doc":"edc-context/modules/core.md","priority":100,"match":{"prefixes":["src/"]}}
   ]'
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || true
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || true
 
   # Every name in edc-context/review-tasks/manifest.json must either exist in
   # edc-context/manifest.json or be an explicit review accounting synthetic.
@@ -371,7 +387,7 @@ TMPDIR_T15H=$(mktemp -d)
   git add src/a.ts
   git commit -q -m "add"
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ]; then
     check "15.8a: --ignore-context writes synthetic baseline task without manifest" 1
@@ -403,7 +419,7 @@ TMPDIR_T15I=$(mktemp -d)
   git add src/a.ts
   git commit -q -m "add"
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/no-context-refresh.md ]; then
     check "15.9a: --no-context-refresh writes direct task when context absent" 1
@@ -443,7 +459,7 @@ TMPDIR_T15J=$(mktemp -d)
   git add src/a.ts
   git commit -q -m "change file"
 
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/core.md ]; then
     check "15.10a: --no-context-refresh uses existing context/routing" 1
@@ -478,7 +494,7 @@ EOF
   printf '## Findings\n\nnone\n' > edc-context/review-tasks/report-ignore-context.md
   printf '# Review\n' > review-HEAD.md
 
-  out=$(bash "$SCRIPT" --verify 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --verify 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && echo "$out" | grep -q "Verified: review-HEAD.md"; then
     check "15.11: --verify skips context freshness for contextMode=ignored" 1
@@ -494,7 +510,7 @@ TMPDIR_T15K=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15K"
   set +e
-  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 --no-context 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --no-context 2>&1)
   rc=$?
   set -e
   if [ "$rc" -eq 2 ] && echo "$out" | grep -q "unknown argument: --no-context"; then
@@ -521,7 +537,7 @@ fi
 exit 1
 EOF
   chmod +x fake-bin/gh
-  PATH="$PWD/fake-bin:$PATH" out=$(bash "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --ignore-context 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q "src/a.ts" edc-context/review-tasks/ignore-context.md; then
     check "15.13a: pr:<number> target uses gh pr diff output" 1
@@ -553,7 +569,7 @@ fi
 exit 1
 EOF
   chmod +x fake-bin/gh
-  PATH="$PWD/fake-bin:$PATH" out=$(bash "$SCRIPT" --build --pr 147 --ignore-context 2>&1)
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build --pr 147 --ignore-context 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q '"target": "pr:147"' edc-context/review-tasks/manifest.json; then
     check "15.14a: --build --pr <number> normalizes target to pr:<number>" 1

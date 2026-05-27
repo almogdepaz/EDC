@@ -103,6 +103,7 @@ EOF
 SESSION_ID="t10-$$-$(date +%s%N 2>/dev/null || date +%s)"
 
 wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module -e '
+  delete process.env.EDC_PI_SUBPROCESS;
   const cwd = process.env.EDC_TEST_CWD;
   const sid = process.env.EDC_TEST_SID;
   const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [], selections: [] };
@@ -201,7 +202,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   }
 
   // 3c. single-active-run guard refuses duplicate background reviews.
-  fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=success", "status=running"));
+  fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8")
+    .replace("status=success", "status=running")
+    .replace(/^pid=.*$/m, `pid=${process.pid}`));
   await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
   const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
   if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Review status.")) {
@@ -210,7 +213,67 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   }
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
 
-  // 3d. direct script actions route from menu.
+  // 3d. immediate duplicate starts are rejected before the child writes status.
+  const raceDir = `${cwd}/race-review`;
+  fs.mkdirSync(`${raceDir}/.edc/scripts`, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: raceDir, stdio: "ignore" });
+  fs.writeFileSync(`${raceDir}/tracked.txt`, "x\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: raceDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: raceDir, stdio: "ignore" });
+  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 2\necho "Verified: review-HEAD.md"\n`);
+  fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
+
+  const bashCandidates = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash"];
+  const realBash = bashCandidates.find((candidate) => {
+    try {
+      return childProcess.execFileSync(candidate, ["-lc", "printf %s ${BASH_VERSINFO[0]}"], { encoding: "utf-8" }).trim() >= "4";
+    } catch {
+      return false;
+    }
+  });
+  if (!realBash) {
+    console.log("RACE_TEST_BASH_MISSING");
+    process.exit(1);
+  }
+  fs.mkdirSync(`${raceDir}/fake-bin`, { recursive: true });
+  fs.writeFileSync(`${raceDir}/fake-bin/bash`, `#!/bin/sh\nif [ "$1" = "-lc" ] && printf '%s' "$2" | grep -q BASH_VERSINFO; then printf '5'; exit 0; fi\nsleep 1\nexec ${realBash} "$@"\n`);
+  fs.chmodSync(`${raceDir}/fake-bin/bash`, 0o755);
+
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${raceDir}/fake-bin:${previousPath || ""}`;
+  const raceStartIndex = calls.messages.length;
+  await Promise.all([
+    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: raceDir }),
+    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: raceDir }),
+  ]);
+  process.env.PATH = previousPath;
+  const raceMessages = calls.messages.slice(raceStartIndex).map((message) => message.content || "");
+  const raceStartedCount = raceMessages.filter((message) => message.includes("Background review started.")).length;
+  const raceBlockedCount = raceMessages.filter((message) => message.includes("already running")).length;
+  if (raceStartedCount !== 1 || raceBlockedCount !== 1) {
+    console.log("IMMEDIATE_DUPLICATE_REVIEW_FAIL:" + JSON.stringify(raceMessages));
+    process.exit(1);
+  }
+
+  // 3e. dead running PID is marked failed and does not wedge future starts.
+  const stalePidDir = `${cwd}/stale-pid-review`;
+  fs.mkdirSync(`${stalePidDir}/.edc/scripts`, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: stalePidDir, stdio: "ignore" });
+  fs.writeFileSync(`${stalePidDir}/tracked.txt`, "x\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: stalePidDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: stalePidDir, stdio: "ignore" });
+  fs.writeFileSync(`${stalePidDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "Verified: review-HEAD.md"\n`);
+  fs.chmodSync(`${stalePidDir}/.edc/scripts/edc-review.sh`, 0o755);
+  fs.mkdirSync(`${stalePidDir}/.git/edc`, { recursive: true });
+  fs.writeFileSync(`${stalePidDir}/.git/edc/status`, "status=running\nrun_id=dead\npid=999999\nstarted_at=2000-01-01T00:00:00Z\n");
+  await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: stalePidDir });
+  const stalePidMessage = calls.messages.at(-1)?.content || "";
+  if (!stalePidMessage.includes("Background review started.")) {
+    console.log("STALE_PID_RECOVERY_FAIL:" + JSON.stringify(stalePidMessage));
+    process.exit(1);
+  }
+
+  // 3f. direct script actions route from menu.
   await edcCmd.opts.handler("", menuCtx("Build context"));
   if (!calls.messages.at(-1)?.content?.includes("build args:  agent=pi")) {
     console.log("BUILD_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
@@ -232,7 +295,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3e. /edc -h shows help directly instead of launching an agent turn.
+  // 3g. /edc -h shows help directly instead of launching an agent turn.
   const userMessagesAfterCommand = calls.userMessages.length;
   await edcCmd.opts.handler("-h", { cwd });
   if (calls.userMessages.length !== userMessagesAfterCommand) {
@@ -244,7 +307,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3f. /edc is interactive-only; non-interactive contexts are told to use the CLI.
+  // 3h. /edc is interactive-only; non-interactive contexts are told to use the CLI.
   await edcCmd.opts.handler("", { cwd, hasUI: false });
   const nonInteractiveMessage = calls.messages.at(-1)?.content || "";
   if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review --agent pi HEAD --base main")) {
@@ -252,10 +315,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3g. missing context prompts before auto-build and carries state into start message.
+  // 3i. missing context prompts before auto-build and carries state into start message.
   const missingDir = `${cwd}/missing-context`;
   fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: missingDir, stdio: "ignore" });
+  fs.writeFileSync(`${missingDir}/tracked.txt`, "x\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: missingDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: missingDir, stdio: "ignore" });
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
   const missingCtx = {
@@ -280,7 +346,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3h. declining stale/missing context stops and teaches explicit CLI no-context modes.
+  // 3j. declining stale/missing context stops and teaches explicit CLI no-context modes.
   const staleDir = `${cwd}/stale-context`;
   fs.mkdirSync(`${staleDir}/edc-context`, { recursive: true });
   fs.writeFileSync(`${staleDir}/file.txt`, "x\n");
@@ -368,6 +434,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   await tc.handler(edcBashEvent, fakeCtx);
   if (edcBashEvent.input.timeout < 7200) {
     console.log("EDC_BASH_TIMEOUT_FAIL:" + JSON.stringify(edcBashEvent.input));
+    process.exit(1);
+  }
+  const absoluteEdcBashEvent = {
+    type: "tool_call",
+    toolCallId: "bash-edc-absolute",
+    toolName: "bash",
+    input: { command: `/opt/homebrew/bin/bash ${cwd}/.edc/scripts/edc-review.sh --base main`, timeout: 1200 },
+  };
+  await tc.handler(absoluteEdcBashEvent, fakeCtx);
+  if (absoluteEdcBashEvent.input.timeout < 7200) {
+    console.log("EDC_ABSOLUTE_BASH_TIMEOUT_FAIL:" + JSON.stringify(absoluteEdcBashEvent.input));
     process.exit(1);
   }
 

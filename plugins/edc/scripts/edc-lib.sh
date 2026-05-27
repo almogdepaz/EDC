@@ -219,27 +219,11 @@ proc = subprocess.Popen(
     bufsize=1,
 )
 
-try:
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        try:
-            event_type = json.loads(line).get("type")
-        except Exception:
-            event_type = None
-        if event_type == "agent_end":
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-            sys.exit(0)
+SUCCESS_STOP_REASONS = {"stop"}
 
-    sys.exit(proc.wait())
-finally:
+
+def stop_proc():
+    global proc
     if proc is not None and proc.poll() is None:
         proc.terminate()
         try:
@@ -247,6 +231,79 @@ finally:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+def final_assistant(messages):
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            return message
+    return None
+
+
+def error_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("errorMessage", "message", "error"):
+            nested = value.get(key)
+            if nested:
+                return error_text(nested)
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def classify_agent_end(event):
+    assistant = final_assistant(event.get("messages"))
+    if assistant is None:
+        return False, "agent_end did not include a final assistant message"
+
+    error_message = assistant.get("errorMessage")
+    if error_message:
+        return False, error_text(error_message)
+
+    stop_reason = assistant.get("stopReason")
+    if stop_reason not in SUCCESS_STOP_REASONS:
+        return False, f"agent_end stopReason was {stop_reason or 'missing'}"
+
+    return True, ""
+
+
+try:
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+
+        event_type = event.get("type")
+        if event_type == "error":
+            print(f"ERROR: pi subprocess: {error_text(event.get('error') or event)}", file=sys.stderr)
+            stop_proc()
+            sys.exit(1)
+
+        if event_type == "agent_end":
+            ok, reason = classify_agent_end(event)
+            stop_proc()
+            if ok:
+                sys.exit(0)
+            print(f"ERROR: pi subprocess: {reason}", file=sys.stderr)
+            sys.exit(1)
+
+    rc = proc.wait()
+    if rc != 0:
+        sys.exit(rc)
+    print("ERROR: pi subprocess ended without successful agent_end", file=sys.stderr)
+    sys.exit(1)
+finally:
+    stop_proc()
 PY
   chmod +x "$path"
 }

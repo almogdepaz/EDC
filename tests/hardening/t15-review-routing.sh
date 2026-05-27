@@ -177,11 +177,11 @@ TMPDIR_T15D=$(mktemp -d)
     echo "$out"
     ls edc-context/review-tasks 2>/dev/null || true
   fi
-  if [ -f edc-context/review-tasks/report-unmapped.md ] && grep -q '^## Findings' edc-context/review-tasks/report-unmapped.md; then
+  if [ -f edc-context/review-tasks/report-allowed-unmapped.md ] && grep -q '^## Findings' edc-context/review-tasks/report-allowed-unmapped.md; then
     check "15.4b: allowedGlobs writes deterministic validating skipped report" 1
   else
     check "15.4b: allowedGlobs writes deterministic validating skipped report" 0
-    cat edc-context/review-tasks/report-unmapped.md 2>/dev/null || true
+    cat edc-context/review-tasks/report-allowed-unmapped.md 2>/dev/null || true
   fi
   # README is in allowedGlobs — should NOT trigger a WARNING line at all.
   if echo "$out" | grep -qE '^WARNING:.*not mapped'; then
@@ -190,13 +190,65 @@ TMPDIR_T15D=$(mktemp -d)
   else
     check "15.4c: allowedGlobs match suppresses WARNING" 1
   fi
-  if echo "$out" | grep -q '^TASK .*unmapped.md'; then
+  if echo "$out" | grep -q '^TASK .*\(unmapped\|allowed-unmapped\).md'; then
     check "15.4d: allowedGlobs skipped report is not emitted as a subprocess task" 0
     echo "$out"
   else
     check "15.4d: allowedGlobs skipped report is not emitted as a subprocess task" 1
   fi
   rm -rf "$TMPDIR_T15D"
+)
+
+# ── 15.4e: mixed expected + unexpected unmapped paths keep both accounted ───
+TMPDIR_T15D2=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15D2"
+  write_minimal_context
+  echo "x" > README.md   # listed in allowedGlobs by write_manifest
+  echo "y" > orphan.ts   # unexpected unmapped
+  git add README.md orphan.ts edc-context
+  git commit -q -m "edit allowed and orphan"
+  head=$(git rev-parse HEAD)
+  write_manifest edc-context/manifest.json "$head" "warn-allow" '[
+    {"name":"server","doc":"edc-context/modules/server.md","priority":100,"match":{"prefixes":["src/server/"]}}
+  ]'
+
+  out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && [ -f edc-context/review-tasks/unmapped.md ] \
+     && grep -q 'orphan.ts' edc-context/review-tasks/unmapped.md \
+     && ! grep -q 'README.md' edc-context/review-tasks/unmapped.md; then
+    check "15.4e: mixed unmapped task reviews only unexpected paths" 1
+  else
+    check "15.4e: mixed unmapped task reviews only unexpected paths" 0
+    echo "$out"
+    cat edc-context/review-tasks/unmapped.md 2>/dev/null || true
+  fi
+  if [ -f edc-context/review-tasks/report-allowed-unmapped.md ] \
+     && grep -q 'README.md' edc-context/review-tasks/report-allowed-unmapped.md \
+     && jq -e '.modules[] | select(.name == "allowed-unmapped")' edc-context/review-tasks/manifest.json >/dev/null; then
+    check "15.4f: mixed allowedGlobs writes separate skipped report and manifest entry" 1
+  else
+    check "15.4f: mixed allowedGlobs writes separate skipped report and manifest entry" 0
+    cat edc-context/review-tasks/report-allowed-unmapped.md 2>/dev/null || true
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  if echo "$out" | grep -q '^TASK .*allowed-unmapped.md'; then
+    check "15.4g: mixed allowedGlobs skipped report is not emitted as a subprocess task" 0
+    echo "$out"
+  else
+    check "15.4g: mixed allowedGlobs skipped report is not emitted as a subprocess task" 1
+  fi
+  if echo "$out" | grep -q '^WARNING:.*not mapped' \
+     && echo "$out" | grep -q 'orphan.ts' \
+     && ! echo "$out" | grep -q '^WARNING:.*README.md'; then
+    check "15.4h: mixed warning names only unexpected unmapped paths" 1
+  else
+    check "15.4h: mixed warning names only unexpected unmapped paths" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15D2"
 )
 
 # ── 15.5: fail policy — unexpected unmapped file → exit 2 ───────────────────
@@ -269,7 +321,7 @@ TMPDIR_T15F=$(mktemp -d)
 
 # ── 15.7: regression guard — edc-context/review-tasks/manifest.json names are real ──
 # Already implicitly verified by 15.1 (no synthetic 'src' bucket), but pin it
-# explicitly: the only synthetic name allowed is "unmapped".
+# explicitly: the only synthetic names allowed are "unmapped" and "allowed-unmapped".
 TMPDIR_T15G=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15G"
@@ -288,12 +340,14 @@ TMPDIR_T15G=$(mktemp -d)
   out=$(bash "$SCRIPT" --build HEAD --base HEAD~1 2>&1) || true
 
   # Every name in edc-context/review-tasks/manifest.json must either exist in
-  # edc-context/manifest.json or be the literal "unmapped".
+  # edc-context/manifest.json or be an explicit review accounting synthetic.
   context_modules=$(jq -r '.modules[].name' edc-context/manifest.json)
   review_modules=$(jq -r '.modules[].name' edc-context/review-tasks/manifest.json)
   bad_count=0
   for m in $review_modules; do
-    [ "$m" = "unmapped" ] && continue
+    case "$m" in
+      unmapped|allowed-unmapped) continue ;;
+    esac
     if ! echo "$context_modules" | grep -qx "$m"; then
       bad_count=$((bad_count + 1))
       echo "  unexpected synthetic module: $m"
@@ -301,9 +355,9 @@ TMPDIR_T15G=$(mktemp -d)
   done
 
   if [ "$bad_count" -eq 0 ]; then
-    check "15.7: review-tasks modules are real or 'unmapped' only" 1
+    check "15.7: review-tasks modules are real or expected synthetics only" 1
   else
-    check "15.7: review-tasks modules are real or 'unmapped' only" 0
+    check "15.7: review-tasks modules are real or expected synthetics only" 0
   fi
   rm -rf "$TMPDIR_T15G"
 )

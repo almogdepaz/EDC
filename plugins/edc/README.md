@@ -71,7 +71,9 @@ The user's agent session uses thin command wrappers that call deterministic orch
 2. Auto-rebuilds or auto-updates context if stale (via `edc-recover-context.sh`)
 3. Spawns one fresh `<agent> -p` subprocess per module with the skill content
    piped as the prompt (`edc-resolve-prompt`)
-4. For review: consolidates per-module reports into a single review file
+4. For review: routes changed files through `edc-context/manifest.json` and consolidates per-module reports into a single review file
+
+Review task routing is explicit: mapped files get their module context, unexpected unmapped files are reviewed under the synthetic `unmapped` bucket with repo-level context only, and files matching `unmapped.allowedGlobs` are intentionally skipped but represented by a deterministic `allowed-unmapped` report.
 
 Each subprocess is a fresh context with a single instruction. The driving
 session does not perform analysis itself — it spawns workers and verifies

@@ -193,10 +193,10 @@ assert_report_valid() {
 
 write_allowed_unmapped_report() {
   local files="$1"
-  local report="$EDC_REVIEW_TASKS_DIR/report-unmapped.md"
+  local report="$EDC_REVIEW_TASKS_DIR/report-allowed-unmapped.md"
 
   {
-    echo "# Differential Review Report: unmapped"
+    echo "# Differential Review Report: allowed-unmapped"
     echo ""
     echo "## What Changed"
     echo ""
@@ -206,7 +206,7 @@ write_allowed_unmapped_report() {
     echo ""
     echo "## Findings"
     echo ""
-    echo "No module review was spawned for these paths. They are explicitly allowed as unmapped, so they should not block review consolidation."
+    echo "No module review was spawned for these paths. They are explicitly allowed as unmapped, so they are intentionally skipped but still accounted for in the final review."
     echo ""
     echo "## Coverage Notes"
     echo ""
@@ -376,8 +376,8 @@ auto_mode() {
     exit 1
   fi
 
-  # Parse TASK lines. Some allowed-unmapped buckets are satisfied by
-  # deterministic prewritten reports and intentionally emit no subprocess task.
+  # Parse TASK lines. allowed-unmapped is satisfied by a deterministic
+  # prewritten report and intentionally emits no subprocess task.
   local tasks
   tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //' || true)
   if [ -z "$tasks" ]; then
@@ -724,10 +724,8 @@ TASK
     esac
   fi
 
-  local deterministic_unmapped_report=0
-  if [ "$allowed_unmapped_count" -gt 0 ] && [ -z "${MODULE_FILES[unmapped]+x}" ]; then
-    MODULE_FILES["unmapped"]="$allowed_unmapped_files"
-    deterministic_unmapped_report=1
+  if [ "$allowed_unmapped_count" -gt 0 ]; then
+    MODULE_FILES["allowed-unmapped"]="$allowed_unmapped_files"
   fi
 
   echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
@@ -754,10 +752,12 @@ TASK
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      # The synthetic "unmapped" bucket has no per-module doc; emit empty
-      # doc field so the review subagent skips the per-module read step.
+      # Synthetic accounting/review buckets have no per-module doc; emit empty
+      # doc field so review subprocesses do not read nonexistent module context.
       local module_doc="${EDC_MODULES_DIR}/${module}.md"
-      [ "$module" = "unmapped" ] && module_doc=""
+      case "$module" in
+        unmapped|allowed-unmapped) module_doc="" ;;
+      esac
       echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
@@ -779,7 +779,7 @@ TASK
     local file_list baseline_line module_context_line
     file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
 
-    if [ "$module" = "unmapped" ] && [ "$deterministic_unmapped_report" -eq 1 ]; then
+    if [ "$module" = "allowed-unmapped" ]; then
       write_allowed_unmapped_report "${MODULE_FILES[$module]}"
       continue
     fi
@@ -788,7 +788,7 @@ TASK
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
     if [ "$module" = "unmapped" ]; then
-      module_context_line="3. NOTE: these files are not mapped to any module in ${EDC_MANIFEST}. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths."
+      module_context_line="3. NOTE: these files are not matched by the current ${EDC_MANIFEST} routing. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths. State this limitation clearly in the report."
     else
       module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists - deep per-module context, invariants, call graphs"
     fi
@@ -822,7 +822,7 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    if [ "$module" = "unmapped" ] && [ "$deterministic_unmapped_report" -eq 1 ]; then
+    if [ "$module" = "allowed-unmapped" ]; then
       continue
     fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"

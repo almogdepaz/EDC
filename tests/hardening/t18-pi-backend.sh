@@ -77,8 +77,12 @@ EOF
 }
 finish_ok() {
   printf '{"type":"result","is_error":false,"result":"ok"}\n'
+  if [ "${PI_FAKE_AGENT_END_ERROR:-0}" = "1" ]; then
+    printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"provider down","content":[{"type":"text","text":""}]}]}\n'
+  else
+    printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
+  fi
   if [ "${PI_FAKE_HANG_AFTER_AGENT_END:-0}" = "1" ]; then
-    printf '{"type":"agent_end"}\n'
     sleep 5
   fi
   exit 0
@@ -165,6 +169,15 @@ if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
 else
   check "18.6: pi backend stops reading after agent_end" 0
   cat hang-update.out hang-update.err
+fi
+
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >agent-end-error.out 2>agent-end-error.err
+rc=$?
+if [ "$rc" -ne 0 ] && grep -q 'provider down' agent-end-error.err; then
+  check "18.7: pi backend fails on agent_end assistant error" 1
+else
+  check "18.7: pi backend fails on agent_end assistant error" 0
+  cat agent-end-error.out agent-end-error.err
 fi
 
 echo

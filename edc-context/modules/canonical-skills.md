@@ -23,7 +23,7 @@ This module defines what spawned agents are instructed to do. Private implementa
 - `edc-review/{methodology,adversarial,reporting,patterns}.md`: detailed review workflow embedded by `runtime-cli` into per-module review prompts.
 
 ## Runtime resolution
-`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. The current runtime adds Pi search paths (`.pi/skills`, `$HOME/.pi/agent/skills`) and emits a substitution preamble telling agents to run helper scripts from `$EDC_SCRIPTS_DIR` with `$EDC_BASH`. That preamble is outside this module's markdown, but it is part of the effective prompt seen by spawned implementation agents.
+`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. The current runtime adds Pi search paths (`.pi/skills`, `$HOME/.pi/agent/skills`), propagates Pi model choice through `EDC_PI_MODEL`, and emits a substitution preamble telling agents to run helper scripts from `$EDC_SCRIPTS_DIR` with `$EDC_BASH`. That preamble is outside this module's markdown, but it is part of the effective prompt seen by spawned implementation agents.
 
 ## Invariants
 - Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, or review-task routing.

@@ -15,8 +15,8 @@ EDC is a multi-agent coding-assistant toolkit for building, refreshing, injectin
 1. **Install:** root `install.sh` copies terminal scripts and skill bundles. Hooks/extensions can also copy `.edc/scripts` and private prompts into a target repo.
 2. **Build/update:** `edc-build.sh`/`edc-update.sh` own state routing, prompt resolution, `EDC_BASH` propagation, backend spawning, manifest generation, and doctor validation.
 3. **Runtime injection:** session start may show `index.md`; pre-tool/tool-call hooks route touched paths through the manifest and inject one matching module doc in `inject` mode.
-4. **Review/audit:** freshness recovery builds or updates context before per-module review tasks or complexity reports are produced. Review verifies per-module reports before consolidation.
-5. **Pi UX:** Pi exposes one interactive `/edc` menu. Reviews run in the background with current status/logs under `.git/edc/`; build/update/audit/doctor run fixed script actions.
+4. **Review/audit:** freshness recovery builds or updates context before per-module review tasks or complexity reports are produced unless an explicit direct-review mode is requested. Review accounts for expected unmapped paths, verifies per-module reports before consolidation, and validates final reports after verification.
+5. **Pi UX:** Pi exposes one interactive `/edc` menu. It preflights context freshness before background review, stores current status/logs under `.git/edc/`, and runs build/update/audit/doctor as fixed script actions.
 6. **Benchmark:** CVE harnesses evaluate whether prompt changes improve vulnerability discovery and surface scorer failures explicitly.
 
 ## Global invariants
@@ -38,7 +38,7 @@ EDC is a multi-agent coding-assistant toolkit for building, refreshing, injectin
 - `runtime-cli` consumes `canonical-skills`, executes all backends, and provides scripts used by every wrapper/hook.
 - `plugin-surface` mirrors shell routing/path constants and is imported by `agent-wrappers` for Pi injection/freshness/install behavior.
 - `agent-wrappers` depends on both `plugin-surface` JS helpers and `runtime-cli` scripts.
-- `hardening-tests` pin routing, prompt resolution, Bash alignment, Pi backend/menu/status behavior, and v2 layout contracts.
+- `hardening-tests` pin routing, prompt resolution, Bash alignment, Pi backend/menu/status/failure behavior, direct-review modes, allowed-unmapped accounting, and v2 layout contracts.
 - `benchmarking` mutates/evaluates `canonical-skills` and relies on runtime subprocess/model propagation.
 
 ## Blast-radius summary

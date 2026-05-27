@@ -99,3 +99,90 @@ echo "Verified: review-HEAD.md"
   rmSync(cwd, { recursive: true, force: true });
 }
 NODE
+
+node --input-type=module <<'NODE'
+import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import edcExtension from "./agents/pi/index.mjs";
+
+delete process.env.EDC_PI_SUBPROCESS;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(50);
+  }
+  return predicate();
+}
+
+const tmpBase = mkdtempSync(join(tmpdir(), "edc-pi-bg-quote-"));
+let childPid = 0;
+try {
+  const mainRepo = join(tmpBase, "main$(touch pwned_marker)");
+  const worktree = join(tmpBase, "wt");
+  mkdirSync(mainRepo, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: mainRepo });
+  execFileSync("git", ["config", "user.email", "a@example.com"], { cwd: mainRepo });
+  execFileSync("git", ["config", "user.name", "a"], { cwd: mainRepo });
+  execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: mainRepo });
+  writeFileSync(join(mainRepo, "tracked.txt"), "x\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: mainRepo });
+  execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: mainRepo });
+  execFileSync("git", ["worktree", "add", "-q", worktree, "HEAD"], { cwd: mainRepo });
+
+  const scriptsDir = join(worktree, ".edc", "scripts");
+  mkdirSync(scriptsDir, { recursive: true });
+  const reviewScript = join(scriptsDir, "edc-review.sh");
+  writeFileSync(reviewScript, `#!/usr/bin/env bash
+set -euo pipefail
+echo "Verified: review-HEAD.md"
+`);
+  chmodSync(reviewScript, 0o755);
+
+  const messages = [];
+  let handler;
+  const pi = {
+    on() {},
+    registerCommand(_name, config) {
+      handler = config.handler;
+    },
+    sendMessage(message) {
+      messages.push(message);
+    },
+  };
+  await edcExtension(pi);
+
+  const ctx = {
+    cwd: worktree,
+    hasUI: true,
+    ui: {
+      select: async () => "Review current branch vs main",
+      confirm: async () => true,
+    },
+    model: { provider: "test", id: "model" },
+  };
+
+  await handler("", ctx);
+  const started = messages.find((message) => message.customType === "edc-review-background");
+  assert.ok(started, "review start message should be emitted");
+  const pidMatch = started.content.match(/^PID: (\d+)$/m);
+  childPid = pidMatch ? Number(pidMatch[1]) : 0;
+
+  const markerPath = join(worktree, "pwned_marker");
+  await waitFor(() => existsSync(markerPath), 1000);
+  assert.equal(existsSync(markerPath), false, "git-path display strings must not execute shell command substitution");
+} finally {
+  if (childPid) {
+    try { process.kill(childPid, "SIGTERM"); } catch {}
+  }
+  rmSync(tmpBase, { recursive: true, force: true });
+}
+NODE

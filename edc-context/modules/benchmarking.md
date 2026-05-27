@@ -34,7 +34,7 @@ This module measures whether EDC review/build prompts find known security vulner
 
 ## Coupling
 - Mutates/evaluates `canonical-skills`, especially review methodology.
-- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric).
+- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric). Review-routing changes such as direct context-skip modes and allowed-unmapped accounting can affect benchmark comparability if the harness starts using the production review pipeline directly.
 - Transcript reconstruction knows Claude Code JSONL shapes also consumed by `edc-spawn-analyze.sh`-style analysis.
 - Status plans at repo root document benchmark-driven prompt changes and are intentionally allowed/unmapped in manifest coverage.
 

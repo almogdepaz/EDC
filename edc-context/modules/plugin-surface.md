@@ -22,7 +22,7 @@ This module is the host-agent surface for EDC context. It installs/copies orches
 - `plugins/edc/hooks/session-start.mjs`: best-effort install of `.edc/scripts`/private prompt bundles and optional index injection in `inject` mode.
 - `plugins/edc/hooks/pretooluse-context-inject.mjs`: parses hook payloads, extracts touched paths, routes them, dedups injection by session, and formats host-specific output.
 - `plugins/edc/hooks/hooks.json`: hook event declarations.
-- `plugins/edc/README.md`: documents backend support; Pi is now described as an interactive `/edc` menu rather than separate slash commands.
+- `plugins/edc/README.md`: documents backend support; Pi is described as an interactive `/edc` menu rather than separate slash commands, and review routing is documented as manifest-driven with deterministic `allowed-unmapped` accounting for expected unmapped paths.
 
 ## Core flows
 ### Session start
@@ -52,7 +52,7 @@ This module is the host-agent surface for EDC context. It installs/copies orches
 - Hook payloads and Bash command text are untrusted. Path extraction only selects context to display; it grants no authority.
 - Manifest/module docs are repo-controlled content and should only be injected when mode permits.
 - Script/prompt installation copies from the installed plugin to the target repo best-effort; it must not make session start fail.
-- Freshness checks are advisory UX signals. Shell `edc-assert-fresh.sh`/`edc-doctor.sh` are the authoritative gates.
+- Freshness checks are advisory UX signals. Shell `edc-assert-fresh.sh`/`edc-doctor.sh` are the authoritative gates, and shell review routing remains authoritative for mapped/unmapped/allowed-unmapped task generation.
 
 ## Coupling
 - Mirrors `runtime-cli` route/path behavior; parity is pinned by hardening route tests.

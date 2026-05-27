@@ -9,18 +9,18 @@ Owns shell/Node regression and hardening tests for the EDC runtime, plugins, Pi 
 ## Purpose
 This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background review UX, and runtime hooks.
 
-The current branch adds substantial Pi coverage and Bash-alignment coverage while extending existing CLI/review-routing tests.
+The current branch adds substantial Pi coverage, Bash-alignment coverage, review-status failure coverage, and allowed-unmapped/direct-review routing coverage while extending existing CLI/review-routing tests.
 
 ## Test organization
 - `lib/check.sh`: shared PASS/FAIL helpers, including file-backed counters for tests that execute assertions in subshells.
 - `t1-*` through `t9-*`: early tool lockdown, stream filtering, content validation, timeouts, install portability, auto mode, CLI entrypoint, ignore rules, routing, and Pi background-status persistence.
 - `t2-pi-background-runs.sh`: asserts Pi background review status/logs live under `.git/edc/` and survive `edc-context/` cleanup during recovery.
-- `t10-pi-extension.sh`: fake Pi ExtensionAPI integration test. Now asserts only `/edc` is registered, public skills are limited to review/audit, session/tool injection still works, menu actions route to scripts, background review starts/statuses/blocks duplicates, stale/missing context prompts, help is direct, and EDC Bash tool calls get longer timeouts.
+- `t10-pi-extension.sh`: fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit, session/tool injection still works, menu actions route to scripts, context preflight prompts can be accepted/declined/bypassed, background review starts/statuses/blocks duplicates, help is direct, and EDC Bash tool calls get longer timeouts.
 - `t11-audit-orchestrator.sh`: audit subprocess/freshness/report validation behavior.
 - `t12-build-orchestrator.sh`: build route matrix (missing, healthy, force, partial, missing AGENTS, v1 refusal) and doctor validation.
 - `t13-update-orchestrator.sh`: update preflight and validation paths.
 - `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; now sources `edc-lib.sh` from an absolute path while running in a separate working directory.
-- `t15-review-routing.sh`: manifest-driven review task routing, unmapped handling, ambiguity failure, ignore-context/no-context modes, plus `edc-review.sh -h` usage validation.
+- `t15-review-routing.sh`: manifest-driven review task routing, unexpected unmapped handling, expected `unmapped.allowedGlobs` accounting through an `allowed-unmapped` report, ambiguity failure, ignore-context/no-context modes, plus `edc-review.sh -h` usage validation.
 - `t16-context-dir-source-of-truth.sh`: canonical path source-of-truth behavior.
 - `t17-route-js-parity.sh`: JS router parity with shell router and no shell exec on hot path.
 - `t18-pi-backend.sh`: Pi JSON backend spawn behavior, model propagation, subprocess no-extension guard, and stream parsing.

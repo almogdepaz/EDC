@@ -9,7 +9,7 @@ Owns the terminal entrypoint, deterministic shell orchestrators, command wrapper
 ## Purpose
 This module turns EDC prompt bundles into reproducible workflows. The public `edc` command parses user intent and model/runtime options, then delegates to shell orchestrators that decide build/update/review/audit control flow. Shell owns state classification, freshness recovery, routing, validation, and subprocess spawning; agent prompts only perform bounded semantic work.
 
-The current branch expands the runtime from Claude/Cursor/Codex to Pi, and standardizes nested script execution through `EDC_BASH` so macOS `/bin/bash` 3.2 does not leak into child orchestrators.
+The current branch expands the runtime from Claude/Cursor/Codex to Pi, standardizes nested script execution through `EDC_BASH` so macOS `/bin/bash` 3.2 does not leak into child orchestrators, and tightens review reliability around context-skip modes plus allowed-unmapped accounting.
 
 ## Actors and entrypoints
 - Human operator invokes `edc build|update|review|audit|mode|doctor` after install.
@@ -18,11 +18,11 @@ The current branch expands the runtime from Claude/Cursor/Codex to Pi, and stand
 - Slash-command wrappers in `plugins/edc/commands/` invoke the same scripts from Claude/Cursor surfaces.
 
 ## Key files
-- `plugins/edc/scripts/edc`: public CLI parser. It now accepts `--agent pi`, reads manifest default mode for review/audit/update, allows non-Claude backends in `advisory`, and dispatches via `"$EDC_BASH"`.
-- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. New Pi support adds `edc_require_agent_cli`, `write_pi_json_supervisor`, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
+- `plugins/edc/scripts/edc`: public CLI parser. It accepts `--agent pi`, reads manifest default mode for review/audit/update, allows non-Claude backends in `advisory`, recognizes `EDC_PI_MODEL` as configured-model evidence for Pi, and dispatches via `"$EDC_BASH"`.
+- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. Pi support includes `edc_require_agent_cli`, `write_pi_json_supervisor`, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
 - `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It now uses shared backend validation and `EDC_BASH` for child scripts.
 - `plugins/edc/scripts/edc-update.sh`: healthy-v2-only incremental update gate; accepts Pi backend and uses `EDC_BASH` for preflight and doctor.
-- `plugins/edc/scripts/edc-review.sh`: self-driving review pipeline. It accepts Pi backend, routes review-task generation through `EDC_BASH`, exposes `-h/--help`, supports PR shorthand plus `--no-context-refresh`/`--ignore-context` direct-review modes, and keeps deterministic task/consolidation/verification phases.
+- `plugins/edc/scripts/edc-review.sh`: self-driving review pipeline. It accepts Pi backend, routes review-task generation through `EDC_BASH`, exposes `-h/--help`, supports PR shorthand plus `--no-context-refresh`/`--ignore-context` direct-review modes, separates expected `unmapped.allowedGlobs` paths into a deterministic `allowed-unmapped` report, and keeps deterministic task/consolidation/verification/report-validation phases.
 - `plugins/edc/scripts/edc-audit.sh`: freshness recovery plus one audit subprocess; now shares backend validation with build/review/update.
 - `plugins/edc/scripts/edc-manifest.sh`: deterministic post-step for generated timestamp, `sourceCommit`, and coverage counts; now routes files through `"$EDC_BASH"`.
 - `plugins/edc/scripts/edc-doctor.sh`: v2 layout/routing validator; route checks now use `EDC_BASH`.
@@ -43,7 +43,7 @@ The current branch expands the runtime from Claude/Cursor/Codex to Pi, and stand
 4. `stream_filter` translates Pi `message_update`, `tool_execution_start`, `tool_execution_end`, and `auto_retry_end` events into operator-readable output.
 
 ### Freshness recovery and validation
-Review/audit source `edc-recover-context.sh`. Missing/stale context triggers build/update prompts, followed by a force rebuild if recovery still does not produce fresh v2 context. Build/update always run `edc-doctor.sh`; review additionally validates per-module reports before consolidation.
+Review/audit source `edc-recover-context.sh`. Missing/stale context triggers build/update prompts unless a direct review mode was requested, followed by a force rebuild if recovery still does not produce fresh v2 context. `--no-context-refresh` uses existing context without recovering it; `--ignore-context` deliberately builds direct review tasks without module context. Expected unmapped files declared in `unmapped.allowedGlobs` are accounted for by an `allowed-unmapped` report rather than spawning a synthetic review. Build/update always run `edc-doctor.sh`; review validates per-module reports before consolidation and validates final reports after verification.
 
 ## Invariants
 - Bash >=4 is mandatory for orchestrators; nested script calls must use `EDC_BASH`, not ambient `bash`.
@@ -68,5 +68,5 @@ Review/audit source `edc-recover-context.sh`. Missing/stale context triggers bui
 ## Fragility points
 - `edc-lib.sh` and `edc-review.sh` are large multi-mode files; small changes can affect all backends.
 - Pi subprocess supervision depends on Pi JSON event names (`agent_end`, `message_update`, `tool_execution_*`). Event-shape drift can make subprocess output silent or prematurely terminated.
-- `_check_model_or_prompt` recognizes build/review model vars but not the Pi-specific fallback variable by itself; Pi CLI users should prefer `--model` or set phase model vars until this is tightened.
 - `edc-manifest.sh` still walks raw `git ls-files`; build/update ignore rules must be reflected in `unmapped.allowedGlobs` for coverage to stay clean.
+- Direct review modes intentionally bypass parts of the context-recovery contract; callers must make the tradeoff explicit with `--no-context-refresh` or `--ignore-context`.

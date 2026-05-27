@@ -9,7 +9,7 @@ Owns the Pi extension wrapper and Pi-specific install/readme material.
 ## Purpose
 This module adapts EDC to Pi. It registers one interactive `/edc` command, exposes only human-facing skills, hooks Pi session/tool events into the shared JS runtime-injection library, and runs long reviews as detached background jobs with status/logs stored under git metadata rather than the worktree.
 
-The current branch changes Pi from several prompt-forwarding slash commands to a menu-driven operational wrapper that can start background reviews, show review status, run build/update/audit/doctor directly, propagate Pi model selection, and enforce a Bash >=4 execution boundary.
+The current branch changes Pi from several prompt-forwarding slash commands to a menu-driven operational wrapper that can preflight context freshness, ask before expensive review recovery, start background reviews, show review status, run build/update/audit/doctor directly, propagate Pi model selection, and enforce a Bash >=4 execution boundary.
 
 ## Actors and entrypoints
 - Pi loads `agents/pi/index.mjs` from the root `package.json` `pi.extensions` entry.
@@ -21,9 +21,9 @@ The current branch changes Pi from several prompt-forwarding slash commands to a
 ## Key functions and state
 - `edcExtension(pi)`: extension factory. It no-ops when `EDC_PI_SUBPROCESS=1` so nested Pi subprocesses do not recursively load the extension.
 - `handleEdcMenu`: interactive dispatcher for review/status/build/update/audit/doctor/cancel.
-- `runReviewAgainstMain`: starts a `HEAD --base main` background review after freshness preflight and optional user confirmation.
+- `runReviewAgainstMain`: starts a `HEAD --base main` background review after freshness preflight and optional user confirmation; `--no-context-refresh` and `--ignore-context` bypass the prompt for explicit direct-review modes.
 - `startBackgroundReview`: resolves `.edc/scripts/edc-review.sh`, resolves Bash >=4, writes `.git/edc/status`, detaches a subprocess, writes `.git/edc/review.log`, classifies failures, and records `final_review` from `Verified:`/`Consolidated:` lines.
-- `renderReviewStatus`: reads the single current status slot and displays run id, status, exit code, timestamps, commit drift, final report path, reason/hint, and log path.
+- `renderReviewStatus`: reads the single current status slot and displays run id, status, exit code, timestamps, commit drift, final report path, failure reason/hint, and log path. A requested historical run id is rejected because only the current slot is retained.
 - `runEdcScript`: synchronous menu actions for build/update/audit/doctor with bounded output capture.
 - `extendEdcBashTimeout`: raises Pi Bash tool timeout to 7200s for `.edc/scripts/edc-{build,update,review,audit,doctor}.sh` commands.
 - Background state is resolved through `git rev-parse --git-path edc/status` and `edc/review.log`; typical display paths are `.git/edc/status` and `.git/edc/review.log`.
@@ -41,7 +41,7 @@ The current branch changes Pi from several prompt-forwarding slash commands to a
 4. Send a display message plus hidden/full module context when injection is active and not deduped.
 
 ### Interactive menu
-- **Review current branch vs main:** checks freshness with `getContextFreshness`; stale/missing context prompts the user before allowing the orchestrator to build/update during review. The actual review runs detached and uses `EDC_AGENT_CLI=pi`.
+- **Review current branch vs main:** checks freshness with `getContextFreshness`; stale/missing context prompts the user before allowing the orchestrator to build/update during review, unless the user explicitly requested `--no-context-refresh` or `--ignore-context`. The actual review runs detached and uses `EDC_AGENT_CLI=pi`.
 - **Review status:** reads the current `.git/edc/status` slot. Only one current slot is retained.
 - **Build/Update/Audit/Doctor:** run fixed script names with fixed args (`update --base main`) through resolved Bash >=4. These actions stream a summarized result back to Pi.
 - **Help/non-interactive:** `/edc -h` and missing UI explain that non-interactive runs should use the terminal CLI.
@@ -70,5 +70,5 @@ The current branch changes Pi from several prompt-forwarding slash commands to a
 - Background status is a single overwrite slot; historical runs are not retained.
 - Detached subprocess supervision cannot stream live progress to the menu; users must inspect `.git/edc/review.log` or poll status.
 - Failure classification is grep-based over the review log. New orchestrator error text can degrade to generic `review pipeline failed`.
-- The timeout-extension regex recognizes common `.edc/scripts` and `$HOME/.edc/scripts` invocations, not every absolute script path.
+- The timeout-extension regex recognizes common relative, `$HOME`, and absolute `.edc/scripts/edc-*.sh` invocations, but can still miss unusual shell construction around the script path.
 - Runtime availability of `pi`, `git`, `jq`, `python3`, and Bash >=4 remains environmental.

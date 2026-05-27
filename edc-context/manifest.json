@@ -124,11 +124,11 @@
       "benchmark/redis/**"
     ]
   },
-  "generatedAt": "2026-05-26T23:37:56Z",
-  "sourceCommit": "9731ea9cd750ed8da27989e1bda80b117beba2f6",
+  "generatedAt": "2026-05-27T18:07:28Z",
+  "sourceCommit": "83e5be0a1d74a6d3418d022f21a57b89fcd3c39f",
   "coverage": {
     "mappedFileCount": 90,
-    "unmappedFileCount": 39,
+    "unmappedFileCount": 40,
     "ambiguousPathCount": 0
   }
 }

@@ -457,6 +457,7 @@ function startBackgroundReview(args, ctx) {
 set -- ${args}
 status_file=${shellQuote(statusPath.path)}
 log_file=${shellQuote(logPath.path)}
+log_display=${shellQuote(logPath.display)}
 status_dir=${shellQuote(dirname(statusPath.path))}
 mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -468,7 +469,7 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
   echo "run_id=${runId}"
   echo "pid=$$"
   echo "args=$args_text"
-  echo "log=${logPath.display}"
+  echo "log=$log_display"
   [ -n "$started_head" ] && echo "started_head=$started_head"
 } > "$status_file"
 
@@ -510,7 +511,7 @@ fi
   echo "run_id=${runId}"
   echo "pid=$$"
   echo "args=$args_text"
-  echo "log=${logPath.display}"
+  echo "log=$log_display"
   [ -n "$started_head" ] && echo "started_head=$started_head"
   [ -n "$finished_head" ] && echo "finished_head=$finished_head"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"

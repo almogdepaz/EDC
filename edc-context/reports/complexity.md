@@ -12,18 +12,18 @@
 ## LOC Estimates vs Reality
 | Module | Estimated LOC | Actual tracked LOC | Ratio | Verdict |
 |---|---:|---:|---:|---|
-| runtime-cli | 3,000 | 4,541 | 1.5x | Broad but justified by multi-backend shell orchestration |
-| plugin-surface | 900 | 965 | 1.1x | Lean for shared hook/runtime behavior |
+| runtime-cli | 3,000 | 4,602 | 1.5x | Broad but justified by multi-backend shell orchestration |
+| plugin-surface | 900 | 967 | 1.1x | Lean for shared hook/runtime behavior |
 | canonical-skills | 2,500 | 2,909 | 1.2x | Verbose by design; methodology text is product behavior |
-| agent-wrappers | 450 | 873 | 1.9x | Near threshold; Pi menu/background review logic dominates |
-| hardening-tests | 2,500 | 3,824 | 1.5x | Large but intentionally contract-heavy |
+| agent-wrappers | 450 | 963 | 2.1x | Over threshold; Pi menu/background review/status logic dominates |
+| hardening-tests | 2,500 | 4,040 | 1.6x | Large but intentionally contract-heavy |
 | benchmarking | 3,000 | 4,214 | 1.4x | Broad benchmark/scoring surface |
 
 ## Dead Exports
 - `plugins/edc/hooks/lib/paths.mjs` exports `EDC_REPORTS_DIR_REL`; grep found no consumer outside the defining file. Consider removing it or using it where report paths are needed.
 
 ## Wrapper / Helper Clusters
-- `agents/pi/index.mjs` now contains many menu/background-review helper functions. They are mostly cohesive, but the file is close to a module split boundary (`menu`, `background-status`, `runtime-injection`).
+- `agents/pi/index.mjs` now contains many menu/background-review/helper-preflight functions. They are cohesive but have crossed a module split threshold (`menu`, `background-status`, `runtime-injection`, `context-preflight`).
 - `plugins/edc/hooks/lib/platform.mjs` `detectPlatform()` is a tiny classifier wrapper; acceptable because it centralizes host detection.
 - `plugins/edc/hooks/lib/route.mjs` legacy `routeFile()` loads a manifest then delegates to `routeFileSync`; kept for compatibility but not exported.
 - Command-wrapper generators in `install.sh` emit thin wrappers around `~/.edc/scripts/edc-*.sh`; intentional install glue.
@@ -38,13 +38,13 @@ No module currently has abstractions far beyond usage. The main abstraction boun
 
 ## Oversized Files
 Core tracked source/test files above ~400 LOC:
-- `plugins/edc/scripts/edc-lib.sh` — 885 LOC
+- `plugins/edc/scripts/edc-lib.sh` — 942 LOC
 - `plugins/edc/scripts/edc-review.sh` — 931 LOC
-- `agents/pi/index.mjs` — 675 LOC
+- `agents/pi/index.mjs` — 765 LOC
 - `plugins/edc/hooks/lib/route.mjs` — 555 LOC
-- `plugins/edc/scripts/edc` — 466 LOC
-- `tests/hardening/t15-review-routing.sh` — 521 LOC
-- `tests/hardening/t10-pi-extension.sh` — 410 LOC
+- `plugins/edc/scripts/edc` — 470 LOC
+- `tests/hardening/t15-review-routing.sh` — 591 LOC
+- `tests/hardening/t10-pi-extension.sh` — 487 LOC
 - `benchmark/autoresearch.sh` — 861 LOC
 - `benchmark/regression/run-regression.sh` — 659 LOC
 - `benchmark/score.py` — 551 LOC

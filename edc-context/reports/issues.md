@@ -6,11 +6,6 @@
 - problem: the deterministic manifest post-step walks raw `git ls-files`; build/update ignore rules are resolved by the orchestrator/skill layer, but the generator has no ignore-pattern input. Ignored tracked paths still affect coverage unless the manifest also lists them under `unmapped.allowedGlobs`.
 - recommendation: pass resolved ignore rules into `edc-manifest.sh` or teach it to read the same provenance used by the build/update run.
 
-## Low — Pi-specific model config is not enough for the top-level CLI prompt gate
-- where: `plugins/edc/scripts/edc` (`_check_model_or_prompt`) and `plugins/edc/scripts/edc-lib.sh` (`resolve_model_for_phase`)
-- problem: `edc-lib.sh` recognizes `EDC_PI_MODEL` as a Pi fallback, but the top-level non-interactive CLI gate only accepts `EDC_BUILD_MODEL` or `EDC_REVIEW_MODEL` as configured-model evidence. A Pi CLI user who configured only `EDC_PI_MODEL` may still be told no model is configured.
-- recommendation: include `EDC_PI_MODEL` in `_check_model_or_prompt` when `--agent pi` is selected, or document that terminal CLI users should prefer `--model`/phase model vars.
-
 ## Low — Bash path extraction is heuristic and can miss complex file references
 - where: `plugins/edc/hooks/lib/route.mjs` (`extractFilePathsFromBash`)
 - problem: Bash command extraction uses a simple path-shaped-token regex. Commands with spaces, shell variables, process substitution, generated paths, or unusual quoting may not receive matching injected context, while incidental path-looking tokens may be routed.

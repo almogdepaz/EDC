@@ -1,10 +1,25 @@
 {
-  "schemaVersion": 2,
-  "edcVersion": "2.0.0",
-  "buildTimestamp": "2026-05-10T09:42:59Z",
-  "sourceCommit": "6727990dd155f80ab7745cb4a66a7fe64d711dd4",
-  "buildKind": "full",
-  "ignoreRuleProvenance": ".edcignore",
-  "ignorePatterns": ["benchmark/curl/**", "benchmark/redis/**"],
-  "modules": ["runtime-cli", "plugin-surface", "canonical-skills", "agent-wrappers", "benchmarking", "hardening-tests"]
+  "buildTimestamp": "2026-05-26T09:38:10Z",
+  "edcVersion": "1.1.0",
+  "layoutVersion": 2,
+  "modules": [
+    "runtime-cli",
+    "plugin-surface",
+    "canonical-skills",
+    "agent-wrappers",
+    "hardening-tests",
+    "benchmarking"
+  ],
+  "ignoreRules": {
+    "provenance": ".edcignore",
+    "patterns": [
+      "benchmark/curl/**",
+      "benchmark/redis/**"
+    ]
+  },
+  "sourceCommit": "<filled by manifest post-step>",
+  "moduleDiscovery": {
+    "strategy": "git ls-files with .edcignore applied; logical grouping by package/runtime/test/benchmark boundaries",
+    "sourceBodiesReadDuringOrientation": false
+  }
 }

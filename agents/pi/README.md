@@ -8,52 +8,57 @@ Pi extension that ports the EDC ([Every Day Carry](../../README.md)) Claude Code
 pi install git:github.com/almogdepaz/edc
 ```
 
-That's it. Pi clones the repo and registers `agents/pi/index.mjs` as the extension entry (declared in the repo-root `package.json`).
-
-Project-local install (writes to `.pi/settings.json` in the current dir instead of global):
+Project-local install:
 
 ```bash
 pi install git:github.com/almogdepaz/edc -l
 ```
 
-From a local checkout (for development):
+From a local checkout:
 
 ```bash
 bash agents/pi/install.sh --from-source
 ```
 
-## Commands
+## Command
 
-After install, pi exposes:
+Pi exposes one interactive command:
 
 | Command | Purpose |
 |---|---|
-| `/edc-build` | Build deep architectural context (`edc-context/`) |
-| `/edc-update` | Incrementally update context from branch diff |
-| `/edc-run-review` | Differential code review against a base ref or PR (`--pr <number>`) |
-| `/edc-doctor` | Validate the context tree, manifest, routing |
+| `/edc` | Open the EDC menu |
 
-Pi intentionally exposes only user-facing pipeline commands. The single-module review worker and standalone audit pipeline are not registered as TUI commands; use the `edc-review` / `edc-audit` skills for methodology-only work.
+Menu actions:
 
-The command bodies are read verbatim from `plugins/edc/commands/*.md`, so behavior matches the Claude Code plugin where those commands are shared.
+- Review current branch vs `main` — starts a background review with `HEAD --base main`
+- Review status — shows current background review status
+- Build context
+- Update context from `main`
+- Audit complexity
+- Doctor / validate context
 
-Review examples:
+`/edc` is interactive-only. For non-interactive use, use the terminal CLI:
 
-```text
-# current branch against main
-/edc-run-review --base main
-
-# PR by number; requires gh auth in the target repo
-/edc-run-review --pr 147 --base main
-
-# pure direct review: no context build/update, and do not read existing edc-context/
-/edc-run-review --pr 147 --base main --ignore-context
-
-# no context build/update, but allow existing context if present
-/edc-run-review --pr 147 --base main --no-context-refresh
+```bash
+edc review --agent pi HEAD --base main
+edc build --agent pi
+edc update --agent pi --base main
 ```
 
-`--ignore-context` is the hard skip: it neither creates/updates context nor reads existing `edc-context/`. `--no-context-refresh` only disables creation/update; stale or existing context may still be used.
+Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+
+## Background review state
+
+Pi reviews run in the background so the TUI stays usable. EDC keeps exactly one current run slot per git repo:
+
+| File | Purpose |
+|---|---|
+| `.git/edc/status` | Machine-readable current run status (`status`, `run_id`, `pid`, `args`, `started_head`, `finished_head`, `failure_reason`, `failure_hint`, `final_review`, etc.) |
+| `.git/edc/review.log` | Raw stdout/stderr from the current `edc-review.sh` run |
+
+Both paths are resolved with `git rev-parse --git-path`, so they work with normal repos and worktrees. They are under git metadata, not the worktree, so they are never tracked and need no `.gitignore` entry. Starting a new background review overwrites the previous status/log.
+
+`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi review status/logs survive because they live under `.git/edc/`. If the background review fails, `/edc` → Review status reports a classified reason when EDC can determine one, e.g. HEAD changed during the run or context recovery did not produce a complete layout.
 
 ## Skills
 
@@ -64,7 +69,7 @@ Pi exposes only the human-facing EDC methodology skills:
 | `edc-review` | Apply the EDC differential review methodology directly in chat, without running the full orchestrator. |
 | `edc-audit` | Apply the EDC bloat / duplication / overengineering audit methodology directly in chat. |
 
-Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are still installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list.
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
 
 ## Modes
 
@@ -80,13 +85,11 @@ bash agents/pi/install.sh --context-mode advisory
 bash agents/pi/install.sh --context-mode inject
 ```
 
-(equivalent to a one-line `jq` write — flip it whenever.)
-
 ## How it maps to pi
 
 | EDC feature | Pi mechanism |
 |---|---|
-| Slash commands | `pi.registerCommand(name, …)` |
+| Interactive menu | `pi.registerCommand("edc", …)` + `ctx.ui.select` |
 | `SessionStart` hook | `pi.on("session_start", …)` |
 | `PreToolUse` hook | `pi.on("tool_call", …)` filtered to `bash|edit|write` |
 | Skills | `pi.on("resources_discover", …)` returning only `edc-review` and `edc-audit` |

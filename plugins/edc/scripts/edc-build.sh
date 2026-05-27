@@ -26,7 +26,7 @@
 # exit fails the build.
 #
 # Usage:
-#   EDC_AGENT_CLI=claude bash edc-build.sh \
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-build.sh \
 #     [--force] [--focus <module>] [--ignore <glob>]...
 
 set -euo pipefail
@@ -75,7 +75,7 @@ CODEX_EXEC_HOME_OWNED=0
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex> edc-build.sh \
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-build.sh \
     [--force] [--focus <module>] [--ignore <glob>]...
 EOF
   exit 2
@@ -88,7 +88,7 @@ EOF
 decide_route() {
   local force="$1"
   local rc=0
-  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  "$EDC_BASH" "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
   case "$rc" in
     0)  # no context dir
       echo "build"
@@ -146,25 +146,7 @@ build_main() {
     esac
   done
 
-  case "$EDC_AGENT_CLI" in
-    claude)
-      command -v claude > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
-      ;;
-    cursor)
-      command -v cursor > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
-      ;;
-    codex)
-      command -v codex > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
-      ensure_codex_exec_home
-      ;;
-    *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
-      exit 2
-      ;;
-  esac
+  edc_require_agent_cli
 
   # Decide route in shell (LLM does NOT make this call).
   local route
@@ -173,7 +155,7 @@ build_main() {
 
   # Wipe if route demands it.
   if [ "$route" = "wipe-and-build" ]; then
-    bash "$CLEAN_SLATE_SH" --force >&2 \
+    "$EDC_BASH" "$CLEAN_SLATE_SH" --force >&2 \
       || { echo "ERROR: clean-slate --force failed" >&2; exit 1; }
   fi
 
@@ -208,7 +190,7 @@ build_main() {
     echo "ERROR: edc-doctor.sh not found at $DOCTOR_SH" >&2
     exit 1
   fi
-  if ! bash "$DOCTOR_SH"; then
+  if ! "$EDC_BASH" "$DOCTOR_SH"; then
     echo "ERROR: build produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi

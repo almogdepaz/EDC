@@ -2,149 +2,58 @@
 # Complexity Audit
 
 ## Summary
-
-- Bloat score: 3/10 (lean codebase overall; targeted issues in scripts/edc and hook layer)
-- Dead exports: 1 (route.mjs exports 12 internal-only helpers that are only consumed as a test contract, not by callers)
-- Wrapper functions: 2 (`find_claude_skill`, `find_cursor_skill`, `find_codex_skill` are thin wrappers over `find_installed_skill`)
-- Over-abstracted modules: 0
-- Duplicated code blocks: 3 (`detectPlatform` between two hook files; `check()` helper across four test files; five near-identical `find_*_script` functions in `scripts/edc`)
-- Oversized files: 6 files exceed 500 LOC; 7 exceed 3× the median (149 LOC)
-- Dead code: 1 (`copy_tree_or_fail` in `install.sh` is defined but never called)
-
----
+- Bloat score: 5/10 (medium: broad multi-backend orchestration is justified, but several files are large)
+- Dead exports: 1 likely
+- Wrapper/helper clusters: 4 low-to-medium risk clusters
+- Over-abstracted modules: 0 clear cases
+- Duplicated code blocks: 3 families
+- Oversized tracked files: 11 source/test/planning files over 400 LOC, 9 core source/test files over 400 LOC
 
 ## LOC Estimates vs Reality
-
-| Module | Estimated LOC | Actual LOC | Ratio | Verdict |
-|---|---|---|---|---|
-| `runtime-cli` | ~600 | ~1513 (scripts/edc 445, edc-review.sh 724, install.sh 344) | 2.5× | FLAGGED — edc-review.sh is disproportionately large for a "dispatch shim + orchestrator" |
-| `plugin-surface` | ~1200 | ~3291 (scripts 2585, hooks 531, paths+commands ~175) | 2.7× | FLAGGED — mostly justified complexity; edc-review.sh 724 LOC dominates |
-| `agent-wrappers` | ~150 | 279 (index.mjs 182, install.sh 97) | 1.9× | OK |
-| `canonical-skills` | ~700 | ~2919 (SKILL.md files only) | 4.2× | Context: these are prompt docs, not code; deeper instructions = intentional |
-| `hardening-tests` | ~900 | 2512 | 2.8× | OK — comprehensive coverage justifies size |
-| `benchmarking` | ~800 | ~4171 (excluding venv/curl/redis) | 5.2× | FLAGGED — autoresearch.sh (849) + regression (422) + gepa stack are complex relative to "run CVEs + score" purpose |
-
----
+| Module | Estimated LOC | Actual tracked LOC | Ratio | Verdict |
+|---|---:|---:|---:|---|
+| runtime-cli | 3,000 | 4,602 | 1.5x | Broad but justified by multi-backend shell orchestration |
+| plugin-surface | 900 | 967 | 1.1x | Lean for shared hook/runtime behavior |
+| canonical-skills | 2,500 | 2,909 | 1.2x | Verbose by design; methodology text is product behavior |
+| agent-wrappers | 450 | 963 | 2.1x | Over threshold; Pi menu/background review/status logic dominates |
+| hardening-tests | 2,500 | 4,040 | 1.6x | Large but intentionally contract-heavy |
+| benchmarking | 3,000 | 4,214 | 1.4x | Broad benchmark/scoring surface |
 
 ## Dead Exports
+- `plugins/edc/hooks/lib/paths.mjs` exports `EDC_REPORTS_DIR_REL`; grep found no consumer outside the defining file. Consider removing it or using it where report paths are needed.
 
-`plugins/edc/hooks/lib/route.mjs` exports 15 functions. Only 5 are directly imported by external consumers (`resolvePluginRoot`, `installOrchestratorScript`, `buildSessionStartContent`, `buildToolCallInjection`, `normalizePath`). The remaining 10 (`loadManifest`, `manifestPath`, `checkStaleness`, `extractFilePaths`, `extractFilePathsFromBash`, `routeFile`, `moduleDocPath`, `dedupPath`, `isDuplicate`, `isEdcProject`) are internal helpers used only inside the module's own composite functions. They are exported and enumerated in `tests/hardening/t10-pi-extension.sh` as a stability contract, so they are not entirely dead — but publishing internal helpers as stable exports increases surface area unnecessarily.
-
-`install.sh:101` — `copy_tree_or_fail()` is defined but never called anywhere in the codebase. The module doc references it as if it's used for tree copies, but actual tree copies happen via `copy_or_download`. Dead code.
-
----
-
-## Wrapper Functions
-
-| Function | Location | Wraps | Added value? |
-|---|---|---|---|
-| `find_claude_skill()` | `edc-resolve-prompt.sh:41` | `find_installed_skill "$1" <3 paths>` | None — pure path pass-through |
-| `find_cursor_skill()` | `edc-resolve-prompt.sh:49` | `find_installed_skill "$1" <2 paths>` | None — pure path pass-through |
-| `find_codex_skill()` | `edc-resolve-prompt.sh:54` | `find_installed_skill "$1" <2 paths>` | None — pure path pass-through |
-
-These three are called only via `_find_skill_for_agent()`, which dispatches on `$EDC_AGENT_CLI`. They could be inlined into the case statement, eliminating one extra level of indirection with no loss of clarity.
-
----
+## Wrapper / Helper Clusters
+- `agents/pi/index.mjs` now contains many menu/background-review/helper-preflight functions. They are cohesive but have crossed a module split threshold (`menu`, `background-status`, `runtime-injection`, `context-preflight`).
+- `plugins/edc/hooks/lib/platform.mjs` `detectPlatform()` is a tiny classifier wrapper; acceptable because it centralizes host detection.
+- `plugins/edc/hooks/lib/route.mjs` legacy `routeFile()` loads a manifest then delegates to `routeFileSync`; kept for compatibility but not exported.
+- Command-wrapper generators in `install.sh` emit thin wrappers around `~/.edc/scripts/edc-*.sh`; intentional install glue.
 
 ## Over-Abstracted Modules
-
-None. All modules have callers proportionate to their export count.
-
----
+No module currently has abstractions far beyond usage. The main abstraction boundary worth preserving is deterministic shell control flow versus JS hot-path routing/injection; parity tests cover it.
 
 ## Duplication
-
-**1. `detectPlatform()` — duplicated between two hook files (near-identical)**
-
-- `plugins/edc/hooks/session-start.mjs:18-28`
-- `plugins/edc/hooks/pretooluse-context-inject.mjs:30-40`
-
-Both check `conversation_id | cursor_version | workspace_roots` and return `"cursor"` or `"claude-code"`. Identical logic. Neither imports from the other. Should be extracted to `hooks/lib/route.mjs` or `hooks/lib/platform.mjs`.
-
-**2. `find_*_script()` — five near-identical functions in `scripts/edc`**
-
-- `find_review_script()`, `find_audit_script()`, `find_build_script()`, `find_update_script()`, `find_doctor_script()` (lines 56–128)
-
-Each iterates three candidate paths (`$REPO_ROOT/plugins/edc/scripts/`, `.edc/scripts/`, `$HOME/.edc/scripts/`) and returns the first match. Differ only in the command name. A single `find_script <name>` function would replace all five with no behavioral change. ~50 LOC of boilerplate.
-
-**3. `check()` helper — duplicated across test files with divergent signatures**
-
-- `t9-routing.sh:16` — 5-arg form `(desc, expected_rc, expected_out, actual_rc, actual_out)`
-- `t14-resolve-prompt-decoupled.sh:22` — same 5-arg form
-- `t15-review-routing.sh:21` — same 5-arg form
-- `t16-context-dir-source-of-truth.sh:16` — 2-arg form `(desc, cond)` — different semantics
-
-Four copies of a trivially extractable helper, with a silent semantic divergence in t16.
-
-**4. `manifest_target()` + `manifest_modules()` — grep/sed JSON parsing despite jq being a hard dep**
-
-`edc-review.sh:95-120` parses `review-tasks/manifest.json` with `grep -o` + `sed` regex even though `jq` is already declared as a required dep (line 34, exits on missing jq). The same information is extracted elsewhere (lines 488, 504) with `jq -r`. Inconsistent approach; the grep/sed path is fragile for keys with special characters or whitespace variations.
-
----
+- Bash >=4 checks and script-dir resolution are repeated across many `plugins/edc/scripts/edc-*.sh` files. This is deliberate bootstrap safety but makes edits repetitive.
+- v2 path constants exist in both `plugins/edc/scripts/edc-lib.sh` and `plugins/edc/hooks/lib/paths.mjs`; keep in sync with tests.
+- Installed prompt bundles and public skills duplicate methodology material across private/public trees; installer rules must keep visibility correct.
 
 ## Oversized Files
-
-Median file size: 149 LOC. Files > 500 LOC (absolute threshold) and/or > 3× median (447 LOC):
-
-| File | LOC | vs. Median | Note |
-|---|---|---|---|
-| `benchmark/autoresearch.sh` | 849 | 5.7× | Justified by loop complexity; but build/run/score phases could be split |
-| `plugins/edc/scripts/edc-review.sh` | 724 | 4.9× | Most complex orchestrator; multiple modes + self-re-entry increase length |
-| `scripts/edc` | 445 | 3.0× | CLI shim with 5 per-command helpers + 5 near-identical find_*_script functions |
-| `benchmark/gepa/adapter.py` | 463 | 3.1× | GEPA adapter; acceptable |
-| `benchmark/regression/run-regression.sh` | 422 | 2.8× | Approaching threshold |
-| `benchmark/score.py` | 348 | 2.3× | Dual-phase scorer; within bounds |
-
-No single file holds > 30% of total project LOC (total ~4,171 excluding venv/fixtures). `autoresearch.sh` is the largest at ~20%.
-
----
+Core tracked source/test files above ~400 LOC:
+- `plugins/edc/scripts/edc-lib.sh` — 942 LOC
+- `plugins/edc/scripts/edc-review.sh` — 931 LOC
+- `agents/pi/index.mjs` — 765 LOC
+- `plugins/edc/hooks/lib/route.mjs` — 555 LOC
+- `plugins/edc/scripts/edc` — 470 LOC
+- `tests/hardening/t15-review-routing.sh` — 591 LOC
+- `tests/hardening/t10-pi-extension.sh` — 487 LOC
+- `benchmark/autoresearch.sh` — 861 LOC
+- `benchmark/regression/run-regression.sh` — 659 LOC
+- `benchmark/score.py` — 551 LOC
+- `BENCHMARK_FORWARD_PLAN.md` — 510 LOC (planning/status, not runtime)
 
 ## Deep Call Chains
-
-**`edc review` → agent subprocess: 6 hops**
-
-```
-scripts/edc (main → review_cmd)
-  → edc-review.sh (auto_mode)
-    → recover_context_if_needed (edc-recover-context.sh)
-      → edc_spawn (edc-spawn.sh)
-        → claude -p (subprocess)
-    → bash "$0" --build (self-re-entry)
-      → build_mode
-        → edc-route.sh (per-file, exec'd each time)
-    → edc_spawn (per module)
-      → claude -p (subprocess)
-```
-
-The depth from user command to actual review work is 6 hops (user → CLI shim → auto_mode → recover → spawn → LLM). Flags under the >4 threshold for "simple operations" — but this is a complex multi-phase pipeline, not a simple operation. The depth is justified.
-
-**`edc build` → LLM: 5 hops**
-
-```
-scripts/edc → edc-build.sh → edc_spawn → claude -p (edc-build-impl)
-  → per-module: edc_spawn → claude -p (edc-context)
-```
-
-Consistent with pipeline complexity.
-
-**`pretooluse-context-inject.mjs` → module injection: 4 hops**
-
-```
-Claude Code hook → pretooluse-context-inject.mjs (main)
-  → buildToolCallInjection (route.mjs)
-    → routeFile → execFileSync(edc-route.sh)
-    → readFileSync(module doc)
-```
-
-4 hops, each doing real work. Acceptable. However `routeFile` is a shell exec (`execFileSync`) with a 5s timeout on the hot pre-tool-use path — this adds latency on every Edit/Write/Bash call in inject mode.
-
----
+- `edc review` path can traverse CLI parser → `edc-review.sh` auto mode → context recovery → build/update spawn → task generation → per-module review spawn → consolidation → verification. Depth is high but matches the multi-phase workflow.
+- Pi menu background review adds another wrapper layer: `/edc` menu → background status/log setup → `edc-review.sh` pipeline → status classification.
+- Runtime injection path is shorter: host hook/Pi tool call → `buildToolCallInjection` → `routeFileSync` → module doc read.
 
 ## Test Mirroring
-
-No tests reimplement production routing or validation logic. Tests either:
-- Call the production binary (t9 calls `edc-route.sh` directly)
-- Extract and source specific functions via awk (t2 sources `stream_filter`, t4 sources `run_with_timeout`) — valid isolation technique
-- Check static properties of source files (t1, t2, t5, t16)
-
-The `check()` helper duplication across t9/t14/t15/t16 is a missed extraction opportunity but does not reimplement production logic.
+Hardening tests intentionally mirror production routing/state contracts with minimal manifests. This is acceptable, but route parity tests should remain the source for shell/JS algorithm synchronization rather than copying larger production logic into tests.

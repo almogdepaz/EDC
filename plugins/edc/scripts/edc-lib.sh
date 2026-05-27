@@ -51,6 +51,13 @@ EDC_COMPLEXITY="$EDC_REPORTS_DIR/complexity.md"
 EDC_BUILD_INFO="$EDC_BUILD_DIR/build.json"
 EDC_REVIEW_TASKS_MANIFEST="$EDC_REVIEW_TASKS_DIR/manifest.json"
 
+# Single bash contract for all nested EDC script invocations. Orchestrators
+# require bash >= 4, so once an entrypoint is running in a valid bash, child
+# script calls must reuse that interpreter instead of resolving bare `bash`
+# from ambient PATH (macOS login shells can make that `/bin/bash` 3.2).
+EDC_BASH="${EDC_BASH:-$BASH}"
+export EDC_BASH
+
 # ════════════════════════════════════════════════════════════════════════════
 # 2. RUNTIME — subprocess runtime helpers.
 # ════════════════════════════════════════════════════════════════════════════
@@ -143,6 +150,164 @@ ensure_codex_exec_home() {
   trap cleanup_codex_exec_home EXIT
 }
 
+edc_require_agent_cli() {
+  case "$EDC_AGENT_CLI" in
+    claude)
+      command -v claude > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
+      ;;
+    cursor)
+      command -v cursor > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
+      ;;
+    codex)
+      command -v codex > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
+      ensure_codex_exec_home || exit 1
+      ;;
+    pi)
+      command -v pi > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
+      command -v python3 > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi requires python3 for JSON subprocess supervision" >&2; exit 2; }
+      ;;
+    *)
+      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
+      exit 2
+      ;;
+  esac
+}
+
+write_pi_json_supervisor() {
+  local path="$1"
+  cat > "$path" <<'PY'
+#!/usr/bin/env python3
+import json
+import signal
+import subprocess
+import sys
+
+proc = None
+
+
+def stop(signum, _frame):
+    global proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    sys.exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, stop)
+signal.signal(signal.SIGINT, stop)
+
+cmd = sys.argv[1:]
+if not cmd:
+    print("ERROR: missing pi command", file=sys.stderr)
+    sys.exit(2)
+
+proc = subprocess.Popen(
+    cmd,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=None,
+    text=True,
+    bufsize=1,
+)
+
+SUCCESS_STOP_REASONS = {"stop"}
+
+
+def stop_proc():
+    global proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def final_assistant(messages):
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if isinstance(message, dict) and message.get("role") == "assistant":
+            return message
+    return None
+
+
+def error_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("errorMessage", "message", "error"):
+            nested = value.get(key)
+            if nested:
+                return error_text(nested)
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def classify_agent_end(event):
+    assistant = final_assistant(event.get("messages"))
+    if assistant is None:
+        return False, "agent_end did not include a final assistant message"
+
+    error_message = assistant.get("errorMessage")
+    if error_message:
+        return False, error_text(error_message)
+
+    stop_reason = assistant.get("stopReason")
+    if stop_reason not in SUCCESS_STOP_REASONS:
+        return False, f"agent_end stopReason was {stop_reason or 'missing'}"
+
+    return True, ""
+
+
+try:
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+
+        event_type = event.get("type")
+        if event_type == "error":
+            print(f"ERROR: pi subprocess: {error_text(event.get('error') or event)}", file=sys.stderr)
+            stop_proc()
+            sys.exit(1)
+
+        if event_type == "agent_end":
+            ok, reason = classify_agent_end(event)
+            stop_proc()
+            if ok:
+                sys.exit(0)
+            print(f"ERROR: pi subprocess: {reason}", file=sys.stderr)
+            sys.exit(1)
+
+    rc = proc.wait()
+    if rc != 0:
+        sys.exit(rc)
+    print("ERROR: pi subprocess ended without successful agent_end", file=sys.stderr)
+    sys.exit(1)
+finally:
+    stop_proc()
+PY
+  chmod +x "$path"
+}
+
 # ── stream filter ────────────────────────────────────────────────────────────
 
 # stream_filter: read NDJSON from agent CLI output and print human-readable
@@ -176,6 +341,23 @@ stream_filter() {
     err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
     if [ -n "$err" ]; then
       printf '%s\n' "$err" >&2
+      continue
+    fi
+    # Pi JSON mode: stream text deltas and tool starts from AgentSession events.
+    pi_msg=$(printf '%s' "$line" | jq -r '
+      if .type == "message_update" and (.assistantMessageEvent.type // "") == "text_delta" then (.assistantMessageEvent.delta // "")
+      elif .type == "tool_execution_start" then "→ \(.toolName)(\((.args // {}) | to_entries[0] | .value // "" | tostring | .[0:80]))"
+      else empty end' 2>/dev/null)
+    if [ -n "$pi_msg" ]; then
+      printf '%s\n' "$pi_msg"
+      continue
+    fi
+    pi_err=$(printf '%s' "$line" | jq -r '
+      if .type == "tool_execution_end" and .isError == true then "ERROR (subprocess): \(.result.content // .result.error // .result // "tool execution failed" | tostring)"
+      elif .type == "auto_retry_end" and .success == false then "ERROR (subprocess): \(.finalError // "provider request failed")"
+      else empty end' 2>/dev/null)
+    if [ -n "$pi_err" ]; then
+      printf '%s\n' "$pi_err" >&2
       continue
     fi
     # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
@@ -223,7 +405,7 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
         # Only set if not already exported by the caller.
         if [ -z "${!key:-}" ]; then
           export "$key=$val"
@@ -243,6 +425,9 @@ resolve_model_for_phase() {
     edc-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
     *)           __resolved="${EDC_BUILD_MODEL:-}" ;;
   esac
+  if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
+    __resolved="${EDC_PI_MODEL:-}"
+  fi
   # Refuse to assign back into our own locals — caller must pass a unique var name.
   case "$__outvar" in
     __phase|__outvar|__resolved)
@@ -474,6 +659,37 @@ edc_spawn() {
         rc=${PIPESTATUS[0]}
       fi
       ;;
+    pi)
+      local effective_prompt_file="" cleanup_prompt_file=0
+      if [ -n "$prompt_file" ]; then
+        effective_prompt_file="$prompt_file"
+      else
+        effective_prompt_file=$(mktemp "${TMPDIR:-/tmp}/edc-pi-prompt-$$.XXXXXX.md") \
+          || { echo "ERROR: could not create pi prompt file" >&2; return 1; }
+        printf '%s' "$prompt" > "$effective_prompt_file"
+        cleanup_prompt_file=1
+      fi
+      local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
+      [ -n "$model" ] && cmd+=(--model "$model")
+      cmd+=("@$effective_prompt_file")
+      local pi_supervisor
+      pi_supervisor=$(mktemp "${TMPDIR:-/tmp}/edc-pi-supervisor-$$.XXXXXX.py") \
+        || { echo "ERROR: could not create pi supervisor" >&2; return 1; }
+      write_pi_json_supervisor "$pi_supervisor"
+      if [ -n "$capture" ]; then
+        run_with_timeout "$timeout_secs" "$phase" \
+          "$pi_supervisor" "${cmd[@]}" < /dev/null \
+          | tee "$capture" | stream_filter
+        rc=${PIPESTATUS[0]}
+      else
+        run_with_timeout "$timeout_secs" "$phase" \
+          "$pi_supervisor" "${cmd[@]}" < /dev/null \
+          | stream_filter
+        rc=${PIPESTATUS[0]}
+      fi
+      rm -f "$pi_supervisor"
+      [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
+      ;;
     *)
       echo "ERROR: edc_spawn: unknown EDC_AGENT_CLI=$EDC_AGENT_CLI" >&2
       [ -n "$capture" ] && rm -f "$capture"
@@ -559,6 +775,9 @@ _find_skill_for_agent() {
     codex)
       find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".codex/skills" "$HOME/.codex/skills"
       ;;
+    pi)
+      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".pi/skills" "$HOME/.pi/agent/skills"
+      ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2
@@ -583,9 +802,10 @@ dev repo. In this repo it is not. The orchestrator scripts actually live at:
     $EDC_SCRIPTS_DIR
 
 Whenever the skill tells you to invoke or reference a script under
-\`plugins/edc/scripts/\`, substitute the absolute path above. For example:
+\`plugins/edc/scripts/\`, substitute the absolute path above and run it with
+\`$EDC_BASH\` (the resolved bash >=4 interpreter). For example:
   skill says:  bash plugins/edc/scripts/edc-manifest.sh
-  you run:     bash $EDC_SCRIPTS_DIR/edc-manifest.sh
+  you run:     "$EDC_BASH" $EDC_SCRIPTS_DIR/edc-manifest.sh
 
 The scripts to substitute include (at least):
 edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-route.sh,
@@ -593,8 +813,9 @@ edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
 
 Do not rewrite the skill text. Do not fail the build because
 \`plugins/edc/scripts/\` is empty — that is expected; use the absolute path
-above instead. \$EDC_SCRIPTS_DIR is also exported in this subprocess if you
-prefer the env-var form, but the literal absolute path is authoritative.
+above instead. \$EDC_SCRIPTS_DIR and \$EDC_BASH are also exported in this
+subprocess if you prefer the env-var form, but the literal absolute script path
+and resolved bash interpreter are authoritative.
 
 EOF
 }
@@ -701,7 +922,7 @@ resolve_prompt() {
 
   # Validate agent up front so error messages are uniform.
   case "$EDC_AGENT_CLI" in
-    claude|cursor|codex) ;;
+    claude|cursor|codex|pi) ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2

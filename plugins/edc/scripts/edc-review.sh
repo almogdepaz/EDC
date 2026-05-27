@@ -191,6 +191,29 @@ assert_report_valid() {
   fi
 }
 
+write_allowed_unmapped_report() {
+  local files="$1"
+  local report="$EDC_REVIEW_TASKS_DIR/report-allowed-unmapped.md"
+
+  {
+    echo "# Differential Review Report: allowed-unmapped"
+    echo ""
+    echo "## What Changed"
+    echo ""
+    echo "The following changed paths match \`$MANIFEST\` \`unmapped.allowedGlobs\` and are intentionally outside module ownership:"
+    echo ""
+    echo "$files" | grep -v '^$' | sed 's/^/- `/' | sed 's/$/`/'
+    echo ""
+    echo "## Findings"
+    echo ""
+    echo "No module review was spawned for these paths. They are explicitly allowed as unmapped, so they are intentionally skipped but still accounted for in the final review."
+    echo ""
+    echo "## Coverage Notes"
+    echo ""
+    echo "Unexpected unmapped source files are still routed through the synthetic \`unmapped\` review task according to \`policy.unmatchedPathPolicy\`."
+  } > "$report"
+}
+
 # ── check-context mode ───────────────────────────────────────────────────────
 
 check_context_mode() {
@@ -292,28 +315,10 @@ verify_mode() {
 # Self-driving pipeline: detect context state, spawn agent subprocesses for each
 # phase, verify outputs, consolidate, verify. The orchestrator script owns every
 # decision; the spawned agents have one job each.
-# Set EDC_AGENT_CLI=claude|cursor|codex before invoking.
+# Set EDC_AGENT_CLI=claude|cursor|codex|pi before invoking.
 
 auto_mode() {
-  case "$EDC_AGENT_CLI" in
-    claude)
-      command -v claude > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
-      ;;
-    cursor)
-      command -v cursor > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
-      ;;
-    codex)
-      command -v codex > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
-      ensure_codex_exec_home || exit 1
-      ;;
-    *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
-      exit 2
-      ;;
-  esac
+  edc_require_agent_cli
 
   local target="$1"; shift
   local extra_args=("$@")
@@ -363,7 +368,7 @@ auto_mode() {
 
   # Build review tasks now that context is fresh.
   local out
-  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
+  out=$("$EDC_BASH" "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
@@ -371,12 +376,20 @@ auto_mode() {
     exit 1
   fi
 
-  # Parse TASK lines
+  # Parse TASK lines. allowed-unmapped is satisfied by a deterministic
+  # prewritten report and intentionally emits no subprocess task.
   local tasks
-  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //')
+  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //' || true)
   if [ -z "$tasks" ]; then
-    echo "ERROR: no TASK lines in script output" >&2
-    exit 1
+    local module prewritten_missing=0
+    while IFS= read -r module; do
+      [ -z "$module" ] && continue
+      assert_report_valid "$module" || prewritten_missing=1
+    done <<< "$(manifest_modules)"
+    if [ "$prewritten_missing" -ne 0 ]; then
+      echo "ERROR: no TASK lines in script output and no complete prewritten reports" >&2
+      exit 1
+    fi
   fi
 
   # Spawn one agent subprocess per module.
@@ -396,8 +409,8 @@ auto_mode() {
   done <<< "$tasks"
 
   # Consolidate + verify
-  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
-  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  "$EDC_BASH" "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
+  "$EDC_BASH" "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
 
   # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
   # review-<target>.md at the repo root is the durable artifact. On success,
@@ -629,7 +642,8 @@ TASK
   }
 
   declare -A MODULE_FILES
-  local ambiguous_count=0 unmapped_count=0 mapped_count=0
+  local ambiguous_count=0 unmapped_count=0 mapped_count=0 allowed_unmapped_count=0
+  local allowed_unmapped_files=""
   local -a unmapped_unexpected=()
   local -a ambiguous_lines=()
 
@@ -637,7 +651,7 @@ TASK
     [ -z "$file" ] && continue
     local module route_err route_rc=0
     route_err=$(mktemp)
-    module=$(bash "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
+    module=$("$EDC_BASH" "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
 
     case "$route_rc" in
       0)
@@ -645,11 +659,16 @@ TASK
         mapped_count=$((mapped_count + 1))
         ;;
       1)
-        # No module match - group into "unmapped". Track unexpected ones for
-        # policy enforcement.
-        MODULE_FILES["unmapped"]+="${file}"$'\n'
+        # No module match. Expected unmapped paths are intentionally outside
+        # module ownership, so they get a deterministic skipped report instead
+        # of a fragile spawned reviewer task. Unexpected ones still route to
+        # the synthetic "unmapped" module for policy enforcement/review.
         unmapped_count=$((unmapped_count + 1))
-        if ! _is_expected_unmapped "$file"; then
+        if _is_expected_unmapped "$file"; then
+          allowed_unmapped_files+="${file}"$'\n'
+          allowed_unmapped_count=$((allowed_unmapped_count + 1))
+        else
+          MODULE_FILES["unmapped"]+="${file}"$'\n'
           unmapped_unexpected+=("$file")
         fi
         ;;
@@ -705,7 +724,11 @@ TASK
     esac
   fi
 
-  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count modules=${#MODULE_FILES[@]}" >&2
+  if [ "$allowed_unmapped_count" -gt 0 ]; then
+    MODULE_FILES["allowed-unmapped"]="$allowed_unmapped_files"
+  fi
+
+  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
 
   # Step 4: write $EDC_REVIEW_TASKS_DIR/
   rm -rf "$EDC_REVIEW_TASKS_DIR"
@@ -729,10 +752,12 @@ TASK
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      # The synthetic "unmapped" bucket has no per-module doc; emit empty
-      # doc field so the review subagent skips the per-module read step.
+      # Synthetic accounting/review buckets have no per-module doc; emit empty
+      # doc field so review subprocesses do not read nonexistent module context.
       local module_doc="${EDC_MODULES_DIR}/${module}.md"
-      [ "$module" = "unmapped" ] && module_doc=""
+      case "$module" in
+        unmapped|allowed-unmapped) module_doc="" ;;
+      esac
       echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
@@ -753,11 +778,17 @@ TASK
   while IFS= read -r module; do
     local file_list baseline_line module_context_line
     file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
+
+    if [ "$module" = "allowed-unmapped" ]; then
+      write_allowed_unmapped_report "${MODULE_FILES[$module]}"
+      continue
+    fi
+
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
     if [ "$module" = "unmapped" ]; then
-      module_context_line="3. NOTE: these files are not mapped to any module in ${EDC_MANIFEST}. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths."
+      module_context_line="3. NOTE: these files are not matched by the current ${EDC_MANIFEST} routing. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths. State this limitation clearly in the report."
     else
       module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists - deep per-module context, invariants, call graphs"
     fi
@@ -785,13 +816,37 @@ USE the edc-review skill.
 TASK
   done <<< "$sorted_modules"
 
-  # Done - emit TASK lines for the agent to iterate
+  # Done - emit TASK lines for the agent to iterate. Deterministic skipped
+  # reports are already complete and must not spawn an agent subprocess.
   echo ""
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
+    if [ "$module" = "allowed-unmapped" ]; then
+      continue
+    fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"
   done <<< "$sorted_modules"
+}
+
+review_usage() {
+  cat <<EOF
+Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+                                                     full review pipeline (default)
+       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]
+                                                     shorthand for HEAD --base <ref>
+       edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]
+                                                     shorthand for PR review without full URL
+       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh
+       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context
+       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)
+       edc-review.sh --build --pr <number-or-url> [--ignore-context|--no-context-refresh]
+                                                     generate PR review tasks without full URL
+       edc-review.sh --check-context
+       edc-review.sh --consolidate
+       edc-review.sh --verify
+EOF
 }
 
 # ── dispatch ─────────────────────────────────────────────────────────────────
@@ -856,23 +911,13 @@ case "${1:-}" in
   --verify)
     verify_mode
     ;;
+  -h|--help)
+    review_usage
+    exit 0
+    ;;
   "")
     echo "ERROR: target required (PR URL, commit SHA, or diff path)" >&2
-    echo "Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     full review pipeline (default)" >&2
-    echo "       edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     shorthand for HEAD --base <ref>" >&2
-    echo "       edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     shorthand for PR review without full URL" >&2
-    echo "       edc-review.sh --no-context-refresh [--base <ref>]  shorthand for HEAD --no-context-refresh" >&2
-    echo "       edc-review.sh --ignore-context [--base <ref>]      shorthand for HEAD --ignore-context" >&2
-    echo "       edc-review.sh --build <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]" >&2
-    echo "                                                     generate $EDC_REVIEW_TASKS_DIR/ only (no subprocess spawning)" >&2
-    echo "       edc-review.sh --build --pr <number-or-url> [--ignore-context|--no-context-refresh]" >&2
-    echo "                                                     generate PR review tasks without full URL" >&2
-    echo "       edc-review.sh --check-context" >&2
-    echo "       edc-review.sh --consolidate" >&2
-    echo "       edc-review.sh --verify" >&2
+    review_usage >&2
     exit 2
     ;;
   --*)

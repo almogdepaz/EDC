@@ -6,10 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  edc [--model <slug>] build  --agent claude|cursor|codex [path] [--force] [--focus <module>] [--ignore <glob>]...
-  edc [--model <slug>] update --agent claude|cursor|codex [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] audit  --agent claude|cursor|codex [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
+  edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
@@ -50,8 +50,11 @@ require_command() {
     codex)
       command -v codex > /dev/null 2>&1 || die "--agent codex specified but 'codex' not found on PATH"
       ;;
+    pi)
+      command -v pi > /dev/null 2>&1 || die "--agent pi specified but 'pi' not found on PATH"
+      ;;
     *)
-      die "--agent must be one of: claude, cursor, codex"
+      die "--agent must be one of: claude, cursor, codex, pi"
       ;;
   esac
 }
@@ -95,10 +98,17 @@ validate_context_mode() {
 enforce_agent_context_mode() {
   local agent="$1" mode="$2"
   [ -n "$mode" ] || return 0
-  if [ "$agent" != "claude" ]; then
-    echo "edc: $agent/$mode not yet implemented" >&2
-    exit 2
-  fi
+  case "$mode" in
+    advisory)
+      return 0
+      ;;
+    inject)
+      if [ "$agent" != "claude" ]; then
+        echo "edc: $agent/$mode not yet implemented" >&2
+        exit 2
+      fi
+      ;;
+  esac
 }
 
 build_cmd() {
@@ -147,7 +157,7 @@ build_cmd() {
 
   [ -n "$agent" ] || die "--agent is required"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   if [ -n "$positional_target" ]; then
     target="$positional_target"
@@ -160,7 +170,7 @@ build_cmd() {
 
   (
     cd "$target"
-    EDC_AGENT_CLI="$agent" bash "$build_script" "${passthrough[@]}"
+    EDC_AGENT_CLI="$agent" "$EDC_BASH" "$build_script" "${passthrough[@]}"
   )
 }
 
@@ -211,13 +221,13 @@ review_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$review_script" "${passthrough[@]}"
 }
 
 audit_cmd() {
@@ -261,13 +271,13 @@ audit_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$audit_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$audit_script" "${passthrough[@]}"
 }
 
 update_cmd() {
@@ -316,20 +326,20 @@ update_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
-  _check_model_or_prompt
+  _check_model_or_prompt "$agent"
 
   local update_script
   update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$update_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$update_script" "${passthrough[@]}"
 }
 
 doctor_cmd() {
   local doctor_script
   doctor_script="$(find_script edc-doctor.sh)" \
     || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
-  bash "$doctor_script"
+  "$EDC_BASH" "$doctor_script"
 }
 
 mode_cmd() {
@@ -379,7 +389,11 @@ _load_config() {
 # before delegating to a subcommand that spawns agent work. "mode" and
 # "doctor" don't spawn agents so they skip this.
 _check_model_or_prompt() {
+  local agent="${1:-}"
   if [ -n "${EDC_BUILD_MODEL:-}" ] || [ -n "${EDC_REVIEW_MODEL:-}" ]; then
+    return 0
+  fi
+  if [ "$agent" = "pi" ] && [ -n "${EDC_PI_MODEL:-}" ]; then
     return 0
   fi
   if [ -t 0 ] && [ -t 1 ]; then
@@ -404,6 +418,8 @@ main() {
   }
 
   _load_config
+  EDC_BASH="${EDC_BASH:-$BASH}"
+  export EDC_BASH
 
   # Parse top-level --model <slug>. Must appear before the subcommand verb.
   while [ "$#" -gt 0 ]; do

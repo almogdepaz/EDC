@@ -39,7 +39,7 @@ scenario="valid"
 # and audit references "edc-build-impl". Match by skill *header* (the
 # unique top-level heading from each skill file) which we add to fixtures
 # below.
-if [[ "\$prompt" == *"# Audit Complexity"* ]] || [[ "\$prompt" == *"name: edc-audit-impl"* ]]; then
+if [[ "\$prompt" == *"# Audit Complexity"* ]] || [[ "\$prompt" == *"name: edc-audit"* ]]; then
   mkdir -p edc-context/reports
   case "\$scenario" in
     valid)
@@ -94,6 +94,10 @@ setup_repo() {
   echo "src" > src.py
   git add src.py
   git commit -q -m "init"
+  mkdir -p .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-audit
+  printf '# Build Context\nedc-build\n' > .edc/skills/edc-build-impl/SKILL.md
+  printf '# Update Context\nedc-update\n' > .edc/skills/edc-update-impl/SKILL.md
+  printf '# Audit Complexity\nname: edc-audit\n' > .edc/skills/edc-audit/SKILL.md
   if [ "$with_context" = "fresh" ]; then
     mkdir -p edc-context/modules
     head=$(git rev-parse HEAD)

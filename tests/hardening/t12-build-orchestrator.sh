@@ -158,7 +158,24 @@ else
   echo "FAIL (12d): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1
 fi
 
-# ── 12e: v1 layout → REFUSE with migration hint ──────────────────────────────
+# ── 12e: missing AGENTS.md → wipe + BUILD (not update) ─────────────────
+setup_repo
+write_healthy_v2
+rm -f AGENTS.md
+echo "" > "$EDC_T12_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -ne 0 ]; then
+  echo "FAIL (12e/missing-agents): orchestrator exited $result"
+  echo "$out"; exit 1
+fi
+if grep -qx "build" "$EDC_T12_LOG"; then
+  echo "PASS: missing AGENTS.md → BUILD (not update)"
+else
+  echo "FAIL (12e/missing-agents): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1
+fi
+
+# ── 12f: v1 layout → REFUSE with migration hint ──────────────────────────────
 setup_repo
 mkdir -p edc-context
 printf '{}' > edc-context/.meta.json     # v1 marker
@@ -166,18 +183,18 @@ echo "" > "$EDC_T12_LOG"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
-  echo "FAIL (12e): expected non-zero exit on v1 layout, got 0"; echo "$out"; exit 1
+  echo "FAIL (12f): expected non-zero exit on v1 layout, got 0"; echo "$out"; exit 1
 fi
 if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context"; then
   echo "PASS: v1 layout refused with migration hint"
 else
-  echo "FAIL (12e): expected migration hint mentioning 'legacy v1' and 'rm -rf edc-context'"
+  echo "FAIL (12f): expected migration hint mentioning 'legacy v1' and 'rm -rf edc-context'"
   echo "$out"; exit 1
 fi
 # also assert the agent was NOT spawned (log only contains the empty-line
 # we wrote at setup; no "build" or "update" entries)
 if grep -qE '^(build|update)$' "$EDC_T12_LOG"; then
-  echo "FAIL (12e): agent was spawned despite v1 detection:"
+  echo "FAIL (12f): agent was spawned despite v1 detection:"
   cat "$EDC_T12_LOG"; exit 1
 fi
 

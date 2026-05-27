@@ -1,0 +1,25 @@
+{
+  "buildTimestamp": "2026-05-26T09:38:10Z",
+  "edcVersion": "1.1.0",
+  "layoutVersion": 2,
+  "modules": [
+    "runtime-cli",
+    "plugin-surface",
+    "canonical-skills",
+    "agent-wrappers",
+    "hardening-tests",
+    "benchmarking"
+  ],
+  "ignoreRules": {
+    "provenance": ".edcignore",
+    "patterns": [
+      "benchmark/curl/**",
+      "benchmark/redis/**"
+    ]
+  },
+  "sourceCommit": "<filled by manifest post-step>",
+  "moduleDiscovery": {
+    "strategy": "git ls-files with .edcignore applied; logical grouping by package/runtime/test/benchmark boundaries",
+    "sourceBodiesReadDuringOrientation": false
+  }
+}

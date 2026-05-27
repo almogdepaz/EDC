@@ -30,11 +30,11 @@ Routing is decided by `plugins/edc/scripts/edc-build.sh` BEFORE this skill is in
 
 ### Forbidden patterns (do not do these)
 
-- DO NOT invoke `Skill(edc:edc-context)` at the orchestrator level. The `edc-context` skill is invoked ONLY inside per-module subagents spawned in step 2.
-- DO NOT invoke `Skill(edc:edc-audit)` (the slash-command-style skill). The build calls `edc-audit-impl` directly in step 5.
+- DO NOT invoke `Skill(edc-module-context-impl)` at the orchestrator level. The `edc-module-context-impl` skill is invoked ONLY inside per-module subagents spawned in step 2.
+- DO NOT invoke any audit command wrapper. The build calls the `edc-audit` skill directly in step 5.
 - DO NOT write to v1 paths (`edc-context/.meta.json`, `edc-context/context.md`, or top-level per-module markdown). v2 paths are listed in [Full Build](#full-build).
 
-**CRITICAL — Clean Slate Rule:** All analysis (`edc-context`, `edc-review-impl`, `edc-audit-impl`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
+**CRITICAL — Clean Slate Rule:** All analysis (`edc-module-context-impl`, `edc-review`, `edc-audit`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
 ## Full Build
 
@@ -65,7 +65,7 @@ Build steps:
 
 4. **Repo overview.** Author `edc-context/index.md` as a short startup orientation document by stitching together the module summaries from step 2 and the cross-module flow notes from step 3. It must contain at least one `##` heading. Recommended sections: repo purpose, actor map, key flows, global invariants, trust boundaries, blast-radius summary, and a module table linking each module to `edc-context/modules/<name>.md`. Optimize for low token cost — this is the file loaded at session start. The orchestrator MUST NOT re-read source bodies to produce this file.
 
-5. **Reports.** Invoke the `edc-audit-impl` skill to emit cross-cutting analytical output:
+5. **Reports.** Invoke the `edc-audit` skill to emit cross-cutting analytical output:
    - `edc-context/reports/issues.md` — known problems and risks
    - `edc-context/reports/complexity.md` — overengineering / bloat / duplication signals
 

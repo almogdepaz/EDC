@@ -34,6 +34,8 @@ command -v git >/dev/null 2>&1 || { echo "edc-manifest: git required" >&2; exit 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 route_sh="$script_dir/edc-route.sh"
 [ -f "$route_sh" ] || { echo "edc-manifest: edc-route.sh not found at $route_sh" >&2; exit 64; }
+EDC_BASH="${EDC_BASH:-$BASH}"
+export EDC_BASH
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -87,7 +89,7 @@ ambiguous=0
 
 while IFS= read -r path; do
   [ -z "$path" ] && continue
-  bash "$route_sh" "$input" "$path" >/dev/null 2>&1
+  "$EDC_BASH" "$route_sh" "$input" "$path" >/dev/null 2>&1
   rc=$?
   case $rc in
     0) mapped=$((mapped + 1)) ;;

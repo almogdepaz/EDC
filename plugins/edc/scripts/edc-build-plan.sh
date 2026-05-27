@@ -104,7 +104,7 @@ jq -r \
         "prompt": (
           "Build deep architectural context for module `" + .name + "`. " +
           "Files in scope: `" + (.paths | join(", ")) + "`. " +
-          "Invoke the `edc-context` skill on these files. " +
+          "Invoke the `edc-module-context-impl` skill on these files. " +
           "You may read sibling-module source if it materially improves this module'\''s context. " +
           "Write the deep doc directly to `" + $modules_dir + "/" + (.name | kebab) + ".md`. " +
           "Return a ≤500-token summary for the orchestrator."

@@ -21,6 +21,8 @@ benchmark/**/results-baseline*.tsv
 benchmark/**/metrics-*.tsv
 benchmark/**/*.log
 benchmark/regression/results/
+benchmark/pr-review/results/
+benchmark/judge-audit.md
 benchmark/redis/archive/
 benchmark/redis/baseline-*.json
 benchmark/redis/baseline-hard-*
@@ -43,3 +45,6 @@ review-HEAD.md
 review-tasks/
 edc-context/review-tasks/
 PLAN.md
+FINDINGS.md
+STATUS.md
+PLAN-cleanup.md

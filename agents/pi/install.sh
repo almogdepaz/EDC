@@ -83,15 +83,14 @@ pi install "$SOURCE" "${ARGS[@]}"
 
 cat <<EOF
 
-Done. Available commands in pi:
-  /edc-build       build deep architectural context
-  /edc-update      incremental update from branch diff
-  /edc-audit       overengineering / bloat audit
-  /edc-run-review  differential code review
-  /edc-doctor      validate context tree
-  /edc-review      internal: per-module review
+Done. Available command in pi:
+  /edc             interactive EDC menu (review, status, build, update, audit, doctor)
 
-Mode toggle (per-project, after /edc-build has run):
+Visible skills:
+  edc-review       differential review methodology
+  edc-audit        overengineering / bloat audit methodology
+
+Mode toggle (per-project, after context has been built):
   bash agents/pi/install.sh --context-mode advisory   # docs only (default)
   bash agents/pi/install.sh --context-mode inject     # auto-inject context
 EOF

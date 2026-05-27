@@ -13,15 +13,7 @@ If `edc-context/index.md` exists in the repository:
 4. Load `edc-context/modules/{module}.md` for affected modules
 5. Load `edc-context/reports/issues.md` to check if changes touch known issues
 
-If `edc-context/` does NOT exist but the `edc:edc-context` skill is available (NOT `audit-context-building` — that is a different plugin):
-
-```bash
-# Checkout baseline commit
-git checkout <baseline_commit>
-
-# Invoke edc:edc-context skill on baseline codebase
-edc-context --scope [entire project or main source directory]
-```
+If `edc-context/` does NOT exist, do not assume generated context is available. Either ask the user to run `/edc-build` for full EDC context, or manually build a lightweight baseline from the changed files, adjacent code, and git history.
 
 **Capture from baseline analysis:**
 - System-wide invariants (what must ALWAYS be true across all code)
@@ -300,9 +292,7 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 3. Does the change touch a documented fragility cluster?
 4. Does the change conflict with documented design decisions?
 
-**If `edc-context/` does NOT exist**, build context for HIGH RISK changes:
-
-Use the `edc:edc-context` skill (NOT `audit-context-building`) or manually analyze:
+**If `edc-context/` does NOT exist**, build lightweight context for HIGH RISK changes manually, or ask the user to run `/edc-build` before continuing:
 
 1. **Map complete function flow:**
    - Entry conditions (preconditions, guards, middleware)

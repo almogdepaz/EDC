@@ -5,20 +5,20 @@
   exit 2
 }
 # edc-audit orchestrator.
-# Deterministic control plane for /edc:edc-audit.
+# Deterministic control plane for terminal/orchestrated edc audit runs.
 #
 # Flow:
 #   1. dependency check (jq, git)
 #   2. parse args (--ignore, --context-mode)
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
-#   4. spawn ONE audit subprocess via edc_spawn (claude/cursor/codex)
+#   4. spawn ONE audit subprocess via edc_spawn (claude/cursor/codex/pi)
 #   5. validate output: <reports-dir>/{complexity,issues}.md must exist
 #      and contain at least one ## heading
 #   6. exit 0 with paths printed, non-zero with reason
 #
 # Usage:
-#   EDC_AGENT_CLI=claude bash edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
 
 set -euo pipefail
 
@@ -86,7 +86,7 @@ assert_audit_reports_valid() {
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex> edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
 EOF
   exit 2
 }
@@ -111,25 +111,7 @@ audit_main() {
     esac
   done
 
-  case "$EDC_AGENT_CLI" in
-    claude)
-      command -v claude > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=claude but 'claude' not found on PATH" >&2; exit 2; }
-      ;;
-    cursor)
-      command -v cursor > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=cursor but 'cursor' not found on PATH" >&2; exit 2; }
-      ;;
-    codex)
-      command -v codex > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=codex but 'codex' not found on PATH" >&2; exit 2; }
-      ensure_codex_exec_home
-      ;;
-    *)
-      echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', or 'codex'" >&2
-      exit 2
-      ;;
-  esac
+  edc_require_agent_cli
 
   # Gate on freshness; recover if needed. After this returns, $EDC_CONTEXT_DIR is fresh.
   recover_context_if_needed "${ignore_args[@]}" \

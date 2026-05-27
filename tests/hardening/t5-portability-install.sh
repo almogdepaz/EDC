@@ -47,7 +47,32 @@ else
   exit 1
 fi
 
-# ── 5d: plugin script bundle exists ──────────────────────────────���───────────
+# ── 5d: public command/skill surface is user-facing only ────────────────────
+commands=$(find plugins/edc/commands -maxdepth 1 -type f -name '*.md' -exec basename {} \; | sort | tr '\n' ' ')
+if [ "$commands" = "edc-build.md edc-doctor.md edc-run-review.md edc-update.md " ]; then
+  echo "PASS: command directory exposes only build/update/run-review/doctor"
+else
+  echo "FAIL: unexpected command surface: $commands"
+  exit 1
+fi
+
+skills=$(find plugins/edc/skills -maxdepth 1 -type d -mindepth 1 -exec basename {} \; | sort | tr '\n' ' ')
+if [ "$skills" = "edc-audit edc-review " ]; then
+  echo "PASS: public skills expose only edc-audit and edc-review"
+else
+  echo "FAIL: unexpected public skill surface: $skills"
+  exit 1
+fi
+
+for bundle in edc-build-impl edc-update-impl edc-module-context-impl; do
+  if [ ! -f "plugins/edc/prompt-bundles/$bundle/SKILL.md" ]; then
+    echo "FAIL: missing hidden prompt bundle: $bundle"
+    exit 1
+  fi
+done
+echo "PASS: hidden prompt bundles live outside public skills"
+
+# ── 5e: plugin script bundle exists ──────────────────────────────���───────────
 if [ -f "$PLUGIN_SCRIPT" ]; then
   echo "PASS: plugins/edc/scripts/edc-review.sh exists in plugin bundle"
 else
@@ -55,7 +80,7 @@ else
   exit 1
 fi
 
-# ── 5e: session-start hook contains installOrchestratorScript ────────────────
+# ── 5f: session-start hook contains installOrchestratorScript ────────────────
 if grep -q 'installOrchestratorScript' "$HOOK"; then
   echo "PASS: installOrchestratorScript present in session-start hook"
 else
@@ -63,7 +88,16 @@ else
   exit 1
 fi
 
-# ── 5f: install logic: copies missing script to project .edc/scripts/ ─────────
+# ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
+pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
+if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"'; then
+  echo "PASS: pi installer copies ~/.edc/skills for spawned review subprocesses"
+else
+  echo "FAIL: pi installer does not copy ~/.edc/skills"
+  exit 1
+fi
+
+# ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
 TMPDIR_T5=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T5"' EXIT
 
@@ -110,7 +144,7 @@ else
   exit 1
 fi
 
-# ── 5g: install is idempotent (stale-check: older dest → copy again) ─────────
+# ── 5i: install is idempotent (stale-check: older dest → copy again) ─────────
 # Make dest older by touching plugin script with newer mtime
 touch "$(pwd)/$PLUGIN_SCRIPT"
 result=$(node -e "

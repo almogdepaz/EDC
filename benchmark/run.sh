@@ -29,7 +29,7 @@ run_single_cve() {
     local repo_url="$8"
 
     local cve_dir="$WORK_DIR/$repo_name/$cve_id"
-    local output_dir="$cve_dir/.context"
+    local output_dir="$cve_dir/edc-context/reports"
 
     echo "=== $cve_id ($category, $severity) ==="
     echo "    fix: $fix_commit | files: $affected_files"
@@ -54,7 +54,7 @@ run_single_cve() {
     }
 
     # Clean previous context
-    rm -rf "$output_dir"
+    rm -rf "$cve_dir/edc-context"
     mkdir -p "$output_dir"
 
     # Build the prompt — scoped to affected files
@@ -65,15 +65,15 @@ run_single_cve() {
         file_list="$file_list $f"
     done
 
-    local prompt="Run the edc:edc-context skill on ONLY these files: $file_list
+    local prompt="Apply the EDC module-context methodology on ONLY these files: $file_list
 
 This is a security-focused analysis. Perform ultra-granular line-by-line analysis \
 looking for all vulnerabilities including memory safety issues, state machine logic \
 errors, flag/boolean corruption, protocol injection, and data flow problems.
 
-Write the complete analysis to .context/full-context.md
+Write the complete analysis to edc-context/full-context.md
 
-Then create .context/issues.md listing ALL security issues you find, with:
+Then create edc-context/reports/issues.md listing ALL security issues you find, with:
 - issue title
 - severity (critical/high/medium/low)
 - category (buffer overflow, use-after-free, logic error, etc.)
@@ -108,7 +108,7 @@ Be thorough. Do not skip any function."
     # Check if issues.md was created
     if [ ! -f "$output_dir/issues.md" ]; then
         # Maybe claude wrote findings in stdout but not to file
-        echo "    WARNING: .context/issues.md not created, extracting from stdout"
+        echo "    WARNING: edc-context/reports/issues.md not created, extracting from stdout"
         cp "$output_dir/claude-output.txt" "$output_dir/issues.md"
     fi
 
@@ -136,6 +136,15 @@ main() {
             *) echo "Unknown arg: $1"; exit 1 ;;
         esac
     done
+
+    # Phase 0 (F1): propagate model into edc_spawn for any nested orchestrator
+    # calls. run.sh calls claude -p directly so EDC_BENCH_MODEL still gates the
+    # outer invocation, but downstream paths read EDC_BUILD_MODEL/EDC_REVIEW_MODEL.
+    if [ -n "${EDC_BENCH_MODEL:-}" ]; then
+        export EDC_BUILD_MODEL="${EDC_BUILD_MODEL:-$EDC_BENCH_MODEL}"
+        export EDC_REVIEW_MODEL="${EDC_REVIEW_MODEL:-$EDC_BENCH_MODEL}"
+        export CLAUDE_CODE_SUBAGENT_MODEL="${CLAUDE_CODE_SUBAGENT_MODEL:-$EDC_BENCH_MODEL}"
+    fi
 
     mkdir -p "$WORK_DIR"
 

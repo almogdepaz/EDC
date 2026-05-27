@@ -190,6 +190,28 @@ else
   cat "$EDC_T13_LOG.prompt"; exit 1
 fi
 
+# ── 13f: missing AGENTS.md → REFUSE as partial v2 ──────────────────────
+setup_repo
+write_healthy_v2
+rm -f AGENTS.md
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ]; then
+  echo "FAIL (13f): expected non-zero exit when AGENTS.md is missing"
+  echo "$out"; exit 1
+fi
+if echo "$out" | grep -q "partial or malformed" && echo "$out" | grep -q "force"; then
+  echo "PASS: missing AGENTS.md refused with --force build hint"
+else
+  echo "FAIL (13f): expected refusal mentioning partial/malformed and --force"
+  echo "$out"; exit 1
+fi
+if grep -q "spawned" "$EDC_T13_LOG"; then
+  echo "FAIL (13f): agent was spawned despite refusal"
+  cat "$EDC_T13_LOG"; exit 1
+fi
+
 cd "$ORIG_DIR"
 echo ""
 echo "All T13 checks passed."

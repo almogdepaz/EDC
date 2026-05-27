@@ -71,7 +71,7 @@ if [ "$failures" -eq 0 ]; then
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     set +e
-    bash "$ROUTE_SH" "$MANIFEST" "$path" >/dev/null 2>"$TMP_ERR"
+    "$EDC_BASH" "$ROUTE_SH" "$MANIFEST" "$path" >/dev/null 2>"$TMP_ERR"
     rc=$?
     set -e
     case "$rc" in

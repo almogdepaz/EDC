@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 2,
+  "edcVersion": "1.1.0",
+  "repoContextFile": "edc-context/index.md",
+  "reports": {
+    "issues": "edc-context/reports/issues.md",
+    "complexity": "edc-context/reports/complexity.md"
+  },
+  "build": {
+    "buildInfoFile": "edc-context/build/build.json"
+  },
+  "policy": {
+    "defaultMode": "advisory",
+    "unmatchedPathPolicy": "warn-allow"
+  },
+  "modules": [
+    {
+      "name": "runtime-cli",
+      "doc": "edc-context/modules/runtime-cli.md",
+      "summary": "Terminal CLI, shell orchestrators, and deterministic build/update/review/audit control plane.",
+      "priority": 100,
+      "match": {
+        "exactFiles": [
+          "install.sh"
+        ],
+        "prefixes": [
+          "plugins/edc/scripts/",
+          "plugins/edc/commands/"
+        ]
+      }
+    },
+    {
+      "name": "plugin-surface",
+      "doc": "edc-context/modules/plugin-surface.md",
+      "summary": "Claude/Cursor hook surface and shared JavaScript routing/context injection runtime.",
+      "priority": 100,
+      "match": {
+        "exactFiles": [
+          "package.json",
+          ".claude-plugin/marketplace.json",
+          "plugins/edc/README.md"
+        ],
+        "prefixes": [
+          "plugins/edc/.claude-plugin/",
+          "plugins/edc/hooks/"
+        ]
+      }
+    },
+    {
+      "name": "canonical-skills",
+      "doc": "edc-context/modules/canonical-skills.md",
+      "summary": "Canonical public skills and private implementation prompt bundles that define agent behavior.",
+      "priority": 100,
+      "match": {
+        "prefixes": [
+          "plugins/edc/prompt-bundles/",
+          "plugins/edc/skills/"
+        ]
+      }
+    },
+    {
+      "name": "agent-wrappers",
+      "doc": "edc-context/modules/agent-wrappers.md",
+      "summary": "Pi extension wrapper, interactive menu, background reviews, and Pi install documentation.",
+      "priority": 100,
+      "match": {
+        "prefixes": [
+          "agents/pi/"
+        ]
+      }
+    },
+    {
+      "name": "hardening-tests",
+      "doc": "edc-context/modules/hardening-tests.md",
+      "summary": "Shell and Node hardening tests pinning runtime, routing, install, and Pi contracts.",
+      "priority": 100,
+      "match": {
+        "prefixes": [
+          "tests/hardening/"
+        ]
+      }
+    },
+    {
+      "name": "benchmarking",
+      "doc": "edc-context/modules/benchmarking.md",
+      "summary": "CVE benchmark harness, scorer, judge audit, transcript recovery, and prompt-tuning experiments.",
+      "priority": 100,
+      "match": {
+        "exactFiles": [
+          "benchmark/audit.py",
+          "benchmark/autoresearch-log.tsv",
+          "benchmark/autoresearch.sh",
+          "benchmark/baseline-score.txt",
+          "benchmark/build-value-report-redis.md",
+          "benchmark/build-value-report.md",
+          "benchmark/compute_baseline.py",
+          "benchmark/parse_gt.py",
+          "benchmark/regression-floor.txt",
+          "benchmark/rejudge.py",
+          "benchmark/rescore.py",
+          "benchmark/results.tsv",
+          "benchmark/run.sh",
+          "benchmark/score.py",
+          "benchmark/transcript_utils.py",
+          "benchmark/tried-hashes.tsv"
+        ],
+        "prefixes": [
+          "benchmark/gepa/",
+          "benchmark/pr-review/",
+          "benchmark/regression/"
+        ]
+      }
+    }
+  ],
+  "unmapped": {
+    "allowedGlobs": [
+      "AGENTS.md",
+      "edc-context/**",
+      "review-tasks/**",
+      "*.md",
+      ".gitignore",
+      ".edcignore",
+      "benchmark/curl/**",
+      "benchmark/redis/**"
+    ]
+  },
+  "generatedAt": "2026-05-27T18:07:28Z",
+  "sourceCommit": "83e5be0a1d74a6d3418d022f21a57b89fcd3c39f",
+  "coverage": {
+    "mappedFileCount": 90,
+    "unmappedFileCount": 40,
+    "ambiguousPathCount": 0
+  }
+}

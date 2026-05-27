@@ -66,13 +66,13 @@ source_and_test() {
 
 source_and_test
 
-# 3. Verify every claude -p invocation uses --output-format stream-json --verbose
-# (exclude comment lines). Spawns live in edc-lib.sh.
-total=$(grep -cE '^\s+claude -p' "$SPAWN")
-locked=$(grep -v '^#' "$SPAWN" | grep -c -- '--output-format stream-json --verbose')
-echo "claude -p invocations: $total; with stream-json: $locked"
-if [ "$total" -lt 1 ] || [ "$locked" -ne "$total" ]; then
-  echo "FAIL: every claude -p must use --output-format stream-json --verbose (invocations=$total, matched=$locked)"
+# 3. Verify the claude argv-array seed uses --output-format stream-json --verbose.
+# Spawns live in edc-lib.sh and are built as arrays, not old inline shell text.
+total=$(grep -cF 'local -a cmd=(claude -p' "$SPAWN" || true)
+locked=$(grep -v '^#' "$SPAWN" | grep -cF -- 'local -a cmd=(claude -p --output-format stream-json --verbose' || true)
+echo "claude argv-array invocations: $total; with stream-json: $locked"
+if [ "$total" -ne 1 ] || [ "$locked" -ne "$total" ]; then
+  echo "FAIL: every claude argv-array spawn must use --output-format stream-json --verbose (invocations=$total, matched=$locked)"
   exit 1
 fi
-echo "PASS: all $total claude -p invocation(s) use stream-json"
+echo "PASS: claude argv-array spawn uses stream-json"

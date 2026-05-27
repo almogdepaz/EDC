@@ -43,6 +43,7 @@ EOF
 make_fake_agent claude
 make_fake_agent cursor
 make_fake_agent codex
+make_fake_agent pi
 
 # Fake bash captures `bash <orchestrator-script> [args...]` invocations,
 # bucketed by which orchestrator was invoked. Lets us assert that plugins/edc/scripts/edc
@@ -69,6 +70,18 @@ chmod +x "$FAKE_BIN/bash"
 run_cli() {
   PATH="$FAKE_BIN:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
+  EDC_BUILD_MODEL="t7-model" \
+  EDC_REVIEW_MODEL="t7-model" \
+  EDC_BASH="$FAKE_BIN/bash" \
+  EDC_TEST_CAPTURE_DIR="$CAPTURE" \
+  "$BASH_BIN" "$SCRIPT_ABS" "$@"
+}
+
+run_cli_pi_model_only() {
+  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  HOME="$FAKE_HOME" \
+  EDC_PI_MODEL="t7-pi-model" \
+  EDC_BASH="$FAKE_BIN/bash" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
@@ -110,13 +123,23 @@ else
   exit 1
 fi
 
-# ── 7c: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args ──
+# ── 7c: pi accepts EDC_PI_MODEL without phase model variables ───────────────
+rm -rf "$CAPTURE/build"
+run_cli_pi_model_only build "$PROJECT" --agent pi --force
+if [ "$(cat "$CAPTURE/build/agent")" = "pi" ]; then
+  echo "PASS: pi build accepts EDC_PI_MODEL-only configuration"
+else
+  echo "FAIL: pi build rejected EDC_PI_MODEL-only configuration"
+  exit 1
+fi
+
+# ── 7d: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args ──
 #
 # Per-agent CLI dispatch (claude -p / cursor agent -p / codex exec) lives in
 # edc-spawn.sh and is exercised end-to-end by t6/t7-codex with real mocks.
 # Here we only check that plugins/edc/scripts/edc routes to the orchestrator correctly.
 
-for agent in claude cursor codex; do
+for agent in claude cursor codex pi; do
   rm -rf "$CAPTURE/build"
   run_cli build "$PROJECT" --agent "$agent" --force --ignore generated/**
 
@@ -145,7 +168,7 @@ for agent in claude cursor codex; do
     exit 1
   fi
 done
-echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex)"
+echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex/pi)"
 
 # ── 7f: review delegates to local orchestrator with EDC_AGENT_CLI ─────────────
 mkdir -p "$PROJECT/.edc/scripts"
@@ -174,6 +197,20 @@ if [ "$(cat "$CAPTURE/review/agent")" = "codex" ]; then
   echo "PASS: review exports EDC_AGENT_CLI to orchestrator"
 else
   echo "FAIL: review did not export EDC_AGENT_CLI"
+  exit 1
+fi
+
+# Repos with an existing manifest default to policy.defaultMode. Advisory mode
+# must not block non-Claude backends from reaching the deterministic review
+# orchestrator.
+mkdir -p "$PROJECT/edc-context"
+printf '{"policy":{"defaultMode":"advisory"}}\n' > "$PROJECT/edc-context/manifest.json"
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli review --agent pi HEAD --base main --ignore generated/**)
+if [ "$(cat "$CAPTURE/review/agent")" = "pi" ]; then
+  echo "PASS: review allows pi with manifest advisory mode"
+else
+  echo "FAIL: pi review was blocked before orchestrator dispatch"
   exit 1
 fi
 

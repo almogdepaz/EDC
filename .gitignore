@@ -32,6 +32,10 @@ benchmark/gepa/
 .edc/
 
 # local planning / handoff docs
+/*_PLAN.md
+/*_STATUS.md
+/*_SUMMARY.md
+/*_STRATEGY.md
 AUTORESEARCH_HANDOVER.md
 BUILD_REGRESSION_*.md
 EDC_V2_*

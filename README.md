@@ -233,8 +233,7 @@ edc/
     prompt-bundles/                    # hidden prompt bundles for orchestrator subprocesses
     scripts/                           # everything that ships to ~/.edc/scripts/
     hooks/                             # Claude hook surface + shared JS runtime helpers
-  pi/                                  # public pi package surface and docs
-  agents/pi/                           # pi adapter implementation (index.mjs + install script)
+  pi/                                  # pi package surface, docs, extension, and installer
   tests/hardening/                     # shell/Node regression tests
   benchmark/                           # CVE recall and review benchmark harnesses
 ```

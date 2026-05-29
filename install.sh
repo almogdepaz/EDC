@@ -354,8 +354,8 @@ case "$AGENT" in
     if ! command -v pi >/dev/null 2>&1; then
       die "pi CLI not found on PATH. Install pi first: https://pi.dev"
     fi
-    if [ -d "$SCRIPT_DIR/agents/pi" ]; then
-      bash "$SCRIPT_DIR/agents/pi/install.sh" --from-source
+    if [ -d "$SCRIPT_DIR/pi" ]; then
+      bash "$SCRIPT_DIR/pi/install.sh" --from-source
     else
       echo "Installing EDC as pi extension via git..."
       pi install "git:github.com/almogdepaz/edc"

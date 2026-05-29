@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, r
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import edcExtension from "./agents/pi/index.mjs";
+import edcExtension from "./pi/index.mjs";
 
 delete process.env.EDC_PI_SUBPROCESS;
 

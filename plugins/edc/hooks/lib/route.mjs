@@ -4,7 +4,7 @@
  * Used by:
  *   - plugins/edc/hooks/session-start.mjs (Claude Code, Cursor)
  *   - plugins/edc/hooks/pretooluse-context-inject.mjs (Claude Code, Cursor)
- *   - agents/pi/index.mjs (Pi extension)
+ *   - pi/index.mjs (Pi extension)
  *
  * Pure functions only — no stdin/stdout, no platform detection.
  */

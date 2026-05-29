@@ -30,7 +30,6 @@ ok('legacy pi peer dependency namespace is absent', !pkg.peerDependencies?.['@ma
 ok('package has a runtime files allowlist', Array.isArray(pkg.files) && pkg.files.length > 0);
 for (const required of [
   'pi/**',
-  'agents/pi/**',
   'plugins/edc/scripts/**',
   'plugins/edc/hooks/**',
   'plugins/edc/skills/**',

@@ -121,4 +121,4 @@ The injection logic is shared with the Claude Code / Cursor hooks via `plugins/e
 
 ## Source layout
 
-`pi/` is the public pi-facing package surface. The implementation remains in `agents/pi/` so EDC can keep all host adapters grouped under `agents/` while preserving old paths for existing links.
+`pi/` is the pi package surface and implementation home.

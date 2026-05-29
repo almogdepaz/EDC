@@ -3,7 +3,7 @@
 #
 # Verifies:
 #   - root package.json has the pi.extensions entry pointing at pi/index.mjs
-#   - pi/index.mjs and agents/pi/index.mjs parse (node --check)
+#   - pi/index.mjs parses (node --check)
 #   - shared lib (plugins/edc/hooks/lib/route.mjs) exports the expected names
 #   - the extension factory runs end-to-end against a fake ExtensionAPI
 #     (registers only the interactive /edc command, exposes only human-useful
@@ -37,11 +37,6 @@ else
   say_fail "pi/index.mjs parses"
 fi
 
-if node --check agents/pi/index.mjs 2>/dev/null; then
-  say_pass "agents/pi/index.mjs parses"
-else
-  say_fail "agents/pi/index.mjs parses"
-fi
 
 # --- 3. shared lib exports --------------------------------------------------
 exports_check=$(node --input-type=module -e '
@@ -119,7 +114,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     sendMessage: (m) => { calls.messages.push(m); },
     sendUserMessage: (m) => { calls.userMessages.push(m); },
   };
-  const factory = (await import("./agents/pi/index.mjs")).default;
+  const factory = (await import("./pi/index.mjs")).default;
   await factory(fakePi);
 
   // 1. only the interactive /edc command is registered.

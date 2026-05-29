@@ -30,7 +30,6 @@
   },
   "files": [
     "pi/**",
-    "agents/pi/**",
     "plugins/edc/.claude-plugin/**",
     "plugins/edc/commands/**",
     "plugins/edc/hooks/**",

@@ -1,6 +1,6 @@
 {
   "name": "@sgtbeatdown/edc",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
   "type": "module",
   "author": "sgtbeatdown",
@@ -62,7 +62,7 @@
     "image": "https://raw.githubusercontent.com/almogdepaz/EDC/main/media/edc-pi-screenshot.png"
   },
   "scripts": {
-    "test": "for t in tests/hardening/*.sh; do bash \"$t\" || exit 1; done",
+    "test": "bash tests/hardening/run-all.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check"
   }

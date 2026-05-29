@@ -17,7 +17,7 @@ function ok(name, cond) {
   console.log(`${name}\t${cond ? '1' : '0'}`);
 }
 ok('scoped npm package name is @sgtbeatdown/edc', pkg.name === '@sgtbeatdown/edc');
-ok('package version is aligned to EDC 1.1.0', pkg.version === '1.1.0');
+ok('package version is aligned to EDC 1.1.1', pkg.version === '1.1.1');
 ok('package is public (not private)', pkg.private !== true);
 ok('package declares author', typeof pkg.author === 'string' && pkg.author.length > 0);
 ok('package declares bugs url', pkg.bugs?.url === 'https://github.com/almogdepaz/edc/issues');

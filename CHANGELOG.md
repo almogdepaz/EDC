@@ -6,13 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-29
+
 ### Added
 - Added GitHub Actions CI for the hardening suite and package dry-run.
 - Added contributor and security documentation.
-- Added a root `pi/` package surface with pi-focused docs and wrapper entrypoint.
+- Added a root `pi/` package surface with pi-focused docs, package entrypoint, and installer.
 - Added a pi screenshot for README/package-gallery use.
 - Added a quick pi path to the README.
 - Added package author and issue tracker metadata.
+
+### Changed
+- Moved the pi adapter implementation from `agents/pi/` to root `pi/` before broader announcement.
 
 ## [1.1.0] - 2026-05-29
 

@@ -23,11 +23,13 @@ ok('package declares author', typeof pkg.author === 'string' && pkg.author.lengt
 ok('package declares bugs url', pkg.bugs?.url === 'https://github.com/almogdepaz/edc/issues');
 ok('node engine follows pi package baseline', pkg.engines?.node === '>=20.6.0');
 ok('publishConfig exposes scoped package publicly', pkg.publishConfig?.access === 'public');
-ok('pi manifest exposes the pi extension', Array.isArray(pkg.pi?.extensions) && pkg.pi.extensions.includes('./agents/pi/index.mjs'));
+ok('pi manifest exposes the pi extension', Array.isArray(pkg.pi?.extensions) && pkg.pi.extensions.includes('./pi/index.mjs'));
+ok('pi manifest declares gallery image', pkg.pi?.image === 'https://raw.githubusercontent.com/almogdepaz/EDC/main/media/edc-pi-screenshot.png');
 ok('current pi peer dependency namespace is used', pkg.peerDependencies?.['@earendil-works/pi-coding-agent'] === '*');
 ok('legacy pi peer dependency namespace is absent', !pkg.peerDependencies?.['@mariozechner/pi-coding-agent']);
 ok('package has a runtime files allowlist', Array.isArray(pkg.files) && pkg.files.length > 0);
 for (const required of [
+  'pi/**',
   'agents/pi/**',
   'plugins/edc/scripts/**',
   'plugins/edc/hooks/**',

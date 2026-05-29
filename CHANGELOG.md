@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 - Added GitHub Actions CI for the hardening suite and package dry-run.
 - Added contributor and security documentation.
+- Added a root `pi/` package surface with pi-focused docs and wrapper entrypoint.
+- Added a pi screenshot for README/package-gallery use.
 - Added a quick pi path to the README.
 - Added package author and issue tracker metadata.
 

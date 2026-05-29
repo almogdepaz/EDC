@@ -2,8 +2,8 @@
 # t10-pi-extension: smoke-test the pi extension wiring.
 #
 # Verifies:
-#   - root package.json has the pi.extensions entry pointing at agents/pi/index.mjs
-#   - agents/pi/index.mjs parses (node --check)
+#   - root package.json has the pi.extensions entry pointing at pi/index.mjs
+#   - pi/index.mjs and agents/pi/index.mjs parse (node --check)
 #   - shared lib (plugins/edc/hooks/lib/route.mjs) exports the expected names
 #   - the extension factory runs end-to-end against a fake ExtensionAPI
 #     (registers only the interactive /edc command, exposes only human-useful
@@ -25,12 +25,18 @@ if [ ! -f package.json ]; then
 else
   ext=$(node -e 'console.log((JSON.parse(require("fs").readFileSync("package.json","utf-8")).pi?.extensions||[]).join(","))')
   case "$ext" in
-    *"./agents/pi/index.mjs"*) say_pass "package.json declares pi.extensions" ;;
+    *"./pi/index.mjs"*) say_pass "package.json declares pi.extensions" ;;
     *) say_fail "package.json pi.extensions entry" "got: $ext" ;;
   esac
 fi
 
-# --- 2. extension entry parses ----------------------------------------------
+# --- 2. extension entries parse ---------------------------------------------
+if node --check pi/index.mjs 2>/dev/null; then
+  say_pass "pi/index.mjs parses"
+else
+  say_fail "pi/index.mjs parses"
+fi
+
 if node --check agents/pi/index.mjs 2>/dev/null; then
   say_pass "agents/pi/index.mjs parses"
 else

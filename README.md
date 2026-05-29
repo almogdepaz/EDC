@@ -4,6 +4,8 @@ Deep codebase understanding and context-aware review for AI coding agents. EDC b
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
+![EDC pi menu](media/edc-pi-screenshot.png)
+
 ## What EDC Does
 
 EDC separates deterministic orchestration from LLM analysis:
@@ -115,7 +117,7 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`agents/pi/README.md`](agents/pi/README.md).
+Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`pi/README.md`](pi/README.md).
 
 Quick pi path:
 
@@ -231,7 +233,8 @@ edc/
     prompt-bundles/                    # hidden prompt bundles for orchestrator subprocesses
     scripts/                           # everything that ships to ~/.edc/scripts/
     hooks/                             # Claude hook surface + shared JS runtime helpers
-  agents/pi/                           # pi extension (index.mjs + install script)
+  pi/                                  # public pi package surface and docs
+  agents/pi/                           # pi adapter implementation (index.mjs + install script)
   tests/hardening/                     # shell/Node regression tests
   benchmark/                           # CVE recall and review benchmark harnesses
 ```

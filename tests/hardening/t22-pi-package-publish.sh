@@ -19,6 +19,8 @@ function ok(name, cond) {
 ok('scoped npm package name is @sgtbeatdown/edc', pkg.name === '@sgtbeatdown/edc');
 ok('package version is aligned to EDC 1.1.0', pkg.version === '1.1.0');
 ok('package is public (not private)', pkg.private !== true);
+ok('package declares author', typeof pkg.author === 'string' && pkg.author.length > 0);
+ok('package declares bugs url', pkg.bugs?.url === 'https://github.com/almogdepaz/edc/issues');
 ok('node engine follows pi package baseline', pkg.engines?.node === '>=20.6.0');
 ok('publishConfig exposes scoped package publicly', pkg.publishConfig?.access === 'public');
 ok('pi manifest exposes the pi extension', Array.isArray(pkg.pi?.extensions) && pkg.pi.extensions.includes('./agents/pi/index.mjs'));
@@ -32,6 +34,9 @@ for (const required of [
   'plugins/edc/skills/**',
   'plugins/edc/prompt-bundles/**',
   'README.md',
+  'CHANGELOG.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
   'LICENSE',
 ]) {
   ok(`files allowlist includes ${required}`, files.has(required));

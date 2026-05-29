@@ -102,13 +102,13 @@ bash install.sh --agent codex
 ### pi
 
 ```bash
-# npm package (recommended after the package is published)
+# npm package
 pi install npm:@sgtbeatdown/edc
 
 # project-local install for a team repo
 pi install npm:@sgtbeatdown/edc -l
 
-# git install works before npm publishing and for pinned refs
+# git install works for pinned refs or source installs
 pi install git:github.com/almogdepaz/edc
 
 # or via the unified installer
@@ -116,6 +116,14 @@ bash install.sh --agent pi
 ```
 
 Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`agents/pi/README.md`](agents/pi/README.md).
+
+Quick pi path:
+
+1. Install EDC with `pi install npm:@sgtbeatdown/edc`.
+2. Start `pi` in a git repository.
+3. Run `/edc` and choose **Build context** once.
+4. Run `/edc` → **Review current branch vs main**.
+5. Poll `/edc` → **Review status** while the background review runs.
 
 All installers also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|update|review|audit|mode|doctor` works from any shell after that directory is on `PATH`.
 

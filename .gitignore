@@ -3,6 +3,7 @@
 .claude/
 __pycache__/
 *.pyc
+*.tgz
 
 # pi extension peer-deps installed by `pi install` post-clone
 node_modules/

@@ -3,11 +3,15 @@
   "version": "1.1.0",
   "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
   "type": "module",
+  "author": "sgtbeatdown",
   "license": "MIT",
   "homepage": "https://github.com/almogdepaz/edc",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/almogdepaz/edc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/almogdepaz/edc/issues"
   },
   "keywords": [
     "pi-package",
@@ -35,6 +39,9 @@
     "plugins/edc/README.md",
     "install.sh",
     "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "peerDependencies": {

@@ -688,7 +688,7 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 }
 
-/** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
+/** @type {(pi: import("@earendil-works/pi-coding-agent").ExtensionAPI) => Promise<void>} */
 export default async function edcExtension(pi) {
   if (process.env.EDC_PI_SUBPROCESS === "1") return;
 

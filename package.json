@@ -1,7 +1,6 @@
 {
-  "name": "edc",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@sgtbeatdown/edc",
+  "version": "1.1.0",
   "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
   "type": "module",
   "license": "MIT",
@@ -13,23 +12,41 @@
   "keywords": [
     "pi-package",
     "pi",
+    "pi-extension",
     "edc",
     "code-review",
+    "architecture",
     "context",
     "claude-code",
     "cursor",
     "codex"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6.0"
   },
+  "files": [
+    "agents/pi/**",
+    "plugins/edc/.claude-plugin/**",
+    "plugins/edc/commands/**",
+    "plugins/edc/hooks/**",
+    "plugins/edc/prompt-bundles/**",
+    "plugins/edc/scripts/**",
+    "plugins/edc/skills/**",
+    "plugins/edc/README.md",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "optional": true
     }
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "pi": {
     "extensions": [
@@ -37,6 +54,8 @@
     ]
   },
   "scripts": {
-    "test": "for t in tests/hardening/*.sh; do bash \"$t\" || exit 1; done"
+    "test": "for t in tests/hardening/*.sh; do bash \"$t\" || exit 1; done",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm test && npm run pack:check"
   }
 }

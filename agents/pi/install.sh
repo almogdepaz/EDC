@@ -8,7 +8,7 @@
 #   ./install.sh --context-mode advisory|inject
 #                                  # toggle edc-context/manifest.json default mode
 #
-# Requires: pi (https://github.com/mariozechner/pi) on PATH.
+# Requires: pi (https://pi.dev) on PATH.
 
 set -e
 
@@ -63,7 +63,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if ! command -v pi >/dev/null 2>&1; then
-  echo "edc: pi CLI not found on PATH. Install pi first: https://github.com/mariozechner/pi" >&2
+  echo "edc: pi CLI not found on PATH. Install pi first: https://pi.dev" >&2
   exit 1
 fi
 

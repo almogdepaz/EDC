@@ -352,7 +352,7 @@ case "$AGENT" in
 
   pi)
     if ! command -v pi >/dev/null 2>&1; then
-      die "pi CLI not found on PATH. Install pi first: https://github.com/mariozechner/pi"
+      die "pi CLI not found on PATH. Install pi first: https://pi.dev"
     fi
     if [ -d "$SCRIPT_DIR/agents/pi" ]; then
       bash "$SCRIPT_DIR/agents/pi/install.sh" --from-source

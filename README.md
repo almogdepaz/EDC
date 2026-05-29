@@ -102,7 +102,13 @@ bash install.sh --agent codex
 ### pi
 
 ```bash
-# direct: pi clones the repo and registers the extension
+# npm package (recommended after the package is published)
+pi install npm:@sgtbeatdown/edc
+
+# project-local install for a team repo
+pi install npm:@sgtbeatdown/edc -l
+
+# git install works before npm publishing and for pinned refs
 pi install git:github.com/almogdepaz/edc
 
 # or via the unified installer
@@ -172,6 +178,16 @@ edc mode inject
 ```
 
 Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi support injection.
+
+## Pi Package Compatibility
+
+EDC is intentionally conservative as a pi package: it registers one `/edc` command, does not override built-in tools, and exposes only the `edc-review` and `edc-audit` skills. Provider packages such as Cursor/Anthropic OAuth extensions should coexist normally.
+
+Known interactions:
+
+- Context-pruning packages can be used with EDC. Prefer EDC's default `advisory` mode for maximum compatibility; `inject` mode intentionally adds EDC context messages to the session.
+- Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, and `review-*.md`.
+- EDC's pi review subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
 
 ## Generated Files and Local State
 

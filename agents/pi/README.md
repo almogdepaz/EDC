@@ -1,17 +1,30 @@
 # EDC for pi
 
-Pi extension that ports the EDC ([Every Day Carry](../../README.md)) Claude Code plugin to [pi](https://github.com/mariozechner/pi).
+Pi extension that ports the EDC ([Every Day Carry](../../README.md)) Claude Code plugin to [pi](https://pi.dev).
 
 ## Install
 
 ```bash
+# npm package (recommended after publishing)
+pi install npm:@sgtbeatdown/edc
+
+# git install works before npm publishing and for pinned refs
 pi install git:github.com/almogdepaz/edc
 ```
 
 Project-local install:
 
 ```bash
+pi install npm:@sgtbeatdown/edc -l
+# or
 pi install git:github.com/almogdepaz/edc -l
+```
+
+Update/remove:
+
+```bash
+pi update npm:@sgtbeatdown/edc
+pi remove npm:@sgtbeatdown/edc
 ```
 
 From a local checkout:
@@ -70,6 +83,17 @@ Pi exposes only the human-facing EDC methodology skills:
 | `edc-audit` | Apply the EDC bloat / duplication / overengineering audit methodology directly in chat. |
 
 Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
+
+## Compatibility with other pi packages
+
+EDC registers one `/edc` command, does not override built-in tools, and exposes only the two human-facing skills above. It should coexist with provider packages and command-only helper packages.
+
+Known interactions:
+
+- Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
+- Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
+- Build/update/review need shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, and `review-*.md`.
+- Runtime requirements for orchestrated pi reviews: `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
 
 ## Modes
 

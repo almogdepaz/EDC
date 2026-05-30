@@ -4,6 +4,8 @@ Deep codebase understanding and context-aware review for AI coding agents. EDC b
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
+![EDC pi menu](media/edc-pi-screenshot.png)
+
 ## What EDC Does
 
 EDC separates deterministic orchestration from LLM analysis:
@@ -102,14 +104,28 @@ bash install.sh --agent codex
 ### pi
 
 ```bash
-# direct: pi clones the repo and registers the extension
+# npm package
+pi install npm:@sgtbeatdown/edc
+
+# project-local install for a team repo
+pi install npm:@sgtbeatdown/edc -l
+
+# git install works for pinned refs or source installs
 pi install git:github.com/almogdepaz/edc
 
 # or via the unified installer
 bash install.sh --agent pi
 ```
 
-Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`agents/pi/README.md`](agents/pi/README.md).
+Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`pi/README.md`](pi/README.md).
+
+Quick pi path:
+
+1. Install EDC with `pi install npm:@sgtbeatdown/edc`.
+2. Start `pi` in a git repository.
+3. Run `/edc` and choose **Build context** once.
+4. Run `/edc` → **Review current branch vs main**.
+5. Poll `/edc` → **Review status** while the background review runs.
 
 All installers also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|update|review|audit|mode|doctor` works from any shell after that directory is on `PATH`.
 
@@ -173,6 +189,16 @@ edc mode inject
 
 Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi support injection.
 
+## Pi Package Compatibility
+
+EDC is intentionally conservative as a pi package: it registers one `/edc` command, does not override built-in tools, and exposes only the `edc-review` and `edc-audit` skills. Provider packages such as Cursor/Anthropic OAuth extensions should coexist normally.
+
+Known interactions:
+
+- Context-pruning packages can be used with EDC. Prefer EDC's default `advisory` mode for maximum compatibility; `inject` mode intentionally adds EDC context messages to the session.
+- Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, and `review-*.md`.
+- EDC's pi review subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
+
 ## Generated Files and Local State
 
 EDC writes generated context and local runtime state in a few places:
@@ -207,7 +233,7 @@ edc/
     prompt-bundles/                    # hidden prompt bundles for orchestrator subprocesses
     scripts/                           # everything that ships to ~/.edc/scripts/
     hooks/                             # Claude hook surface + shared JS runtime helpers
-  agents/pi/                           # pi extension (index.mjs + install script)
+  pi/                                  # pi package surface, docs, extension, and installer
   tests/hardening/                     # shell/Node regression tests
   benchmark/                           # CVE recall and review benchmark harnesses
 ```

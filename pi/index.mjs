@@ -1,5 +1,5 @@
 /**
- * EDC extension for pi (https://github.com/mariozechner/pi).
+ * EDC extension for pi (https://pi.dev).
  *
  * Mirrors the Claude Code plugin:
  *   - registers one interactive /edc menu for user-facing workflows
@@ -13,7 +13,7 @@
  * ("advisory" | "inject"), same as for Claude Code.
  *
  * Loaded via the repo-root package.json:
- *   "pi": { "extensions": ["./agents/pi/index.mjs"] }
+ *   "pi": { "extensions": ["./pi/index.mjs"] }
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -25,11 +25,11 @@ import {
   buildToolCallInjection,
   getContextFreshness,
   installOrchestratorScript,
-} from "../../plugins/edc/hooks/lib/route.mjs";
+} from "../plugins/edc/hooks/lib/route.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// agents/pi/index.mjs → repo root → plugins/edc
-const PLUGIN_ROOT = join(__dirname, "..", "..", "plugins", "edc");
+// pi/index.mjs → repo root → plugins/edc
+const PLUGIN_ROOT = join(__dirname, "..", "plugins", "edc");
 const EDC_COMMAND = {
   name: "edc",
   description: "Open the interactive EDC menu",
@@ -688,7 +688,7 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 }
 
-/** @type {(pi: import("@mariozechner/pi-coding-agent").ExtensionAPI) => Promise<void>} */
+/** @type {(pi: import("@earendil-works/pi-coding-agent").ExtensionAPI) => Promise<void>} */
 export default async function edcExtension(pi) {
   if (process.env.EDC_PI_SUBPROCESS === "1") return;
 

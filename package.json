@@ -1,42 +1,69 @@
 {
-  "name": "edc",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@sgtbeatdown/edc",
+  "version": "1.1.1",
   "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
   "type": "module",
+  "author": "sgtbeatdown",
   "license": "MIT",
   "homepage": "https://github.com/almogdepaz/edc",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/almogdepaz/edc.git"
   },
+  "bugs": {
+    "url": "https://github.com/almogdepaz/edc/issues"
+  },
   "keywords": [
     "pi-package",
     "pi",
+    "pi-extension",
     "edc",
     "code-review",
+    "architecture",
     "context",
     "claude-code",
     "cursor",
     "codex"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6.0"
   },
+  "files": [
+    "pi/**",
+    "plugins/edc/.claude-plugin/**",
+    "plugins/edc/commands/**",
+    "plugins/edc/hooks/**",
+    "plugins/edc/prompt-bundles/**",
+    "plugins/edc/scripts/**",
+    "plugins/edc/skills/**",
+    "plugins/edc/README.md",
+    "install.sh",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "peerDependenciesMeta": {
-    "@mariozechner/pi-coding-agent": {
+    "@earendil-works/pi-coding-agent": {
       "optional": true
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
     "extensions": [
-      "./agents/pi/index.mjs"
-    ]
+      "./pi/index.mjs"
+    ],
+    "image": "https://raw.githubusercontent.com/almogdepaz/EDC/main/media/edc-pi-screenshot.png"
   },
   "scripts": {
-    "test": "for t in tests/hardening/*.sh; do bash \"$t\" || exit 1; done"
+    "test": "bash tests/hardening/run-all.sh",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm test && npm run pack:check"
   }
 }

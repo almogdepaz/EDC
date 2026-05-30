@@ -1,24 +1,35 @@
 # EDC for pi
 
-Pi extension that ports the EDC ([Every Day Carry](../../README.md)) Claude Code plugin to [pi](https://github.com/mariozechner/pi).
+EDC adds repository architecture context and context-aware review workflows to [pi](https://pi.dev).
+
+![EDC pi menu](../media/edc-pi-screenshot.png)
 
 ## Install
 
 ```bash
+pi install npm:@sgtbeatdown/edc
+```
+
+Project-local install for a team repo:
+
+```bash
+pi install npm:@sgtbeatdown/edc -l
+```
+
+Git/source installs still work:
+
+```bash
 pi install git:github.com/almogdepaz/edc
+bash pi/install.sh --from-source
 ```
 
-Project-local install:
+## Quick path
 
-```bash
-pi install git:github.com/almogdepaz/edc -l
-```
-
-From a local checkout:
-
-```bash
-bash agents/pi/install.sh --from-source
-```
+1. Start `pi` in a git repository.
+2. Run `/edc`.
+3. Choose **Build context** once.
+4. Choose **Review current branch vs main**.
+5. Check progress with **Review status**.
 
 ## Command
 
@@ -71,6 +82,17 @@ Pi exposes only the human-facing EDC methodology skills:
 
 Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
 
+## Compatibility with other pi packages
+
+EDC registers one `/edc` command, does not override built-in tools, and exposes only the two human-facing skills above. It should coexist with provider packages and command-only helper packages.
+
+Known interactions:
+
+- Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
+- Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
+- Build/update/review need shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, and `review-*.md`.
+- Runtime requirements for orchestrated pi reviews: `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
+
 ## Modes
 
 EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.defaultMode`:
@@ -81,8 +103,8 @@ EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.def
 Toggle:
 
 ```bash
-bash agents/pi/install.sh --context-mode advisory
-bash agents/pi/install.sh --context-mode inject
+bash pi/install.sh --context-mode advisory
+bash pi/install.sh --context-mode inject
 ```
 
 ## How it maps to pi
@@ -97,6 +119,6 @@ bash agents/pi/install.sh --context-mode inject
 
 The injection logic is shared with the Claude Code / Cursor hooks via `plugins/edc/hooks/lib/route.mjs` — single source of truth, no drift.
 
-## Testing note
+## Source layout
 
-Pi exposes no public lifecycle test harness, so `tests/hardening/t10-pi-extension.sh` exercises the extension factory with a fake `ExtensionAPI`. That pins command registration, visible skills, session-start script install, and tool-call context injection.
+`pi/` is the pi package surface and implementation home.

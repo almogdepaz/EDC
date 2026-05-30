@@ -107,7 +107,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   delete process.env.EDC_PI_SUBPROCESS;
   const cwd = process.env.EDC_TEST_CWD;
   const sid = process.env.EDC_TEST_SID;
-  const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [], selections: [] };
+  const calls = { commands: [], events: [], messages: [], userMessages: [], notifications: [], confirmations: [], selections: [], statuses: [], widgets: [] };
   const fakePi = {
     on: (event, handler) => { calls.events.push({ event, handler }); },
     registerCommand: (name, opts) => { calls.commands.push({ name, opts }); },
@@ -137,7 +137,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const childProcess = await import("node:child_process");
 
   fs.mkdirSync(`${cwd}/.edc/scripts`, { recursive: true });
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\nsleep 0.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
@@ -159,6 +159,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
         calls.confirmations.push({ title, message });
         return true;
       }),
+      setStatus: (key, value) => { calls.statuses.push({ key, value }); },
+      setWidget: (key, value, options) => { calls.widgets.push({ key, value, options }); },
     },
   });
 
@@ -171,6 +173,16 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const firstBackgroundMessage = calls.messages.at(-1)?.content || "";
   if (!firstBackgroundMessage.includes("Background review started.") || !firstBackgroundMessage.includes("EDC context: fresh.") || !firstBackgroundMessage.includes("Check progress: `/edc` → Review status.")) {
     console.log("MENU_REVIEW_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
+    process.exit(1);
+  }
+  const runningStatus = [...calls.statuses].reverse().find((entry) => entry.key === "edc-review")?.value || "";
+  if (!runningStatus.includes("running")) {
+    console.log("REVIEW_UI_RUNNING_STATUS_FAIL:" + JSON.stringify(calls.statuses));
+    process.exit(1);
+  }
+  const runningWidget = [...calls.widgets].reverse().find((entry) => entry.key === "edc-review")?.value || [];
+  if (!Array.isArray(runningWidget) || !runningWidget.some((line) => line.includes("edc review running"))) {
+    console.log("REVIEW_UI_RUNNING_WIDGET_FAIL:" + JSON.stringify(calls.widgets));
     process.exit(1);
   }
   const runId = (firstBackgroundMessage.match(/Run ID: (\S+)/) || [])[1];
@@ -199,6 +211,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const statusMessage = calls.messages.at(-1)?.content || "";
   if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md") || !statusMessage.includes("log: .git/edc/review.log")) {
     console.log("STATUS_CMD_FAIL:" + JSON.stringify(statusMessage));
+    process.exit(1);
+  }
+  const completeStatus = [...calls.statuses].reverse().find((entry) => entry.key === "edc-review")?.value || "";
+  if (!completeStatus.includes("complete")) {
+    console.log("REVIEW_UI_COMPLETE_STATUS_FAIL:" + JSON.stringify(calls.statuses));
     process.exit(1);
   }
 

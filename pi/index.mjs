@@ -51,6 +51,11 @@ const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
 const EDC_BACKGROUND_REVIEW_LOG_GIT_PATH = "edc/review.log";
 const EDC_BACKGROUND_REVIEW_STALE_MS = 12 * 60 * 60 * 1000;
+const EDC_REVIEW_UI_KEY = "edc-review";
+const EDC_REVIEW_UI_POLL_MS = 2000;
+const EDC_REVIEW_UI_MAX_LINE_CHARS = 96;
+
+let reviewStatusTimer = null;
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -541,18 +546,27 @@ function parseStatus(content) {
   return status;
 }
 
+function readBackgroundReviewStatus(cwd) {
+  const statusPath = backgroundStatusPath(cwd);
+  if (!statusPath || !existsSync(statusPath.path)) return null;
+  return {
+    statusPath,
+    status: parseStatus(readFileSync(statusPath.path, "utf-8")),
+  };
+}
+
 function renderReviewStatus(args, cwd) {
   const requested = String(args || "").trim();
   if (requested && requested !== "latest" && requested !== "current") {
     return "EDC keeps only the current background review status. Use `/edc` → Review status without a run id.";
   }
 
-  const statusPath = backgroundStatusPath(cwd);
-  if (!statusPath || !existsSync(statusPath.path)) {
+  const review = readBackgroundReviewStatus(cwd);
+  if (!review) {
     return "No background EDC review runs found.";
   }
 
-  const status = parseStatus(readFileSync(statusPath.path, "utf-8"));
+  const status = review.status;
   const runId = status.run_id || "current";
   const lines = [
     `EDC review run: ${runId}`,
@@ -578,6 +592,100 @@ function renderReviewStatus(args, cwd) {
     lines.push("Still running. Check again with `/edc` → Review status.");
   }
   return lines.join("\n");
+}
+
+function truncateUiLine(value, maxChars = EDC_REVIEW_UI_MAX_LINE_CHARS) {
+  const text = String(value || "");
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1)}…`;
+}
+
+function formatReviewElapsed(status) {
+  const startedAt = Date.parse(status.started_at || "");
+  if (!Number.isFinite(startedAt)) return "";
+
+  const finishedAt = Date.parse(status.finished_at || "");
+  const end = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+  const elapsedSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  const remainingMinutes = elapsedMinutes % 60;
+  return `${elapsedHours}h ${remainingMinutes}m`;
+}
+
+function canShowReviewStatusUi(ctx) {
+  return ctx?.hasUI !== false && !!ctx?.ui
+    && (typeof ctx.ui.setStatus === "function" || typeof ctx.ui.setWidget === "function");
+}
+
+function renderReviewFooterStatus(status) {
+  if (status.status === "running") {
+    const elapsed = formatReviewElapsed(status);
+    return `edc review: running${elapsed ? ` ${elapsed}` : ""}`;
+  }
+  if (status.status === "success") return "edc review: ✓ complete";
+  if (status.status === "failed") return "edc review: ✗ failed";
+  return `edc review: ${status.status || "unknown"}`;
+}
+
+function renderReviewWidget(status) {
+  const lines = [`edc review ${status.status || "unknown"}`];
+  if (status.started_at) lines.push(`started: ${truncateUiLine(status.started_at)}`);
+  if (status.finished_at) lines.push(`finished: ${truncateUiLine(status.finished_at)}`);
+  if (status.final_review) lines.push(`final review: ${truncateUiLine(status.final_review)}`);
+  if (status.failure_reason) lines.push(`reason: ${truncateUiLine(status.failure_reason)}`);
+  if (status.failure_hint) lines.push(`hint: ${truncateUiLine(status.failure_hint)}`);
+  if (status.log) lines.push(`log: ${truncateUiLine(status.log)}`);
+  if (status.status === "running") lines.push("check: /edc → Review status");
+  return lines;
+}
+
+function clearReviewStatusUi(ctx) {
+  if (!canShowReviewStatusUi(ctx)) return;
+  if (typeof ctx.ui.setStatus === "function") ctx.ui.setStatus(EDC_REVIEW_UI_KEY, undefined);
+  if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget(EDC_REVIEW_UI_KEY, undefined);
+}
+
+function updateReviewStatusUi(ctx) {
+  if (!canShowReviewStatusUi(ctx)) return "";
+
+  const review = readBackgroundReviewStatus(ctx.cwd);
+  if (!review) {
+    clearReviewStatusUi(ctx);
+    return "";
+  }
+
+  if (typeof ctx.ui.setStatus === "function") {
+    ctx.ui.setStatus(EDC_REVIEW_UI_KEY, renderReviewFooterStatus(review.status));
+  }
+  if (typeof ctx.ui.setWidget === "function") {
+    ctx.ui.setWidget(EDC_REVIEW_UI_KEY, renderReviewWidget(review.status));
+  }
+  return review.status.status || "unknown";
+}
+
+function stopReviewStatusWatcher() {
+  if (!reviewStatusTimer) return;
+  clearInterval(reviewStatusTimer);
+  reviewStatusTimer = null;
+}
+
+function startReviewStatusWatcher(ctx) {
+  if (!canShowReviewStatusUi(ctx)) return;
+
+  stopReviewStatusWatcher();
+  const currentStatus = updateReviewStatusUi(ctx);
+  if (currentStatus !== "running") return;
+
+  reviewStatusTimer = setInterval(() => {
+    const nextStatus = updateReviewStatusUi(ctx);
+    if (nextStatus !== "running") stopReviewStatusWatcher();
+  }, EDC_REVIEW_UI_POLL_MS);
+  reviewStatusTimer.unref?.();
 }
 
 function backgroundReviewStartedMessage(result, contextSummary = "") {
@@ -630,8 +738,10 @@ async function runReviewAgainstMain(pi, ctx) {
   if (result.error) {
     sendInfo(pi, "edc-review-background", result.error);
   } else if (result.alreadyRunning) {
+    startReviewStatusWatcher(ctx);
     sendInfo(pi, "edc-review-background", backgroundReviewAlreadyRunningMessage(result));
   } else {
+    startReviewStatusWatcher(ctx);
     sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result, reviewContextSummary(ctx, freshness)));
   }
 }
@@ -668,6 +778,7 @@ async function handleEdcMenu(pi, args, ctx) {
       await runReviewAgainstMain(pi, ctx);
       break;
     case EDC_MENU.REVIEW_STATUS:
+      startReviewStatusWatcher(ctx);
       sendInfo(pi, "edc-review-status", renderReviewStatus("", ctx.cwd));
       break;
     case EDC_MENU.BUILD:
@@ -709,6 +820,7 @@ export default async function edcExtension(pi) {
     } catch {
       // best effort
     }
+    startReviewStatusWatcher(ctx);
     const { mode, content } = buildSessionStartContent(ctx.cwd);
     if (mode === "advisory" || !content) return;
     pi.sendMessage({
@@ -716,6 +828,10 @@ export default async function edcExtension(pi) {
       content,
       display: content,
     });
+  });
+
+  pi.on("session_shutdown", async () => {
+    stopReviewStatusWatcher();
   });
 
   // -- per-tool context injection ------------------------------------------

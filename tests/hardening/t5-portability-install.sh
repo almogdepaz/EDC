@@ -97,6 +97,14 @@ else
   exit 1
 fi
 
+if echo "$pi_branch" | grep -q 'bash "\$SCRIPT_DIR/pi/install.sh" --from-source' \
+  && ! echo "$pi_branch" | grep -q 'agents/pi/install.sh'; then
+  echo "PASS: root installer uses current pi/install.sh source path"
+else
+  echo "FAIL: root installer does not use current pi/install.sh source path"
+  exit 1
+fi
+
 # ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
 TMPDIR_T5=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T5"' EXIT

@@ -164,15 +164,16 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     },
   });
 
-  // 3. /edc menu review starts background review against HEAD --base main.
+  // 3. /edc menu review starts background review against HEAD --base main with a compact colored command result.
+  const messagesBeforeReviewStart = calls.messages.length;
   await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
   if (calls.userMessages.length !== 0) {
     console.log("DIRECT_COMMAND_USED_MODEL_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
   }
-  const firstBackgroundMessage = calls.messages.at(-1)?.content || "";
-  if (!firstBackgroundMessage.includes("Background review started.") || !firstBackgroundMessage.includes("EDC context: fresh.") || !firstBackgroundMessage.includes("Check progress: `/edc` → Review status.")) {
-    console.log("MENU_REVIEW_FAIL:" + JSON.stringify(calls.messages.slice(-3)));
+  const reviewStartMessage = calls.messages.slice(messagesBeforeReviewStart).at(-1);
+  if (calls.messages.length !== messagesBeforeReviewStart + 1 || reviewStartMessage?.customType !== "edc-background" || !reviewStartMessage.content.includes("Background EDC review started.") || !reviewStartMessage.content.includes("Log: .git/edc/review.log")) {
+    console.log("MENU_REVIEW_START_MESSAGE_FAIL:" + JSON.stringify(calls.messages.slice(messagesBeforeReviewStart)));
     process.exit(1);
   }
   const runningStatus = [...calls.statuses].reverse().find((entry) => entry.key === "edc-review")?.value || "";
@@ -180,18 +181,18 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("REVIEW_UI_RUNNING_STATUS_FAIL:" + JSON.stringify(calls.statuses));
     process.exit(1);
   }
-  const runningWidget = [...calls.widgets].reverse().find((entry) => entry.key === "edc-review")?.value || [];
-  if (!Array.isArray(runningWidget) || !runningWidget.some((line) => line.includes("edc review running"))) {
-    console.log("REVIEW_UI_RUNNING_WIDGET_FAIL:" + JSON.stringify(calls.widgets));
-    process.exit(1);
-  }
-  const runId = (firstBackgroundMessage.match(/Run ID: (\S+)/) || [])[1];
-  if (!runId) {
-    console.log("RUN_ID_FAIL:" + firstBackgroundMessage);
+  const runningWidget = [...calls.widgets].reverse().find((entry) => entry.key === "edc-review")?.value;
+  if (runningWidget !== undefined) {
+    console.log("REVIEW_UI_RUNNING_WIDGET_DUPLICATE_FAIL:" + JSON.stringify(calls.widgets));
     process.exit(1);
   }
   const statusFile = `${cwd}/.git/edc/status`;
   const logFile = `${cwd}/.git/edc/review.log`;
+  const runId = (fs.readFileSync(statusFile, "utf-8").match(/^run_id=(\S+)$/m) || [])[1];
+  if (!runId) {
+    console.log("RUN_ID_FAIL:" + fs.readFileSync(statusFile, "utf-8"));
+    process.exit(1);
+  }
   for (let i = 0; i < 20; i++) {
     if (fs.existsSync(statusFile) && fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -206,16 +207,25 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3b. /edc menu can show status for latest run.
-  await edcCmd.opts.handler("", menuCtx("Review status"));
+  // 3b. /edc menu can show status for latest run without pinning completed status in the UI.
+  const statusesBeforeStatusCommand = calls.statuses.length;
+  const widgetsBeforeStatusCommand = calls.widgets.length;
+  await edcCmd.opts.handler("", menuCtx("Job status"));
   const statusMessage = calls.messages.at(-1)?.content || "";
   if (!statusMessage.includes("status: success") || !statusMessage.includes("final review: review-HEAD.md") || !statusMessage.includes("log: .git/edc/review.log")) {
     console.log("STATUS_CMD_FAIL:" + JSON.stringify(statusMessage));
     process.exit(1);
   }
-  const completeStatus = [...calls.statuses].reverse().find((entry) => entry.key === "edc-review")?.value || "";
-  if (!completeStatus.includes("complete")) {
-    console.log("REVIEW_UI_COMPLETE_STATUS_FAIL:" + JSON.stringify(calls.statuses));
+  const pinnedCompletedStatus = calls.statuses.slice(statusesBeforeStatusCommand)
+    .find((entry) => entry.key === "edc-review" && String(entry.value || "").includes("complete"));
+  if (pinnedCompletedStatus) {
+    console.log("REVIEW_UI_COMPLETED_PINNED_FAIL:" + JSON.stringify(calls.statuses.slice(statusesBeforeStatusCommand)));
+    process.exit(1);
+  }
+  const pinnedCompletedWidget = calls.widgets.slice(widgetsBeforeStatusCommand)
+    .find((entry) => entry.key === "edc-review" && Array.isArray(entry.value) && entry.value.some((line) => String(line).includes("edc review success")));
+  if (pinnedCompletedWidget) {
+    console.log("REVIEW_UI_COMPLETED_WIDGET_FAIL:" + JSON.stringify(calls.widgets.slice(widgetsBeforeStatusCommand)));
     process.exit(1);
   }
 
@@ -225,7 +235,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     .replace(/^pid=.*$/m, `pid=${process.pid}`));
   await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
   const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
-  if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Review status.")) {
+  if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Job status.")) {
     console.log("ALREADY_RUNNING_FAIL:" + JSON.stringify(alreadyRunningMessage));
     process.exit(1);
   }
@@ -266,10 +276,33 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   ]);
   process.env.PATH = previousPath;
   const raceMessages = calls.messages.slice(raceStartIndex).map((message) => message.content || "");
-  const raceStartedCount = raceMessages.filter((message) => message.includes("Background review started.")).length;
+  const raceStartedCount = raceMessages.filter((message) => message.includes("Background EDC review started.")).length;
   const raceBlockedCount = raceMessages.filter((message) => message.includes("already running")).length;
   if (raceStartedCount !== 1 || raceBlockedCount !== 1) {
     console.log("IMMEDIATE_DUPLICATE_REVIEW_FAIL:" + JSON.stringify(raceMessages));
+    process.exit(1);
+  }
+
+  const raceStatusFile = `${raceDir}/.git/edc/status`;
+  for (let i = 0; i < 30; i++) {
+    if (fs.existsSync(raceStatusFile) && /^pid=\d+$/m.test(fs.readFileSync(raceStatusFile, "utf-8"))) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await edcCmd.opts.handler("kill", { cwd: raceDir, hasUI: false });
+  const killMessage = calls.messages.at(-1)?.content || "";
+  if (!killMessage.includes("Background EDC review killed.") || !killMessage.includes("Run ID:")) {
+    console.log("KILL_REVIEW_MESSAGE_FAIL:" + JSON.stringify(killMessage));
+    process.exit(1);
+  }
+  const killedStatus = fs.readFileSync(raceStatusFile, "utf-8");
+  if (!killedStatus.includes("status=cancelled") || !killedStatus.includes("exit_code=130") || !killedStatus.includes("failure_reason=cancelled by user")) {
+    console.log("KILL_REVIEW_STATUS_FAIL:" + JSON.stringify(killedStatus));
+    process.exit(1);
+  }
+  await edcCmd.opts.handler("", { ...menuCtx("Job status"), cwd: raceDir });
+  const killedStatusMessage = calls.messages.at(-1)?.content || "";
+  if (!killedStatusMessage.includes("status: cancelled") || !killedStatusMessage.includes("EDC review cancelled.")) {
+    console.log("KILL_REVIEW_STATUS_MESSAGE_FAIL:" + JSON.stringify(killedStatusMessage));
     process.exit(1);
   }
 
@@ -284,28 +317,52 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.chmodSync(`${stalePidDir}/.edc/scripts/edc-review.sh`, 0o755);
   fs.mkdirSync(`${stalePidDir}/.git/edc`, { recursive: true });
   fs.writeFileSync(`${stalePidDir}/.git/edc/status`, "status=running\nrun_id=dead\npid=999999\nstarted_at=2000-01-01T00:00:00Z\n");
+  const stalePidMessagesBefore = calls.messages.length;
   await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: stalePidDir });
-  const stalePidMessage = calls.messages.at(-1)?.content || "";
-  if (!stalePidMessage.includes("Background review started.")) {
-    console.log("STALE_PID_RECOVERY_FAIL:" + JSON.stringify(stalePidMessage));
+  const stalePidStartMessage = calls.messages.slice(stalePidMessagesBefore).at(-1);
+  if (calls.messages.length !== stalePidMessagesBefore + 1 || !stalePidStartMessage?.content?.includes("Background EDC review started.")) {
+    console.log("STALE_PID_RECOVERY_START_MESSAGE_FAIL:" + JSON.stringify(calls.messages.slice(stalePidMessagesBefore)));
+    process.exit(1);
+  }
+  const stalePidStatus = fs.readFileSync(`${stalePidDir}/.git/edc/status`, "utf-8");
+  if (!stalePidStatus.includes("run_id=") || stalePidStatus.includes("run_id=dead")) {
+    console.log("STALE_PID_RECOVERY_FAIL:" + JSON.stringify(stalePidStatus));
     process.exit(1);
   }
 
-  // 3f. direct script actions route from menu.
-  await edcCmd.opts.handler("", menuCtx("Build context"));
-  if (!calls.messages.at(-1)?.content?.includes("build args:  agent=pi")) {
-    console.log("BUILD_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
-    process.exit(1);
-  }
-  await edcCmd.opts.handler("", menuCtx("Update context from main"));
-  if (!calls.messages.at(-1)?.content?.includes("update args: --base main agent=pi")) {
-    console.log("UPDATE_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
-    process.exit(1);
-  }
-  await edcCmd.opts.handler("", menuCtx("Audit complexity"));
-  if (!calls.messages.at(-1)?.content?.includes("audit args:  agent=pi")) {
-    console.log("AUDIT_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
-    process.exit(1);
+  // 3f. build/update/audit run as background jobs using the shared status slot.
+  fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
+  const backgroundCases = [
+    { selection: "Build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
+    { selection: "Update context from main", kind: "update", log: ".git/edc/update.log", expect: "update args: --base main agent=pi" },
+    { selection: "Audit complexity", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
+  ];
+  for (const testCase of backgroundCases) {
+    const beforeMessages = calls.messages.length;
+    await edcCmd.opts.handler("", menuCtx(testCase.selection));
+    const jobStartMessage = calls.messages.slice(beforeMessages).at(-1);
+    if (calls.messages.length !== beforeMessages + 1 || jobStartMessage?.customType !== "edc-background" || !jobStartMessage.content.includes(`Background EDC ${testCase.kind} started.`) || !jobStartMessage.content.includes(`Log: ${testCase.log}`)) {
+      console.log("BACKGROUND_JOB_START_MESSAGE_FAIL:" + JSON.stringify({ kind: testCase.kind, messages: calls.messages.slice(beforeMessages) }));
+      process.exit(1);
+    }
+    const jobStatus = fs.readFileSync(statusFile, "utf-8");
+    if (!jobStatus.includes(`kind=${testCase.kind}`) || !jobStatus.includes("status=running") || !jobStatus.includes(`log=${testCase.log}`)) {
+      console.log("BACKGROUND_JOB_STATUS_FAIL:" + JSON.stringify({ kind: testCase.kind, status: jobStatus }));
+      process.exit(1);
+    }
+    const statusLine = [...calls.statuses].reverse().find((entry) => entry.key === "edc-review")?.value || "";
+    if (!statusLine.includes(`edc ${testCase.kind}: running`)) {
+      console.log("BACKGROUND_JOB_UI_STATUS_FAIL:" + JSON.stringify({ kind: testCase.kind, statuses: calls.statuses }));
+      process.exit(1);
+    }
+    for (let i = 0; i < 20; i++) {
+      if (fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (!fs.existsSync(`${cwd}/${testCase.log}`) || !fs.readFileSync(`${cwd}/${testCase.log}`, "utf-8").includes(testCase.expect)) {
+      console.log("BACKGROUND_JOB_LOG_FAIL:" + JSON.stringify({ kind: testCase.kind, log: fs.existsSync(`${cwd}/${testCase.log}`) ? fs.readFileSync(`${cwd}/${testCase.log}`, "utf-8") : "missing" }));
+      process.exit(1);
+    }
   }
   await edcCmd.opts.handler("", menuCtx("Doctor / validate context"));
   if (!calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
@@ -333,7 +390,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3i. missing context prompts before auto-build and carries state into start message.
+  // 3i. missing context prompts before auto-build and emits a compact start message.
   const missingDir = `${cwd}/missing-context`;
   fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: missingDir, stdio: "ignore" });
@@ -353,14 +410,15 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       },
     },
   };
+  const missingMessagesBefore = calls.messages.length;
   await edcCmd.opts.handler("", missingCtx);
   if (!calls.confirmations.at(-1)?.message?.includes("EDC context: missing/incomplete") || !calls.confirmations.at(-1)?.message?.includes("reason: manifest")) {
     console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
     process.exit(1);
   }
-  const missingBackgroundMessage = calls.messages.at(-1)?.content || "";
-  if (!missingBackgroundMessage.includes("Background review started.") || !missingBackgroundMessage.includes("EDC context: missing/incomplete") || !missingBackgroundMessage.includes("reason: manifest")) {
-    console.log("MISSING_BACKGROUND_CONTEXT_FAIL:" + JSON.stringify(missingBackgroundMessage));
+  const missingStartMessage = calls.messages.slice(missingMessagesBefore).at(-1);
+  if (calls.messages.length !== missingMessagesBefore + 1 || !missingStartMessage?.content?.includes("Background EDC review started.")) {
+    console.log("MISSING_BACKGROUND_CONTEXT_START_MESSAGE_FAIL:" + JSON.stringify(calls.messages.slice(missingMessagesBefore)));
     process.exit(1);
   }
 
@@ -420,11 +478,45 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
 
   // 5. session_start injects edc-context/index.md when mode=inject
   const ss = calls.events.find(e => e.event === "session_start");
-  const ssCtx = { cwd, sessionManager: { getSessionId: () => sid } };
+  const sessionStatusesBefore = calls.statuses.length;
+  const sessionWidgetsBefore = calls.widgets.length;
+  const ssCtx = {
+    cwd,
+    hasUI: true,
+    sessionManager: { getSessionId: () => sid },
+    ui: {
+      setStatus: (key, value) => { calls.statuses.push({ key, value }); },
+      setWidget: (key, value, options) => { calls.widgets.push({ key, value, options }); },
+    },
+  };
   const messagesBeforeSessionStart = calls.messages.length;
   await ss.handler({ type: "session_start", cwd, reason: "startup" }, ssCtx);
   if (calls.messages.length !== messagesBeforeSessionStart + 1 || !calls.messages.at(-1).content.includes("Module Map")) {
     console.log("SESSION_START_FAIL:" + JSON.stringify(calls.messages));
+    process.exit(1);
+  }
+  const sessionPinnedStatus = calls.statuses.slice(sessionStatusesBefore)
+    .find((entry) => entry.key === "edc-review" && entry.value);
+  if (sessionPinnedStatus) {
+    console.log("SESSION_START_COMPLETED_STATUS_FAIL:" + JSON.stringify(calls.statuses.slice(sessionStatusesBefore)));
+    process.exit(1);
+  }
+  const sessionPinnedWidget = calls.widgets.slice(sessionWidgetsBefore)
+    .find((entry) => entry.key === "edc-review" && entry.value);
+  if (sessionPinnedWidget) {
+    console.log("SESSION_START_COMPLETED_WIDGET_FAIL:" + JSON.stringify(calls.widgets.slice(sessionWidgetsBefore)));
+    process.exit(1);
+  }
+  const shutdown = calls.events.find(e => e.event === "session_shutdown");
+  const shutdownStatusesBefore = calls.statuses.length;
+  const shutdownWidgetsBefore = calls.widgets.length;
+  await shutdown.handler({ type: "session_shutdown", reason: "reload" }, ssCtx);
+  const shutdownClearedStatus = calls.statuses.slice(shutdownStatusesBefore)
+    .some((entry) => entry.key === "edc-review" && entry.value === undefined);
+  const shutdownClearedWidget = calls.widgets.slice(shutdownWidgetsBefore)
+    .some((entry) => entry.key === "edc-review" && entry.value === undefined);
+  if (!shutdownClearedStatus || !shutdownClearedWidget) {
+    console.log("SESSION_SHUTDOWN_CLEAR_FAIL:" + JSON.stringify({ statuses: calls.statuses.slice(shutdownStatusesBefore), widgets: calls.widgets.slice(shutdownWidgetsBefore) }));
     process.exit(1);
   }
   for (const requiredScript of ["edc-review.sh", "edc-lib.sh", "edc-assert-fresh.sh", "edc-recover-context.sh"]) {

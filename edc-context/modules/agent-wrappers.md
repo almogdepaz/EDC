@@ -2,37 +2,39 @@
 # Module: agent-wrappers
 
 ## Scope
-Owns the Pi extension wrapper and Pi-specific install/readme material.
+Owns the Pi package surface, Pi extension wrapper, Pi-specific installer/readme material, and Pi gallery media.
 
-**Primary paths:** `agents/pi/`.
+**Primary paths:** `pi/`, `media/edc-pi-screenshot.png`.
 
 ## Purpose
-This module adapts EDC to Pi. It registers one interactive `/edc` command, exposes only human-facing skills, hooks Pi session/tool events into the shared JS runtime-injection library, and runs long reviews as detached background jobs with status/logs stored under git metadata rather than the worktree.
+This module adapts EDC to Pi. It registers one interactive `/edc` command, exposes only human-facing skills, hooks Pi session/tool events into the shared JS runtime-injection library, and runs review/build/update/audit as detached background jobs with status/logs stored under git metadata rather than the worktree.
 
-The current branch changes Pi from several prompt-forwarding slash commands to a menu-driven operational wrapper that can preflight context freshness, ask before expensive review recovery, start background reviews, show review status, run build/update/audit/doctor directly, propagate Pi model selection, and enforce a Bash >=4 execution boundary.
+The current package layout uses root `package.json` `pi.extensions: ["./pi/index.mjs"]` and ships `pi/**` as the Pi extension. The wrapper maintains a compact Pi footer status only while a background job is running, clears stale/completed UI state, and removes that UI on session shutdown.
 
 ## Actors and entrypoints
-- Pi loads `agents/pi/index.mjs` from the root `package.json` `pi.extensions` entry.
+- Pi loads `pi/index.mjs` from the root package `pi.extensions` entry.
 - Users invoke `/edc`; help/non-interactive contexts get CLI guidance instead of an agent turn.
-- Pi lifecycle calls `resources_discover`, `session_start`, and `tool_call` handlers.
-- `agents/pi/install.sh` installs the extension and prints the `/edc` menu workflow.
-- `agents/pi/README.md` documents the mapping from EDC features to Pi mechanisms.
+- Pi lifecycle calls `resources_discover`, `session_start`, `session_shutdown`, and `tool_call` handlers.
+- `pi/install.sh` installs the extension and can toggle per-project `policy.defaultMode`.
+- `pi/README.md` documents install, menu workflow, background state, visible skills, modes, and package compatibility.
 
 ## Key functions and state
 - `edcExtension(pi)`: extension factory. It no-ops when `EDC_PI_SUBPROCESS=1` so nested Pi subprocesses do not recursively load the extension.
 - `handleEdcMenu`: interactive dispatcher for review/status/build/update/audit/doctor/cancel.
 - `runReviewAgainstMain`: starts a `HEAD --base main` background review after freshness preflight and optional user confirmation; `--no-context-refresh` and `--ignore-context` bypass the prompt for explicit direct-review modes.
-- `startBackgroundReview`: resolves `.edc/scripts/edc-review.sh`, resolves Bash >=4, writes `.git/edc/status`, detaches a subprocess, writes `.git/edc/review.log`, classifies failures, and records `final_review` from `Verified:`/`Consolidated:` lines.
-- `renderReviewStatus`: reads the single current status slot and displays run id, status, exit code, timestamps, commit drift, final report path, failure reason/hint, and log path. A requested historical run id is rejected because only the current slot is retained.
-- `runEdcScript`: synchronous menu actions for build/update/audit/doctor with bounded output capture.
+- `startBackgroundJob`: resolves `.edc/scripts/edc-<kind>.sh`, resolves Bash >=4, writes `.git/edc/status`, detaches a subprocess, writes `.git/edc/<kind>.log`, classifies failures, records `repo_changed`, and records `final_review` for reviews from `Verified:`/`Consolidated:` lines.
+- `renderBackgroundJobStatus`: reads the single current status slot and displays kind, run id, status, exit code, timestamps, commit drift, final report path, failure reason/hint, and log path. A requested historical run id is rejected because only the current slot is retained.
+- `startBackgroundStatusWatcher` / `updateBackgroundStatusUi`: poll current status and pin Pi footer status only for `status=running`; success/failed/cancelled/missing status clears the footer/widget instead of leaving stale completed UI.
+- `runScriptAction`: synchronous menu action for doctor with bounded output capture.
 - `extendEdcBashTimeout`: raises Pi Bash tool timeout to 7200s for `.edc/scripts/edc-{build,update,review,audit,doctor}.sh` commands.
-- Background state is resolved through `git rev-parse --git-path edc/status` and `edc/review.log`; typical display paths are `.git/edc/status` and `.git/edc/review.log`.
+- Background state is resolved through `git rev-parse --git-path edc/status` and `edc/<kind>.log`; typical display paths are `.git/edc/status` and `.git/edc/review.log` / `build.log` / `update.log` / `audit.log`.
 
 ## Core flows
 ### Extension startup and resources
 1. If `EDC_PI_SUBPROCESS=1`, return immediately.
 2. `resources_discover` exposes only `plugins/edc/skills/edc-review` and `edc-audit`.
-3. `session_start` best-effort installs `.edc/scripts`/private prompt bundles via `installOrchestratorScript`, then sends index context only when shared `buildSessionStartContent` says mode is `inject`.
+3. `session_start` best-effort installs `.edc/scripts`/private prompt bundles via `installOrchestratorScript`, starts the background-status watcher if a job is active, then sends index context only when shared `buildSessionStartContent` says mode is `inject`.
+4. `session_shutdown` stops the poller and clears any Pi status/widget entries for EDC background jobs.
 
 ### Tool-call injection
 1. For `bash|edit|write`, optionally extend timeout for EDC orchestrator Bash calls.
@@ -42,33 +44,38 @@ The current branch changes Pi from several prompt-forwarding slash commands to a
 
 ### Interactive menu
 - **Review current branch vs main:** checks freshness with `getContextFreshness`; stale/missing context prompts the user before allowing the orchestrator to build/update during review, unless the user explicitly requested `--no-context-refresh` or `--ignore-context`. The actual review runs detached and uses `EDC_AGENT_CLI=pi`.
-- **Review status:** reads the current `.git/edc/status` slot. Only one current slot is retained.
-- **Build/Update/Audit/Doctor:** run fixed script names with fixed args (`update --base main`) through resolved Bash >=4. These actions stream a summarized result back to Pi.
+- **Job status:** reads the current `.git/edc/status` slot and reports the latest terminal state without pinning completed status in the Pi footer/widget.
+- **Build/Update/Audit:** start fixed background jobs with fixed args (`update --base main`) through resolved Bash >=4.
+- **Doctor:** runs foreground and streams a summarized result back to Pi.
 - **Help/non-interactive:** `/edc -h` and missing UI explain that non-interactive runs should use the terminal CLI.
 
 ## Invariants
 - Pi subprocess agents must not recursively load the extension (`EDC_PI_SUBPROCESS=1`).
-- Only one current background review slot exists per git repo; `status=running` blocks a second start.
+- Only one current background review/build/update/audit job slot exists per git repo; `status=running` blocks a second start unless the PID is dead/stale.
 - Long EDC orchestrator Bash calls need a 7200s timeout in Pi.
 - Bash >=4 is resolved explicitly and exported as `EDC_BASH`; macOS `/bin/bash` 3.2 is rejected.
 - Pi model/provider is propagated to nested EDC subprocesses as `EDC_PI_MODEL` (`provider/id`).
-- Background review operational state must stay under `.git/edc/`, not `edc-context/`.
+- Background job operational state must stay under `.git/edc/`, not `edc-context/`.
+- Completed, failed, or cancelled job state is shown by the Job status command, not persistently pinned in the Pi UI widget.
 
 ## Trust boundaries
 - Menu selections are user-controlled but mapped to fixed script names and fixed args.
 - Shell command construction uses `shellQuote` for script/status/log paths; keep any future free-form args array-based or shell-quoted.
 - Status/log files are repo-local operational state; contents should be displayed as status, not trusted as source context.
 - `getContextFreshness` drives user prompts only. The review orchestrator still owns actual recovery and validation.
+- Pi package media/docs are user-facing assets; they should not influence review routing beyond this module's context.
 
 ## Coupling
 - Imports shared route/freshness/install helpers from `plugin-surface`; Pi must not fork manifest logic.
 - Runs `.edc/scripts/edc-*.sh` from `runtime-cli` and relies on `EDC_BASH`, `EDC_AGENT_CLI=pi`, and `EDC_PI_MODEL`.
 - Exposes skills from `canonical-skills` but hides private prompt bundles from normal Pi resource discovery.
-- Validated primarily by `hardening-tests` (`t10`, `t18`, `t20`, `t21`) and indirectly by CLI/Bash-alignment tests.
+- Package metadata in `plugin-surface` points Pi at `pi/index.mjs` and includes `pi/**` plus screenshot media in npm package contents.
+- Validated primarily by `hardening-tests` (`t2`, `t10`, `t18`, `t20`, `t21`, `t22`) and indirectly by CLI/Bash-alignment tests.
 
 ## Fragility points
 - Background status is a single overwrite slot; historical runs are not retained.
-- Detached subprocess supervision cannot stream live progress to the menu; users must inspect `.git/edc/review.log` or poll status.
+- Detached subprocess supervision cannot stream live progress to the menu; users must inspect `.git/edc/<kind>.log` or poll job status.
 - Failure classification is grep-based over the review log. New orchestrator error text can degrade to generic `review pipeline failed`.
 - The timeout-extension regex recognizes common relative, `$HOME`, and absolute `.edc/scripts/edc-*.sh` invocations, but can still miss unusual shell construction around the script path.
 - Runtime availability of `pi`, `git`, `jq`, `python3`, and Bash >=4 remains environmental.
+- UI status/widget APIs are optional Pi surface area; code must tolerate missing UI helpers and clear state during shutdown/reload.

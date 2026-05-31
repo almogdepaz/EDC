@@ -55,7 +55,7 @@ echo "Verified: review-HEAD.md"
   await edcExtension(pi);
   assert.equal(typeof handler, "function", "extension should register /edc handler");
 
-  const selections = ["Review current branch vs main", "Review status"];
+  const selections = ["Review current branch vs main", "Job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -66,27 +66,24 @@ echo "Verified: review-HEAD.md"
     model: { provider: "test", id: "model" },
   };
 
+  const messagesBeforeStart = messages.length;
   await handler("", ctx);
-  const started = messages.find((message) => message.customType === "edc-review-background");
-  assert.ok(started, "review start message should be emitted");
-  assert.match(started.content, /Background review started\./);
-  assert.match(started.content, /Log: \.git\/edc\/review\.log/, "log path should be in git metadata");
-  assert.match(started.content, /Status: \.git\/edc\/status/, "status path should not be inside edc-context or .edc");
-  const pidMatch = started.content.match(/^PID: (\d+)$/m);
-  childPid = pidMatch ? Number(pidMatch[1]) : 0;
-  const statusPathMatch = started.content.match(/^Status: (.+)$/m);
-  const logPathMatch = started.content.match(/^Log: (.+)$/m);
-  assert.ok(statusPathMatch, "start message should include a status path");
-  assert.ok(logPathMatch, "start message should include a log path");
-  const statusPathFromMessage = join(cwd, statusPathMatch[1]);
-  const logPathFromMessage = join(cwd, logPathMatch[1]);
+  const startMessage = messages.slice(messagesBeforeStart).at(-1);
+  assert.equal(messages.length, messagesBeforeStart + 1, "successful background review start should emit one compact command result");
+  assert.equal(startMessage.customType, "edc-background");
+  assert.match(startMessage.content, /Background EDC review started\./);
+  const statusPathFromMessage = join(cwd, ".git", "edc", "status");
+  const logPathFromMessage = join(cwd, ".git", "edc", "review.log");
 
-  assert.ok(await waitFor(() => existsSync(statusPathFromMessage), 1000), "background wrapper should write initial status");
-  assert.ok(await waitFor(() => existsSync(logPathFromMessage), 1000), "background wrapper should write review log");
+  assert.ok(await waitFor(() => existsSync(statusPathFromMessage), 1000), "background wrapper should write initial status in git metadata");
+  assert.ok(await waitFor(() => existsSync(logPathFromMessage), 1000), "background wrapper should write review log in git metadata");
+  assert.ok(!statusPathFromMessage.includes("edc-context"), "status path should not be inside edc-context");
+  const pidMatch = readFileSync(statusPathFromMessage, "utf-8").match(/^pid=(\d+)$/m);
+  childPid = pidMatch ? Number(pidMatch[1]) : 0;
   await waitFor(() => !existsSync(join(cwd, "edc-context")), 1000);
 
   await handler("", ctx);
-  const status = messages.filter((message) => message.customType === "edc-review-status").at(-1);
+  const status = messages.filter((message) => message.customType === "edc-job-status").at(-1);
   assert.ok(status, "review status message should be emitted");
   assert.match(status.content, /status: running/, "status should survive edc-context cleanup while review runs");
 
@@ -102,7 +99,7 @@ NODE
 
 node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -170,10 +167,16 @@ echo "Verified: review-HEAD.md"
     model: { provider: "test", id: "model" },
   };
 
+  const messagesBeforeStart = messages.length;
   await handler("", ctx);
-  const started = messages.find((message) => message.customType === "edc-review-background");
-  assert.ok(started, "review start message should be emitted");
-  const pidMatch = started.content.match(/^PID: (\d+)$/m);
+  const startMessage = messages.slice(messagesBeforeStart).at(-1);
+  assert.equal(messages.length, messagesBeforeStart + 1, "successful background review start should emit one compact command result");
+  assert.equal(startMessage.customType, "edc-background");
+  assert.match(startMessage.content, /Background EDC review started\./);
+  const statusPathDisplay = execFileSync("git", ["rev-parse", "--git-path", "edc/status"], { cwd: worktree, encoding: "utf-8" }).trim();
+  const statusPath = statusPathDisplay.startsWith("/") ? statusPathDisplay : join(worktree, statusPathDisplay);
+  assert.ok(await waitFor(() => existsSync(statusPath), 1000), "background wrapper should write initial status");
+  const pidMatch = readFileSync(statusPath, "utf-8").match(/^pid=(\d+)$/m);
   childPid = pidMatch ? Number(pidMatch[1]) : 0;
 
   const markerPath = join(worktree, "pwned_marker");

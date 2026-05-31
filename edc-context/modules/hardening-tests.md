@@ -2,24 +2,25 @@
 # Module: hardening-tests
 
 ## Scope
-Owns shell/Node regression and hardening tests for the EDC runtime, plugins, Pi adapter, and orchestration contracts.
+Owns shell/Node regression and hardening tests for the EDC runtime, plugins, Pi adapter, package metadata, CI execution, and orchestration contracts.
 
-**Primary paths:** `tests/hardening/`.
+**Primary paths:** `tests/hardening/`, `.github/workflows/ci.yml`.
 
 ## Purpose
-This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background review UX, and runtime hooks.
+This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background job UX, package publishing metadata, and runtime hooks.
 
-The current branch adds substantial Pi coverage, Bash-alignment coverage, review-status failure coverage, and allowed-unmapped/direct-review routing coverage while extending existing CLI/review-routing tests.
+The current branch adds a CI workflow that runs the hardening suite and npm pack check, keeps Pi background status in git metadata while context is wiped, tests package publication metadata, and tightens Pi status UI behavior so completed reviews are reported on demand instead of pinned in the Pi footer/widget.
 
 ## Test organization
+- `run-all.sh`: suite runner. It creates an isolated temporary HOME, copies public/private EDC skills into that HOME, exports it, then runs every `tests/hardening/t*.sh` in order.
 - `lib/check.sh`: shared PASS/FAIL helpers, including file-backed counters for tests that execute assertions in subshells.
 - `t1-*` through `t9-*`: early tool lockdown, stream filtering, content validation, timeouts, install portability, auto mode, CLI entrypoint, ignore rules, routing, and Pi background-status persistence.
-- `t2-pi-background-runs.sh`: asserts Pi background review status/logs live under `.git/edc/` and survive `edc-context/` cleanup during recovery.
-- `t10-pi-extension.sh`: fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit, session/tool injection still works, menu actions route to scripts, context preflight prompts can be accepted/declined/bypassed, background review starts/statuses/blocks duplicates, help is direct, and EDC Bash tool calls get longer timeouts.
+- `t2-pi-background-runs.sh`: asserts Pi background status/logs live under `.git/edc/`, survive `edc-context/` cleanup during recovery, and safely quote git-path display strings in worktrees.
+- `t10-pi-extension.sh`: broad fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit, session/tool injection works, menu actions route to scripts, context preflight prompts can be accepted/declined/bypassed, shared background job starts/statuses/blocks duplicates, status UI is only pinned while running, session shutdown clears UI, help is direct, and EDC Bash tool calls get longer timeouts.
 - `t11-audit-orchestrator.sh`: audit subprocess/freshness/report validation behavior.
 - `t12-build-orchestrator.sh`: build route matrix (missing, healthy, force, partial, missing AGENTS, v1 refusal) and doctor validation.
 - `t13-update-orchestrator.sh`: update preflight and validation paths.
-- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; now sources `edc-lib.sh` from an absolute path while running in a separate working directory.
+- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; sources `edc-lib.sh` from an absolute path while running in a separate working directory.
 - `t15-review-routing.sh`: manifest-driven review task routing, unexpected unmapped handling, expected `unmapped.allowedGlobs` accounting through an `allowed-unmapped` report, ambiguity failure, ignore-context/no-context modes, plus `edc-review.sh -h` usage validation.
 - `t16-context-dir-source-of-truth.sh`: canonical path source-of-truth behavior.
 - `t17-route-js-parity.sh`: JS router parity with shell router and no shell exec on hot path.
@@ -27,31 +28,41 @@ The current branch adds substantial Pi coverage, Bash-alignment coverage, review
 - `t19-bash-alignment.sh`: verifies nested orchestrator calls use `EDC_BASH` rather than ambient `bash`.
 - `t20-pi-review-status-failures.sh`: background review failure status/reason/hint classification.
 - `t21-pi-review-status-report-validation.sh`: Pi background status behavior when review report validation fails.
+- `t22-pi-package-publish.sh`: package metadata and npm allowlist checks for scoped package name, Pi extension entry, gallery image, peer dependency namespace, docs/license inclusion, and benchmark/test/context exclusion.
+
+## CI flow
+`.github/workflows/ci.yml` runs on pushes to main/master/refactor and PRs to main/master. It checks out the repo, installs Node 20 and `jq`, runs `npm test`, then runs `npm run pack:check`. CI therefore exercises the same suite and package contents that prepublish uses.
 
 ## Invariants
 - Tests run from repo root and isolate mutation in temporary dirs unless explicitly checking installed paths.
+- `run-all.sh` must provide skill fixtures in a temp HOME so tests do not depend on the developer's real `~/.edc`.
 - Mock agents must key off unique prompt markers because full skill text can contain overlapping words.
 - v2 context completeness includes `AGENTS.md`; missing startup entrypoint makes a layout partial.
 - Manifest routing, not directory bucketing, determines review task modules.
 - Ambiguous routing is a hard error; unmapped files are warned/allowed only according to manifest policy and allowed globs.
 - Shell and JS routing implementations must agree for exact/prefix/glob, priority, and ambiguity.
 - Bash >=4 propagation is part of the public runtime contract and must be tested on macOS-like PATHs.
+- Pi completed/failed review state is retrievable by status command but should not remain pinned in live UI status widgets.
+- npm package contents are part of the public contract and must be regression-tested when layout changes.
 
 ## Trust boundaries
 - Tests invoke real shell scripts and Node modules; temp repos and fake binaries prevent accidental mutation of the development checkout.
 - Tests that write generated context use minimal valid v2 stubs; they validate structure/control flow, not semantic context quality.
 - Environment variables (`PATH`, `HOME`, `EDC_AGENT_CLI`, `EDC_BASH`, model vars) are part of the tested API and must be scoped carefully.
 - Fake Pi APIs are behavioral approximations; production Pi lifecycle/API drift still needs manual attention.
+- CI is untrusted infrastructure input/output; tests should use explicit temp locations and not rely on developer-global state.
 
 ## Coupling
 - Directly exercises `runtime-cli` scripts and shared shell library behavior.
 - Imports `plugin-surface` JS helpers and route logic.
-- Pi tests import `agent-wrappers` and model the Pi extension lifecycle.
+- Pi tests import `agent-wrappers` from `pi/index.mjs` and model the Pi extension lifecycle.
+- Package tests pin `plugin-surface` distribution metadata and the `agent-wrappers` `pi/` layout.
 - Prompt-resolution and install-layout tests pin `canonical-skills` visibility and substitution behavior.
 - Benchmarking is not on the main test path but uses similar subprocess/model propagation assumptions.
 
 ## Fragility points
 - Several tests rely on `sed`, `bash`, `jq`, `git`, `node`, `python3`, temp-file semantics, and process detachment; portability is a first-class concern.
-- `t10-pi-extension.sh` is now broad and can fail from timing around detached review completion; polling windows should stay conservative.
+- `t10-pi-extension.sh` is broad and can fail from timing around detached review completion; polling windows should stay conservative.
 - Long mocked scripts are sensitive to exact prompt wording and manifest schema evolution.
 - File-backed counters are required because subshell assertions would otherwise undercount failures.
+- CI package checks can fail from npm metadata drift even when runtime code still works; treat packaging as a supported surface.

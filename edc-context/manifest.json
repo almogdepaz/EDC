@@ -32,7 +32,7 @@
     {
       "name": "plugin-surface",
       "doc": "edc-context/modules/plugin-surface.md",
-      "summary": "Claude/Cursor hook surface and shared JavaScript routing/context injection runtime.",
+      "summary": "Package metadata, Claude/Cursor hook surface, and shared JavaScript routing/context injection runtime.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -61,20 +61,26 @@
     {
       "name": "agent-wrappers",
       "doc": "edc-context/modules/agent-wrappers.md",
-      "summary": "Pi extension wrapper, interactive menu, background reviews, and Pi install documentation.",
+      "summary": "Pi extension wrapper, interactive menu, background reviews, Pi install documentation, and Pi media.",
       "priority": 100,
       "match": {
+        "exactFiles": [
+          "media/edc-pi-screenshot.png"
+        ],
         "prefixes": [
-          "agents/pi/"
+          "pi/"
         ]
       }
     },
     {
       "name": "hardening-tests",
       "doc": "edc-context/modules/hardening-tests.md",
-      "summary": "Shell and Node hardening tests pinning runtime, routing, install, and Pi contracts.",
+      "summary": "Shell, Node, and CI hardening tests pinning runtime, routing, install, package, and Pi contracts.",
       "priority": 100,
       "match": {
+        "exactFiles": [
+          ".github/workflows/ci.yml"
+        ],
         "prefixes": [
           "tests/hardening/"
         ]
@@ -120,15 +126,16 @@
       "*.md",
       ".gitignore",
       ".edcignore",
+      "LICENSE",
       "benchmark/curl/**",
       "benchmark/redis/**"
     ]
   },
-  "generatedAt": "2026-05-27T18:07:28Z",
-  "sourceCommit": "83e5be0a1d74a6d3418d022f21a57b89fcd3c39f",
+  "generatedAt": "2026-05-31T07:40:56Z",
+  "sourceCommit": "efa5655362350d7e19f2eed8421f546c06fd83d2",
   "coverage": {
-    "mappedFileCount": 90,
-    "unmappedFileCount": 40,
+    "mappedFileCount": 94,
+    "unmappedFileCount": 35,
     "ambiguousPathCount": 0
   }
 }

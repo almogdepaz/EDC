@@ -12,6 +12,10 @@
 # Run from repo root: bash tests/hardening/t12-build-orchestrator.sh
 set -euo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-build.sh"
 TMPDIR_T12=$(mktemp -d)
@@ -96,7 +100,7 @@ export EDC_T12_LOG="$TMPDIR_T12/log"
 # ── 12a: no edc-context/ → BUILD path ───────────────────────────────────────────
 setup_repo
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (12a): orchestrator exited $result"
   echo "$out"; exit 1
@@ -114,7 +118,7 @@ write_healthy_v2
 echo "more" > src/extra.py && git add src/extra.py && git commit -q -m "more"
 echo "" > "$EDC_T12_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (12b): orchestrator exited $result"
   echo "$out"; exit 1
@@ -130,7 +134,7 @@ setup_repo
 write_healthy_v2
 echo "" > "$EDC_T12_LOG"
 result=0
-out=$(bash "$SCRIPT" --force 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" --force 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (12c): orchestrator exited $result"
   echo "$out"; exit 1
@@ -147,7 +151,7 @@ mkdir -p edc-context/modules
 printf '# stub\n' > edc-context/modules/foo.md
 echo "" > "$EDC_T12_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (12d): orchestrator exited $result"
   echo "$out"; exit 1
@@ -164,7 +168,7 @@ write_healthy_v2
 rm -f AGENTS.md
 echo "" > "$EDC_T12_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (12e/missing-agents): orchestrator exited $result"
   echo "$out"; exit 1
@@ -181,7 +185,7 @@ mkdir -p edc-context
 printf '{}' > edc-context/.meta.json     # v1 marker
 echo "" > "$EDC_T12_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (12f): expected non-zero exit on v1 layout, got 0"; echo "$out"; exit 1
 fi

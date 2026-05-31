@@ -117,7 +117,7 @@ pi install git:github.com/almogdepaz/edc
 bash install.sh --agent pi
 ```
 
-Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, review status, build, update, audit, doctor, and cancel. The review action runs in the background; current run status is written to `.git/edc/status` and the current raw review log to `.git/edc/review.log` (one slot, overwritten by the next review). Review status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`pi/README.md`](pi/README.md).
+Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, job status, build, update, audit, doctor, and cancel. Review/build/update/audit actions run in the background through one shared job slot; current job status is written to `.git/edc/status` and raw logs to `.git/edc/<kind>.log`. Job status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`pi/README.md`](pi/README.md).
 
 Quick pi path:
 
@@ -125,7 +125,7 @@ Quick pi path:
 2. Start `pi` in a git repository.
 3. Run `/edc` and choose **Build context** once.
 4. Run `/edc` → **Review current branch vs main**.
-5. Poll `/edc` → **Review status** while the background review runs.
+5. Poll `/edc` → **Job status** while the background job runs.
 
 All installers also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|update|review|audit|mode|doctor` works from any shell after that directory is on `PATH`.
 
@@ -196,8 +196,8 @@ EDC is intentionally conservative as a pi package: it registers one `/edc` comma
 Known interactions:
 
 - Context-pruning packages can be used with EDC. Prefer EDC's default `advisory` mode for maximum compatibility; `inject` mode intentionally adds EDC context messages to the session.
-- Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, and `review-*.md`.
-- EDC's pi review subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
+- Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/audit/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`.
+- EDC's pi subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
 
 ## Generated Files and Local State
 
@@ -207,7 +207,7 @@ EDC writes generated context and local runtime state in a few places:
 - `AGENTS.md` — short generated orientation pointing agents at `edc-context/`.
 - `review-*.md` — consolidated review output.
 - `.edc/` — project-local runtime copy used by hooks/extensions when they need deterministic access to orchestrator scripts and private prompt bundles. Global installs also live under `~/.edc/`.
-- `.git/edc/status` and `.git/edc/review.log` — pi's current background review status/log. These are git metadata files, not worktree files, and need no `.gitignore` entry.
+- `.git/edc/status` and `.git/edc/<kind>.log` — pi's current background job status/logs. These are git metadata files, not worktree files, and need no `.gitignore` entry.
 
 For repos where you do not want generated EDC artifacts tracked, add:
 

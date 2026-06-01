@@ -463,6 +463,9 @@ if [ "$rc" -ne 0 ]; then
   if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background ${kind}"
     failure_hint="rerun edc ${kind} after the working branch stops changing"
+  elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
+    failure_reason="pi provider websocket closed during background ${kind}"
+    failure_hint="provider connection dropped while a nested pi subprocess was running; rerun edc ${kind}, and if it repeats reduce context/update scope"
   else
     failure_reason="${kind} pipeline failed"
     failure_hint="inspect the log for the subprocess error and rerun after fixing it"
@@ -486,6 +489,9 @@ if [ "$rc" -ne 0 ]; then
   elif grep -q "has no '## ' headings" "$log_file" 2>/dev/null; then
     failure_reason="review report validation failed"
     failure_hint="inspect the module reviewer output in the log; the report is missing required headings"
+  elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
+    failure_reason="pi provider websocket closed during background review"
+    failure_hint="provider connection dropped while a nested pi subprocess was running; rerun edc review, and if it repeats run edc update --agent pi separately or reduce context scope"
   elif [ ! -f edc-context/manifest.json ] || [ ! -f edc-context/index.md ] || [ ! -f AGENTS.md ]; then
     failure_reason="context recovery did not produce a complete edc-context layout"
     failure_hint="run edc doctor, inspect the log, then rerun edc review or edc build --agent pi"

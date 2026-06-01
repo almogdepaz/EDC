@@ -11,6 +11,10 @@
 # Run from repo root: bash tests/hardening/t13-update-orchestrator.sh
 set -euo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-update.sh"
 TMPDIR_T13=$(mktemp -d)
@@ -86,7 +90,7 @@ export EDC_T13_LOG="$TMPDIR_T13/log"
 # ── 13a: no edc-context/ → REFUSE with "run edc-build" hint ────────────────────
 setup_repo
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (13a): expected non-zero exit on missing edc-context/"
   echo "$out"; exit 1
@@ -108,7 +112,7 @@ mkdir -p edc-context/modules
 printf '# stub\n' > edc-context/modules/foo.md
 echo "" > "$EDC_T13_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (13b): expected non-zero exit on partial v2"
   echo "$out"; exit 1
@@ -130,7 +134,7 @@ mkdir -p edc-context
 printf '{}' > edc-context/.meta.json
 echo "" > "$EDC_T13_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (13c): expected non-zero exit on v1 layout"
   echo "$out"; exit 1
@@ -152,7 +156,7 @@ write_healthy_v2
 echo "more" > src/extra.py && git add src/extra.py && git commit -q -m "more"
 echo "" > "$EDC_T13_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (13d): orchestrator exited $result on healthy v2"
   echo "$out"; exit 1
@@ -178,7 +182,7 @@ git checkout -q -b feature
 echo "explicit" > src/explicit.py && git add src/explicit.py && git commit -q -m "explicit"
 echo "" > "$EDC_T13_LOG"
 result=0
-out=$(bash "$SCRIPT" --base main 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" --base main 2>&1) || result=$?
 if [ "$result" -ne 0 ]; then
   echo "FAIL (13e): orchestrator exited $result with explicit --base"
   echo "$out"; exit 1
@@ -196,7 +200,7 @@ write_healthy_v2
 rm -f AGENTS.md
 echo "" > "$EDC_T13_LOG"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (13f): expected non-zero exit when AGENTS.md is missing"
   echo "$out"; exit 1

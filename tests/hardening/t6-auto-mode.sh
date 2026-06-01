@@ -16,6 +16,10 @@
 # Run from repo root: bash tests/hardening/t6-auto-mode.sh
 set -euo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 SCRIPT_REL="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
@@ -134,7 +138,7 @@ echo "→ using mock claude at: $which_claude"
 # Run the full pipeline. Use an explicit --base so the stale-context recovery
 # path must preserve it when spawning edc-update. Capture output for diagnostics.
 result=0
-out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"

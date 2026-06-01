@@ -45,7 +45,7 @@ exit 1
   };
   await edcExtension(pi);
 
-  const selections = ["Review current branch vs main", "Review status"];
+  const selections = ["Review current branch vs main", "Job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -56,17 +56,20 @@ exit 1
     model: { provider: "test", id: "model" },
   };
 
+  const messagesBeforeStart = messages.length;
   await handler("", ctx);
-  const started = messages.find((message) => message.customType === "edc-review-background");
-  assert.ok(started, "review start message should be emitted");
-  const pidMatch = started.content.match(/^PID: (\d+)$/m);
-  childPid = pidMatch ? Number(pidMatch[1]) : 0;
+  const startMessage = messages.slice(messagesBeforeStart).at(-1);
+  assert.equal(messages.length, messagesBeforeStart + 1, "successful background review start should emit one compact command result");
+  assert.equal(startMessage.customType, "edc-background");
+  assert.match(startMessage.content, /Background EDC review started\./);
 
   const statusPath = join(cwd, ".git", "edc", "status");
+  const pidMatch = readFileSync(statusPath, "utf-8").match(/^pid=(\d+)$/m);
+  childPid = pidMatch ? Number(pidMatch[1]) : 0;
   assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")), 3000));
 
   await handler("", ctx);
-  const status = messages.filter((message) => message.customType === "edc-review-status").at(-1);
+  const status = messages.filter((message) => message.customType === "edc-job-status").at(-1);
   assert.ok(status, "review status message should be emitted");
   assert.match(status.content, /status: failed/);
   assert.match(status.content, /reason: review report validation failed for module agent-wrappers/);

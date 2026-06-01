@@ -9,31 +9,32 @@ Owns the terminal entrypoint, deterministic shell orchestrators, command wrapper
 ## Purpose
 This module turns EDC prompt bundles into reproducible workflows. The public `edc` command parses user intent and model/runtime options, then delegates to shell orchestrators that decide build/update/review/audit control flow. Shell owns state classification, freshness recovery, routing, validation, and subprocess spawning; agent prompts only perform bounded semantic work.
 
-The current branch expands the runtime from Claude/Cursor/Codex to Pi, standardizes nested script execution through `EDC_BASH` so macOS `/bin/bash` 3.2 does not leak into child orchestrators, and tightens review reliability around context-skip modes plus allowed-unmapped accounting.
+The current runtime supports Claude, Cursor, Codex, and Pi, standardizes nested script execution through `EDC_BASH` so macOS `/bin/bash` 3.2 does not leak into child orchestrators, and tightens review reliability around context-skip modes plus allowed-unmapped accounting. The root installer and package metadata now point users at the `pi/` extension surface for Pi installs.
 
 ## Actors and entrypoints
 - Human operator invokes `edc build|update|review|audit|mode|doctor` after install.
 - Agent subprocesses are spawned through `edc_spawn` with `EDC_AGENT_CLI=claude|cursor|codex|pi`.
 - Agent wrappers and hooks invoke project-local `.edc/scripts/edc-*.sh` copied from this module.
 - Slash-command wrappers in `plugins/edc/commands/` invoke the same scripts from Claude/Cursor surfaces.
+- `install.sh` performs global/project install wiring and advertises Pi source installs through `pi/install.sh`.
 
 ## Key files
 - `plugins/edc/scripts/edc`: public CLI parser. It accepts `--agent pi`, reads manifest default mode for review/audit/update, allows non-Claude backends in `advisory`, recognizes `EDC_PI_MODEL` as configured-model evidence for Pi, and dispatches via `"$EDC_BASH"`.
-- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. Pi support includes `edc_require_agent_cli`, `write_pi_json_supervisor`, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
-- `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It now uses shared backend validation and `EDC_BASH` for child scripts.
+- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. Pi support includes `edc_require_agent_cli`, generated Pi JSON supervisor, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
+- `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It uses shared backend validation and `EDC_BASH` for child scripts.
 - `plugins/edc/scripts/edc-update.sh`: healthy-v2-only incremental update gate; accepts Pi backend and uses `EDC_BASH` for preflight and doctor.
 - `plugins/edc/scripts/edc-review.sh`: self-driving review pipeline. It accepts Pi backend, routes review-task generation through `EDC_BASH`, exposes `-h/--help`, supports PR shorthand plus `--no-context-refresh`/`--ignore-context` direct-review modes, separates expected `unmapped.allowedGlobs` paths into a deterministic `allowed-unmapped` report, and keeps deterministic task/consolidation/verification/report-validation phases.
-- `plugins/edc/scripts/edc-audit.sh`: freshness recovery plus one audit subprocess; now shares backend validation with build/review/update.
-- `plugins/edc/scripts/edc-manifest.sh`: deterministic post-step for generated timestamp, `sourceCommit`, and coverage counts; now routes files through `"$EDC_BASH"`.
-- `plugins/edc/scripts/edc-doctor.sh`: v2 layout/routing validator; route checks now use `EDC_BASH`.
-- `plugins/edc/scripts/edc-recover-context.sh`: shared stale/missing recovery for review/audit; clean-slate calls now use `EDC_BASH`.
+- `plugins/edc/scripts/edc-audit.sh`: freshness recovery plus one audit subprocess; shares backend validation with build/review/update.
+- `plugins/edc/scripts/edc-manifest.sh`: deterministic post-step for generated timestamp, `sourceCommit`, and coverage counts; routes files through `"$EDC_BASH"`.
+- `plugins/edc/scripts/edc-doctor.sh`: v2 layout/routing validator; route checks use `EDC_BASH` and catch manifest coverage gaps such as moved Pi paths.
+- `plugins/edc/scripts/edc-recover-context.sh`: shared stale/missing recovery for review/audit; clean-slate calls use `EDC_BASH`.
 - `plugins/edc/commands/edc-run-review.md`: Bash-only user command that warns missing/stale context may trigger a long build/update before review.
 
 ## Core flows
 ### CLI dispatch
 1. `edc` loads config from `edc-lib.sh`, exporting `EDC_BASH` and recognized model variables.
 2. Top-level `--model` populates both `EDC_BUILD_MODEL` and `EDC_REVIEW_MODEL`.
-3. Command parsers validate agent and context mode. `inject` remains Claude-only; `advisory` is allowed for Pi/Cursor/Codex.
+3. Command parsers validate agent and context mode. `inject` remains Claude-only for terminal CLI; `advisory` is allowed for Pi/Cursor/Codex.
 4. The selected orchestrator runs with `EDC_AGENT_CLI=<backend>` and `"$EDC_BASH"`.
 
 ### Pi subprocess spawn
@@ -51,6 +52,7 @@ Review/audit source `edc-recover-context.sh`. Missing/stale context triggers bui
 - `manifest.policy.defaultMode` is preserved across builds/updates and only `edc mode` should mutate it directly.
 - `edc_spawn` is the sole backend-specific subprocess boundary.
 - Prompt path substitution must tell spawned agents to replace `plugins/edc/scripts/` with `$EDC_SCRIPTS_DIR` and run helpers with `$EDC_BASH`.
+- User-facing install and command docs must point at the current Pi package layout (`pi/`, not legacy `agents/pi/`).
 
 ## Trust boundaries
 - CLI args are user-controlled but mapped to fixed orchestrator invocations; free-form args must remain quoted/array-preserved.
@@ -61,8 +63,8 @@ Review/audit source `edc-recover-context.sh`. Missing/stale context triggers bui
 ## Coupling
 - Consumes `canonical-skills` through `resolve_prompt` for build/update/audit/review subprocess prompts.
 - Mirrors path constants and routing semantics with `plugin-surface` (`edc-lib.sh` vs `hooks/lib/paths.mjs` and `edc-route.sh` vs `routeFileSync`).
-- Used by `agent-wrappers` for Pi menu actions, background review, Bash-timeout extension, and model propagation.
-- Pinned by `hardening-tests`, especially CLI entrypoint, prompt resolution, review routing, Bash alignment, and Pi backend tests.
+- Used by `agent-wrappers` for Pi menu actions, shared background jobs, Bash-timeout extension, and model propagation.
+- Pinned by `hardening-tests`, especially CLI entrypoint, prompt resolution, review routing, Bash alignment, package publish checks, and Pi backend tests.
 - Invoked by `benchmarking` for prompt evaluation and model propagation.
 
 ## Fragility points

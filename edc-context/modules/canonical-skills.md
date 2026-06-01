@@ -7,7 +7,9 @@ Owns all canonical prompt bundles and methodology documents consumed by EDC subp
 **Primary paths:** `plugins/edc/prompt-bundles/`, `plugins/edc/skills/`.
 
 ## Purpose
-This module defines what spawned agents are instructed to do. Private implementation bundles (`edc-build-impl`, `edc-update-impl`, `edc-module-context-impl`) are resolved by orchestrators. Public skills (`edc-review`, `edc-audit`) are exposed to humans and agent wrappers. The runtime now invokes the same bundles from Claude, Cursor, Codex, and Pi; prompt text remains backend-neutral while `runtime-cli` injects backend/install-specific script-substitution preambles.
+This module defines what spawned agents are instructed to do. Private implementation bundles (`edc-build-impl`, `edc-update-impl`, `edc-module-context-impl`) are resolved by orchestrators. Public skills (`edc-review`, `edc-audit`) are exposed to humans and agent wrappers. The runtime invokes the same bundles from Claude, Cursor, Codex, and Pi; prompt text remains backend-neutral while `runtime-cli` injects backend/install-specific script-substitution preambles.
+
+The current repository packaging keeps private implementation bundles hidden from normal Pi resource discovery while still installing/copying them into `.edc/skills` for orchestrator subprocesses. Hardening tests seed a temporary HOME with these bundles so prompt-resolution behavior is deterministic in CI.
 
 ## Skill inventory
 - `edc-build-impl`: full v2 context build contract, module discovery/fanout, reports, manifest post-step, `AGENTS.md` entrypoint, and validation.
@@ -23,7 +25,7 @@ This module defines what spawned agents are instructed to do. Private implementa
 - `edc-review/{methodology,adversarial,reporting,patterns}.md`: detailed review workflow embedded by `runtime-cli` into per-module review prompts.
 
 ## Runtime resolution
-`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. The current runtime adds Pi search paths (`.pi/skills`, `$HOME/.pi/agent/skills`), propagates Pi model choice through `EDC_PI_MODEL`, and emits a substitution preamble telling agents to run helper scripts from `$EDC_SCRIPTS_DIR` with `$EDC_BASH`. That preamble is outside this module's markdown, but it is part of the effective prompt seen by spawned implementation agents.
+`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. Pi search paths include `.pi/skills` and `$HOME/.pi/agent/skills`; Pi wrappers expose only public review/audit skills through `resources_discover`, while private bundles remain prompt material for spawned orchestrator runs. The effective prompt also includes a substitution preamble telling agents to run helper scripts from `$EDC_SCRIPTS_DIR` with `$EDC_BASH`.
 
 ## Invariants
 - Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, or review-task routing.
@@ -32,6 +34,7 @@ This module defines what spawned agents are instructed to do. Private implementa
 - Manifest authoring is split: LLM authors structural fields; `edc-manifest.sh` owns `generatedAt`, `sourceCommit`, and coverage counts.
 - `policy.defaultMode` is operator-controlled and must be preserved by rebuild/update flows.
 - Public skills and private implementation bundles must remain distinguishable; Pi resource discovery intentionally exposes only public review/audit skills.
+- Tests and CI should provide controlled skill fixtures rather than depending on a developer's real global skill install.
 
 ## Trust boundaries
 - Skill markdown is executable instruction content. Installer/runtime code copies it into user/project skill locations; drift changes agent behavior.
@@ -40,10 +43,10 @@ This module defines what spawned agents are instructed to do. Private implementa
 - Script path substitution is required because installed repos often have `.edc/scripts` or `$HOME/.edc/scripts`, not development paths.
 
 ## Coupling
-- `runtime-cli` embeds these prompts in build/update/audit/review subprocesses and now carries Pi/Bash substitution details around them.
+- `runtime-cli` embeds these prompts in build/update/audit/review subprocesses and carries Pi/Bash substitution details around them.
 - `plugin-surface` copies prompt bundles into project-local `.edc/skills` so spawned agents can resolve private bundles inside target repos.
 - `agent-wrappers` exposes public skills to Pi while hiding private bundles.
-- `hardening-tests` pin prompt-resolution behavior, public/private visibility, and decoupling from dev-repo paths.
+- `hardening-tests` pin prompt-resolution behavior, public/private visibility, temp-HOME test setup, and decoupling from dev-repo paths.
 - `benchmarking` mutates/evaluates review methodology during autoresearch loops.
 
 ## Fragility points

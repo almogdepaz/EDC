@@ -37,7 +37,8 @@ const EDC_COMMAND = {
 
 const EDC_MENU = {
   REVIEW_MAIN: "Review current branch vs main",
-  REVIEW_STATUS: "Review status",
+  JOB_STATUS: "Job status",
+  KILL_JOB: "Kill running EDC job",
   BUILD: "Build context",
   UPDATE_MAIN: "Update context from main",
   AUDIT: "Audit complexity",
@@ -49,8 +50,11 @@ const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
-const EDC_BACKGROUND_REVIEW_LOG_GIT_PATH = "edc/review.log";
-const EDC_BACKGROUND_REVIEW_STALE_MS = 12 * 60 * 60 * 1000;
+const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
+const EDC_BACKGROUND_UI_KEY = "edc-review";
+const EDC_BACKGROUND_UI_POLL_MS = 2000;
+
+let backgroundStatusTimer = null;
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -71,6 +75,11 @@ function isHelpRequest(args) {
   return tokenizeArgs(args).some((arg) => arg === "-h" || arg === "--help");
 }
 
+function isKillJobRequest(args) {
+  const tokens = tokenizeArgs(args).map((arg) => arg.toLowerCase());
+  return tokens.some((arg) => arg === "kill" || arg === "stop" || arg === "kill-review" || arg === "stop-review" || arg === "cancel-review" || arg === "kill-job" || arg === "stop-job" || arg === "cancel-job");
+}
+
 function renderEdcHelp() {
   return [
     "Usage: /edc",
@@ -79,11 +88,15 @@ function renderEdcHelp() {
     "",
     "Menu actions:",
     "- Review current branch vs main",
-    "- Review status",
+    "- Job status",
+    "- Kill running EDC job",
     "- Build context",
     "- Update context from main",
     "- Audit complexity",
     "- Doctor / validate context",
+    "",
+    "Direct commands:",
+    "  /edc kill",
     "",
     "Non-interactive use is intentionally CLI-only:",
     "  edc review --agent pi HEAD --base main",
@@ -207,9 +220,9 @@ function findEdcScript(cwd, scriptName) {
   return "";
 }
 
-function nowRunId() {
+function nowRunId(kind = "job") {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return `${stamp}-review-${process.pid}`;
+  return `${stamp}-${kind}-${process.pid}`;
 }
 
 function piSubprocessEnv(ctx, bashPath = "") {
@@ -327,8 +340,8 @@ function backgroundStatusPath(cwd) {
   return backgroundGitPath(cwd, EDC_BACKGROUND_STATUS_GIT_PATH);
 }
 
-function backgroundReviewLogPath(cwd) {
-  return backgroundGitPath(cwd, EDC_BACKGROUND_REVIEW_LOG_GIT_PATH);
+function backgroundJobLogPath(cwd, kind) {
+  return backgroundGitPath(cwd, `edc/${kind}.log`);
 }
 
 function isPidAlive(pidText) {
@@ -344,7 +357,7 @@ function isPidAlive(pidText) {
 
 function isStatusStale(status) {
   const startedAt = Date.parse(status.started_at || "");
-  return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_REVIEW_STALE_MS;
+  return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_STALE_MS;
 }
 
 function serializeStatus(fields) {
@@ -367,10 +380,11 @@ function currentHead(cwd) {
   }
 }
 
-function markRunningReviewFailed(statusPath, status, reason, hint) {
+function writeFinishedBackgroundStatus(cwd, statusPath, status, fields) {
   writeFileSync(statusPath.path, serializeStatus({
-    status: "failed",
-    exit_code: 1,
+    kind: status.kind || "review",
+    status: fields.status,
+    exit_code: fields.exitCode,
     started_at: status.started_at,
     finished_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     run_id: status.run_id || "current",
@@ -378,12 +392,33 @@ function markRunningReviewFailed(statusPath, status, reason, hint) {
     args: status.args,
     log: status.log,
     started_head: status.started_head,
-    failure_reason: reason,
-    failure_hint: hint,
+    finished_head: fields.finishedHead || currentHead(cwd),
+    failure_reason: fields.reason,
+    failure_hint: fields.hint,
+    final_review: status.final_review,
+    repo_changed: fields.repoChanged,
   }));
 }
 
-function runningReview(cwd) {
+function markRunningBackgroundFailed(cwd, statusPath, status, reason, hint) {
+  writeFinishedBackgroundStatus(cwd, statusPath, status, {
+    status: "failed",
+    exitCode: 1,
+    reason,
+    hint,
+  });
+}
+
+function markRunningBackgroundCancelled(cwd, statusPath, status) {
+  writeFinishedBackgroundStatus(cwd, statusPath, status, {
+    status: "cancelled",
+    exitCode: 130,
+    reason: "cancelled by user",
+    hint: `rerun edc ${status.kind || "job"} when ready`,
+  });
+}
+
+function runningBackgroundJob(cwd) {
   const statusPath = backgroundStatusPath(cwd);
   if (!statusPath || !existsSync(statusPath.path)) return null;
 
@@ -394,20 +429,23 @@ function runningReview(cwd) {
   if (alive === true) return { runId: status.run_id || "current", status };
   if (alive === null && !isStatusStale(status)) return { runId: status.run_id || "current", status };
 
+  const kind = status.kind || "job";
   const reason = alive === false
-    ? "background review process is no longer running"
-    : "background review status is stale";
-  markRunningReviewFailed(
+    ? `background ${kind} process is no longer running`
+    : `background ${kind} status is stale`;
+  markRunningBackgroundFailed(
+    cwd,
     statusPath,
     status,
     reason,
-    "starting a new review is allowed; inspect the previous log if needed",
+    `starting a new EDC job is allowed; inspect ${status.log || "the previous log"} if needed`,
   );
   return null;
 }
 
-function writeRunningReviewStatus(statusPath, logPath, fields) {
+function writeRunningBackgroundStatus(statusPath, logPath, fields) {
   writeFileSync(statusPath.path, serializeStatus({
+    kind: fields.kind,
     status: "running",
     started_at: fields.startedAt,
     run_id: fields.runId,
@@ -418,68 +456,21 @@ function writeRunningReviewStatus(statusPath, logPath, fields) {
   }));
 }
 
-function startBackgroundReview(args, ctx) {
-  const existing = runningReview(ctx.cwd);
-  if (existing) {
-    return { alreadyRunning: true, ...existing };
+function failureClassificationShell(kind) {
+  if (kind !== "review") {
+    return `
+if [ "$rc" -ne 0 ]; then
+  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+    failure_reason="HEAD changed during background ${kind}"
+    failure_hint="rerun edc ${kind} after the working branch stops changing"
+  else
+    failure_reason="${kind} pipeline failed"
+    failure_hint="inspect the log for the subprocess error and rerun after fixing it"
+  fi
+fi`;
   }
 
-  const reviewScript = findEdcScript(ctx.cwd, "edc-review.sh");
-  if (!reviewScript) {
-    return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
-  }
-
-  const bashPath = resolveBashExecutable();
-  if (!bashPath) {
-    return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
-  }
-
-  const statusPath = backgroundStatusPath(ctx.cwd);
-  const logPath = backgroundReviewLogPath(ctx.cwd);
-  if (!statusPath || !logPath) {
-    return { error: "ERROR: background EDC review requires a git repo" };
-  }
-
-  const runId = nowRunId();
-  mkdirSync(dirname(statusPath.path), { recursive: true });
-  mkdirSync(dirname(logPath.path), { recursive: true });
-  const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const startedHead = currentHead(ctx.cwd);
-  writeRunningReviewStatus(statusPath, logPath, {
-    startedAt,
-    runId,
-    pid: "starting",
-    args,
-    startedHead,
-  });
-
-  const script = `
-set -- ${args}
-status_file=${shellQuote(statusPath.path)}
-log_file=${shellQuote(logPath.path)}
-log_display=${shellQuote(logPath.display)}
-status_dir=${shellQuote(dirname(statusPath.path))}
-mkdir -p "$status_dir"
-started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-started_head="$(git rev-parse HEAD 2>/dev/null || true)"
-args_text="$(printf '%s ' "$@" | sed 's/ $//')"
-{
-  echo "status=running"
-  echo "started_at=$started_at"
-  echo "run_id=${runId}"
-  echo "pid=$$"
-  echo "args=$args_text"
-  echo "log=$log_display"
-  [ -n "$started_head" ] && echo "started_head=$started_head"
-} > "$status_file"
-
-${shellQuote(bashPath)} ${shellQuote(reviewScript)} "$@" > "$log_file" 2>&1
-rc=$?
-finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
-final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
-failure_reason=""
-failure_hint=""
+  return `
 if [ "$rc" -ne 0 ]; then
   if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background review"
@@ -502,8 +493,83 @@ if [ "$rc" -ne 0 ]; then
     failure_reason="review pipeline failed"
     failure_hint="inspect the log for the subprocess error and rerun after fixing it"
   fi
-fi
+fi`;
+}
+
+function startBackgroundJob(kind, scriptName, args, ctx) {
+  const existing = runningBackgroundJob(ctx.cwd);
+  if (existing) {
+    return { alreadyRunning: true, ...existing };
+  }
+
+  const edcScript = findEdcScript(ctx.cwd, scriptName);
+  if (!edcScript) {
+    return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
+  }
+
+  const bashPath = resolveBashExecutable();
+  if (!bashPath) {
+    return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
+  }
+
+  const statusPath = backgroundStatusPath(ctx.cwd);
+  const logPath = backgroundJobLogPath(ctx.cwd, kind);
+  if (!statusPath || !logPath) {
+    return { error: `ERROR: background EDC ${kind} requires a git repo` };
+  }
+
+  const runId = nowRunId(kind);
+  mkdirSync(dirname(statusPath.path), { recursive: true });
+  mkdirSync(dirname(logPath.path), { recursive: true });
+  const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  const startedHead = currentHead(ctx.cwd);
+  writeRunningBackgroundStatus(statusPath, logPath, {
+    kind,
+    startedAt,
+    runId,
+    pid: "starting",
+    args,
+    startedHead,
+  });
+
+  const script = `
+set -- ${args || ""}
+status_file=${shellQuote(statusPath.path)}
+log_file=${shellQuote(logPath.path)}
+log_display=${shellQuote(logPath.display)}
+status_dir=${shellQuote(dirname(statusPath.path))}
+mkdir -p "$status_dir"
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+started_head="$(git rev-parse HEAD 2>/dev/null || true)"
+args_text="$(printf '%s ' "$@" | sed 's/ $//')"
 {
+  echo "kind=${kind}"
+  echo "status=running"
+  echo "started_at=$started_at"
+  echo "run_id=${runId}"
+  echo "pid=$$"
+  echo "args=$args_text"
+  echo "log=$log_display"
+  [ -n "$started_head" ] && echo "started_head=$started_head"
+} > "$status_file"
+
+${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
+rc=$?
+finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
+repo_changed=""
+if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+  repo_changed="HEAD changed from $(printf '%s' "$started_head" | cut -c1-8) to $(printf '%s' "$finished_head" | cut -c1-8) during background ${kind}; result may reflect the earlier repo state"
+fi
+final_review=""
+if [ ${shellQuote(kind)} = "review" ]; then
+  final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
+fi
+failure_reason=""
+failure_hint=""
+${failureClassificationShell(kind)}
+{
+  echo "kind=${kind}"
   if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
   echo "exit_code=$rc"
   echo "started_at=$started_at"
@@ -514,6 +580,7 @@ fi
   echo "log=$log_display"
   [ -n "$started_head" ] && echo "started_head=$started_head"
   [ -n "$finished_head" ] && echo "finished_head=$finished_head"
+  [ -n "$repo_changed" ] && echo "repo_changed=$repo_changed"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
   [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
   [ -n "$final_review" ] && echo "final_review=$final_review"
@@ -528,7 +595,7 @@ fi
   });
   child.unref();
 
-  return { runId, pid: child.pid, logFile: logPath.display, statusFile: statusPath.display };
+  return { kind, runId, pid: child.pid, logFile: logPath.display, statusFile: statusPath.display };
 }
 
 function parseStatus(content) {
@@ -541,21 +608,69 @@ function parseStatus(content) {
   return status;
 }
 
-function renderReviewStatus(args, cwd) {
+function readBackgroundJobStatus(cwd) {
+  const statusPath = backgroundStatusPath(cwd);
+  if (!statusPath || !existsSync(statusPath.path)) return null;
+  return {
+    statusPath,
+    status: parseStatus(readFileSync(statusPath.path, "utf-8")),
+  };
+}
+
+function killBackgroundJob(cwd) {
+  const job = readBackgroundJobStatus(cwd);
+  if (!job) return "No running background EDC job found.";
+
+  const status = job.status;
+  const kind = status.kind || "job";
+  if (status.status !== "running") {
+    return `No running background EDC job found. Current ${kind} status: ${status.status || "unknown"}.`;
+  }
+
+  const active = runningBackgroundJob(cwd);
+  if (!active) return "No running background EDC job found; stale status was cleaned up.";
+
+  const pid = Number(status.pid);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return `Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`;
+  }
+
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch (groupError) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (pidError) {
+      return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`;
+    }
+  }
+
+  markRunningBackgroundCancelled(cwd, job.statusPath, status);
+  return [
+    `Background EDC ${kind} killed.`,
+    "",
+    `Run ID: ${status.run_id || "current"}`,
+    `PID: ${status.pid}`,
+    status.log ? `Log: ${status.log}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function renderBackgroundJobStatus(args, cwd) {
   const requested = String(args || "").trim();
   if (requested && requested !== "latest" && requested !== "current") {
-    return "EDC keeps only the current background review status. Use `/edc` → Review status without a run id.";
+    return "EDC keeps only the current background job status. Use `/edc` → Job status without a run id.";
   }
 
-  const statusPath = backgroundStatusPath(cwd);
-  if (!statusPath || !existsSync(statusPath.path)) {
-    return "No background EDC review runs found.";
+  const job = readBackgroundJobStatus(cwd);
+  if (!job) {
+    return "No background EDC jobs found.";
   }
 
-  const status = parseStatus(readFileSync(statusPath.path, "utf-8"));
+  const status = job.status;
+  const kind = status.kind || "review";
   const runId = status.run_id || "current";
   const lines = [
-    `EDC review run: ${runId}`,
+    `EDC ${kind} run: ${runId}`,
     `status: ${status.status || "unknown"}`,
   ];
   if (status.exit_code) lines.push(`exit code: ${status.exit_code}`);
@@ -566,43 +681,126 @@ function renderReviewStatus(args, cwd) {
   if (status.pid) lines.push(`pid: ${status.pid}`);
   if (status.started_head) lines.push(`started HEAD: ${status.started_head.slice(0, 8)}`);
   if (status.finished_head && status.finished_head !== status.started_head) lines.push(`finished HEAD: ${status.finished_head.slice(0, 8)}`);
+  if (status.repo_changed) lines.push(`warning: ${status.repo_changed}`);
   if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
   if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
   if (status.status === "success") {
-    lines.push("Review complete.");
+    lines.push(`EDC ${kind} complete.`);
   } else if (status.status === "failed") {
-    lines.push("Review failed. Open the log above for details.");
+    lines.push(`EDC ${kind} failed. Open the log above for details.`);
+  } else if (status.status === "cancelled") {
+    lines.push(`EDC ${kind} cancelled.`);
   } else {
-    lines.push("Still running. Check again with `/edc` → Review status.");
+    lines.push("Still running. Check again with `/edc` → Job status.");
   }
   return lines.join("\n");
 }
 
-function backgroundReviewStartedMessage(result, contextSummary = "") {
+function formatBackgroundElapsed(status) {
+  const startedAt = Date.parse(status.started_at || "");
+  if (!Number.isFinite(startedAt)) return "";
+
+  const finishedAt = Date.parse(status.finished_at || "");
+  const end = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+  const elapsedSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  const remainingMinutes = elapsedMinutes % 60;
+  return `${elapsedHours}h ${remainingMinutes}m`;
+}
+
+function canShowBackgroundStatusUi(ctx) {
+  return ctx?.hasUI !== false && !!ctx?.ui
+    && (typeof ctx.ui.setStatus === "function" || typeof ctx.ui.setWidget === "function");
+}
+
+function renderBackgroundFooterStatus(status) {
+  const kind = status.kind || "review";
+  if (status.status === "running") {
+    const elapsed = formatBackgroundElapsed(status);
+    return `edc ${kind}: running${elapsed ? ` ${elapsed}` : ""}`;
+  }
+  if (status.status === "success") return `edc ${kind}: ✓ complete`;
+  if (status.status === "failed") return `edc ${kind}: ✗ failed`;
+  return `edc ${kind}: ${status.status || "unknown"}`;
+}
+
+function clearBackgroundStatusUi(ctx) {
+  if (!canShowBackgroundStatusUi(ctx)) return;
+  if (typeof ctx.ui.setStatus === "function") ctx.ui.setStatus(EDC_BACKGROUND_UI_KEY, undefined);
+  if (typeof ctx.ui.setWidget === "function") ctx.ui.setWidget(EDC_BACKGROUND_UI_KEY, undefined);
+}
+
+function updateBackgroundStatusUi(ctx) {
+  if (!canShowBackgroundStatusUi(ctx)) return "";
+
+  const job = readBackgroundJobStatus(ctx.cwd);
+  if (!job) {
+    clearBackgroundStatusUi(ctx);
+    return "";
+  }
+
+  const status = job.status.status || "unknown";
+  if (status !== "running") {
+    clearBackgroundStatusUi(ctx);
+    return status;
+  }
+
+  if (typeof ctx.ui.setStatus === "function") {
+    ctx.ui.setStatus(EDC_BACKGROUND_UI_KEY, renderBackgroundFooterStatus(job.status));
+  }
+  if (typeof ctx.ui.setWidget === "function") {
+    ctx.ui.setWidget(EDC_BACKGROUND_UI_KEY, undefined);
+  }
+  return status;
+}
+
+function stopBackgroundStatusWatcher() {
+  if (!backgroundStatusTimer) return;
+  clearInterval(backgroundStatusTimer);
+  backgroundStatusTimer = null;
+}
+
+function startBackgroundStatusWatcher(ctx) {
+  if (!canShowBackgroundStatusUi(ctx)) return;
+
+  stopBackgroundStatusWatcher();
+  const currentStatus = updateBackgroundStatusUi(ctx);
+  if (currentStatus !== "running") return;
+
+  backgroundStatusTimer = setInterval(() => {
+    const nextStatus = updateBackgroundStatusUi(ctx);
+    if (nextStatus !== "running") stopBackgroundStatusWatcher();
+  }, EDC_BACKGROUND_UI_POLL_MS);
+  backgroundStatusTimer.unref?.();
+}
+
+function backgroundJobStartedMessage(result) {
+  const kind = result.kind || "job";
   return [
-    "Background review started.",
-    contextSummary ? "" : null,
-    contextSummary || null,
+    `Background EDC ${kind} started.`,
     "",
     `Run ID: ${result.runId}`,
     `PID: ${result.pid}`,
-    `Log: ${result.logFile}`,
-    `Status: ${result.statusFile}`,
-    "",
-    "Check progress: `/edc` → Review status.",
-  ].filter((line) => line !== null).join("\n");
+    result.logFile ? `Log: ${result.logFile}` : "",
+  ].filter(Boolean).join("\n");
 }
 
-function backgroundReviewAlreadyRunningMessage(result) {
+function backgroundJobAlreadyRunningMessage(result) {
+  const kind = result.status?.kind || "job";
   return [
-    "A background EDC review is already running for this repo.",
+    `A background EDC ${kind} is already running for this repo.`,
     "",
     `Run ID: ${result.runId}`,
     result.status?.log ? `Log: ${result.status.log}` : "",
     "",
-    "Check progress: `/edc` → Review status.",
+    "Check progress: `/edc` → Job status.",
   ].filter(Boolean).join("\n");
 }
 
@@ -617,6 +815,13 @@ function interactiveOnlyMessage() {
   ].join("\n");
 }
 
+function killRunningJobAction(pi, ctx) {
+  const message = killBackgroundJob(ctx.cwd);
+  stopBackgroundStatusWatcher();
+  clearBackgroundStatusUi(ctx);
+  sendInfo(pi, "edc-job-kill", message);
+}
+
 async function runReviewAgainstMain(pi, ctx) {
   const renderedArgs = "HEAD --base main";
   const freshness = getContextFreshness(ctx.cwd);
@@ -626,13 +831,28 @@ async function runReviewAgainstMain(pi, ctx) {
     return;
   }
 
-  const result = startBackgroundReview(renderedArgs, ctx);
+  const result = startBackgroundJob("review", "edc-review.sh", renderedArgs, ctx);
   if (result.error) {
-    sendInfo(pi, "edc-review-background", result.error);
+    sendInfo(pi, "edc-background", result.error);
   } else if (result.alreadyRunning) {
-    sendInfo(pi, "edc-review-background", backgroundReviewAlreadyRunningMessage(result));
+    startBackgroundStatusWatcher(ctx);
+    sendInfo(pi, "edc-background", backgroundJobAlreadyRunningMessage(result));
   } else {
-    sendInfo(pi, "edc-review-background", backgroundReviewStartedMessage(result, reviewContextSummary(ctx, freshness)));
+    startBackgroundStatusWatcher(ctx);
+    sendInfo(pi, "edc-background", backgroundJobStartedMessage(result));
+  }
+}
+
+function runBackgroundAction(pi, ctx, kind, scriptName, args = "") {
+  const result = startBackgroundJob(kind, scriptName, args, ctx);
+  if (result.error) {
+    sendInfo(pi, "edc-background", result.error);
+  } else if (result.alreadyRunning) {
+    startBackgroundStatusWatcher(ctx);
+    sendInfo(pi, "edc-background", backgroundJobAlreadyRunningMessage(result));
+  } else {
+    startBackgroundStatusWatcher(ctx);
+    sendInfo(pi, "edc-background", backgroundJobStartedMessage(result));
   }
 }
 
@@ -648,6 +868,11 @@ async function handleEdcMenu(pi, args, ctx) {
     return;
   }
 
+  if (isKillJobRequest(args)) {
+    killRunningJobAction(pi, ctx);
+    return;
+  }
+
   if (!ctx.hasUI || !ctx.ui?.select) {
     sendInfo(pi, "edc-command-help", interactiveOnlyMessage());
     return;
@@ -655,7 +880,8 @@ async function handleEdcMenu(pi, args, ctx) {
 
   const choice = await ctx.ui.select("EDC", [
     EDC_MENU.REVIEW_MAIN,
-    EDC_MENU.REVIEW_STATUS,
+    EDC_MENU.JOB_STATUS,
+    EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
     EDC_MENU.UPDATE_MAIN,
     EDC_MENU.AUDIT,
@@ -667,17 +893,21 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.REVIEW_MAIN:
       await runReviewAgainstMain(pi, ctx);
       break;
-    case EDC_MENU.REVIEW_STATUS:
-      sendInfo(pi, "edc-review-status", renderReviewStatus("", ctx.cwd));
+    case EDC_MENU.JOB_STATUS:
+      startBackgroundStatusWatcher(ctx);
+      sendInfo(pi, "edc-job-status", renderBackgroundJobStatus("", ctx.cwd));
+      break;
+    case EDC_MENU.KILL_JOB:
+      killRunningJobAction(pi, ctx);
       break;
     case EDC_MENU.BUILD:
-      await runScriptAction(pi, ctx, "edc build", "edc-build.sh");
+      runBackgroundAction(pi, ctx, "build", "edc-build.sh");
       break;
     case EDC_MENU.UPDATE_MAIN:
-      await runScriptAction(pi, ctx, "edc update", "edc-update.sh", "--base main");
+      runBackgroundAction(pi, ctx, "update", "edc-update.sh", "--base main");
       break;
     case EDC_MENU.AUDIT:
-      await runScriptAction(pi, ctx, "edc audit", "edc-audit.sh");
+      runBackgroundAction(pi, ctx, "audit", "edc-audit.sh");
       break;
     case EDC_MENU.DOCTOR:
       await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");
@@ -709,6 +939,7 @@ export default async function edcExtension(pi) {
     } catch {
       // best effort
     }
+    startBackgroundStatusWatcher(ctx);
     const { mode, content } = buildSessionStartContent(ctx.cwd);
     if (mode === "advisory" || !content) return;
     pi.sendMessage({
@@ -716,6 +947,11 @@ export default async function edcExtension(pi) {
       content,
       display: content,
     });
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    stopBackgroundStatusWatcher();
+    clearBackgroundStatusUi(ctx);
   });
 
   // -- per-tool context injection ------------------------------------------

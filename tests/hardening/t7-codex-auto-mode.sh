@@ -10,6 +10,10 @@
 # Run from repo root: bash tests/hardening/t7-codex-auto-mode.sh
 set -euo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 SCRIPT_REL="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
@@ -136,7 +140,7 @@ fi
 echo "→ using mock codex at: $which_codex"
 
 result=0
-out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"

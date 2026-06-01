@@ -13,6 +13,10 @@
 # Run from repo root: bash tests/hardening/t11-audit-orchestrator.sh
 set -euo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-audit.sh"
 TMPDIR_T11=$(mktemp -d)
@@ -123,7 +127,7 @@ which_claude=$(command -v claude)
 setup_repo "none"
 echo "valid" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ]; then
   echo "PASS: missing-context recovery → audit produced both reports"
 else
@@ -136,7 +140,7 @@ fi
 setup_repo "stale"
 echo "valid" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ]; then
   echo "PASS: stale-context recovery → audit produced both reports"
 else
@@ -149,7 +153,7 @@ fi
 setup_repo "fresh"
 echo "missing-issues" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing"; then
   echo "PASS: missing report rejected with descriptive error"
 else
@@ -162,7 +166,7 @@ fi
 setup_repo "fresh"
 echo "stub-complexity" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && echo "$out" | grep -q "no '## ' headings"; then
   echo "PASS: structureless report rejected with descriptive error"
 else

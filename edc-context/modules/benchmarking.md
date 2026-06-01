@@ -9,6 +9,8 @@ Owns the CVE benchmark harness, scoring tools, judge audits, transcript recovery
 ## Purpose
 This module measures whether EDC review/build prompts find known security vulnerabilities. It runs agent analyses against vulnerable historical revisions, scores findings against ground truth, audits judge failures, and supports autoresearch loops that mutate review methodology and keep only changes that improve benchmark outcomes.
 
+This module is not directly changed by the current Pi/package branch, but it remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. Package/CI changes intentionally exclude benchmark corpora from npm package contents and normal hardening execution.
+
 ## Key files and flows
 - `benchmark/run.sh`: legacy per-CVE runner. It clones/reuses target repos, checks out vulnerable revisions, prompts Claude over affected files, writes/falls back to `edc-context/reports/issues.md`, then invokes `score.py`.
 - `benchmark/score.py`: two-phase scorer. Keyword prefilter gates an LLM judge; judge refusals/parse failures become explicit `judge_error` rows rather than silent misses. Supports dual build/review scoring and combined-score weighting.
@@ -25,6 +27,7 @@ This module measures whether EDC review/build prompts find known security vulner
 - Dual-phase scoring distinguishes build-context leakage from true review-phase discovery.
 - Autoresearch must hash tried prompt states, keep logs, and revert unsuccessful prompt mutations without losing unrelated work.
 - Benchmark worktrees/transcripts are scratch artifacts and should not be treated as source modules or production context.
+- npm/package publication must not include large benchmark corpora, generated context, tests, or review-task scratch output.
 
 ## Trust boundaries
 - Benchmark prompts intentionally analyze vulnerable code; outputs are evaluation artifacts, not production reports.
@@ -34,9 +37,11 @@ This module measures whether EDC review/build prompts find known security vulner
 
 ## Coupling
 - Mutates/evaluates `canonical-skills`, especially review methodology.
-- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric). Review-routing changes such as direct context-skip modes and allowed-unmapped accounting can affect benchmark comparability if the harness starts using the production review pipeline directly.
+- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric).
+- Review-routing changes such as direct context-skip modes and allowed-unmapped accounting can affect benchmark comparability if the harness starts using the production review pipeline directly.
 - Transcript reconstruction knows Claude Code JSONL shapes also consumed by `edc-spawn-analyze.sh`-style analysis.
 - Status plans at repo root document benchmark-driven prompt changes and are intentionally allowed/unmapped in manifest coverage.
+- `plugin-surface` package allowlists intentionally exclude `benchmark/**`; `hardening-tests` pin that distribution boundary.
 
 ## Fragility points
 - `benchmark/run.sh` still asks for legacy `edc-context/full-context.md`; this is benchmark-specific and does not reflect v2 production layout.

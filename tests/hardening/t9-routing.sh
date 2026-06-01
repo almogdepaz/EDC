@@ -3,6 +3,10 @@
 # tie-break, priority tie-break, ambiguity, no-match.
 set -uo pipefail
 
+if [ -n "${EDC_BASH:-}" ]; then
+  export PATH="$(dirname "$EDC_BASH"):$PATH"
+fi
+
 SCRIPT="plugins/edc/scripts/edc-route.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
@@ -29,7 +33,7 @@ check() {
 run_route() {
   local file="$1"
   local out rc
-  out=$(bash "$SCRIPT" "$MANIFEST" "$file" 2>/dev/null)
+  out=$("${EDC_BASH:-bash}" "$SCRIPT" "$MANIFEST" "$file" 2>/dev/null)
   rc=$?
   printf '%s\t%s' "$rc" "$out"
 }

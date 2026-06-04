@@ -23,6 +23,27 @@ pi install git:github.com/almogdepaz/edc
 bash pi/install.sh --from-source
 ```
 
+Manage the package with pi's normal package commands:
+
+```bash
+pi list
+pi update npm:@sgtbeatdown/edc
+pi remove npm:@sgtbeatdown/edc
+```
+
+Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.1`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
+
+## Requirements and permissions
+
+Orchestrated pi reviews require:
+
+- `pi`, `git`, `jq`, and `python3` on `PATH`
+- Bash >= 4; on macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2
+- shell access for background build/update/review/audit subprocesses
+- write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`
+
+Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may intentionally block or redirect those operations. EDC does not try to bypass them.
+
 ## Quick path
 
 1. Start `pi` in a git repository.
@@ -90,8 +111,7 @@ Known interactions:
 
 - Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
 - Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
-- Build/update/audit/review need shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`.
-- Runtime requirements for orchestrated pi reviews: `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
+- Build/update/audit/review need the requirements and write permissions listed above.
 
 ## Modes
 
@@ -106,6 +126,25 @@ Toggle:
 bash pi/install.sh --context-mode advisory
 bash pi/install.sh --context-mode inject
 ```
+
+You can also toggle from the shared CLI after context exists:
+
+```bash
+edc mode
+edc mode advisory
+edc mode inject
+```
+
+## Troubleshooting
+
+| Symptom | What to check |
+|---|---|
+| `bash >=4` or array errors | macOS `/bin/bash` is 3.2. Install Homebrew Bash and ensure it is on `PATH`, or set `EDC_BASH=/opt/homebrew/bin/bash`. |
+| `jq: command not found` | Install `jq`; EDC orchestrators use it for manifest and report validation. |
+| `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash`, writes to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
+| Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from main** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
+| Background review reports provider websocket/transport failure | The nested pi subprocess lost provider transport. Rerun the job; if it repeats, run `edc update --agent pi` separately or reduce context/update scope. |
+| Wrong model in nested pi subprocesses | EDC forwards the active pi model as `EDC_PI_MODEL` when `ctx.model.provider` and `ctx.model.id` are available. Check the job log for the propagated model and set explicit model env vars only if you need to override it. |
 
 ## How it maps to pi
 

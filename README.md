@@ -112,6 +112,12 @@ pi install npm:@sgtbeatdown/edc -l
 
 # git install works for pinned refs or source installs
 pi install git:github.com/almogdepaz/edc
+pi install git:github.com/almogdepaz/edc@v1.1.1
+
+# list/update/remove through pi
+pi list
+pi update npm:@sgtbeatdown/edc
+pi remove npm:@sgtbeatdown/edc
 
 # or via the unified installer
 bash install.sh --agent pi
@@ -198,6 +204,7 @@ Known interactions:
 - Context-pruning packages can be used with EDC. Prefer EDC's default `advisory` mode for maximum compatibility; `inject` mode intentionally adds EDC context messages to the session.
 - Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/audit/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`.
 - EDC's pi subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
+- Nested pi subprocesses receive the active pi model through `EDC_PI_MODEL` when pi exposes `ctx.model.provider` and `ctx.model.id`; check `.git/edc/<kind>.log` if provider/model propagation looks wrong.
 
 ## Generated Files and Local State
 

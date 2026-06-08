@@ -8,7 +8,7 @@
 # All deterministic control flow for edc-review lives here.
 #
 # Usage:
-#   edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+#   edc-review.sh [--agent <cli>] [--model <slug>] <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 #                                                     full review pipeline (default - spawns agent subprocesses via EDC_AGENT_CLI)
 #   edc-review.sh --base <ref>                         shorthand for: HEAD --base <ref>
 #   edc-review.sh --pr <number-or-url> [extras...]      shorthand for: pr:<number-or-url> [extras...]
@@ -831,7 +831,7 @@ TASK
 
 review_usage() {
   cat <<EOF
-Usage: edc-review.sh <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+Usage: edc-review.sh [--agent <cli>] [--model <slug>] <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
                                                      full review pipeline (default)
        edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]
                                                      shorthand for HEAD --base <ref>
@@ -850,6 +850,43 @@ EOF
 }
 
 # ── dispatch ─────────────────────────────────────────────────────────────────
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --agent)
+      if [ -z "${2:-}" ]; then
+        echo "ERROR: --agent requires an agent cli" >&2
+        exit 2
+      fi
+      EDC_AGENT_CLI="$2"
+      export EDC_AGENT_CLI
+      shift 2
+      ;;
+    --agent=*)
+      EDC_AGENT_CLI="${1#--agent=}"
+      export EDC_AGENT_CLI
+      shift
+      ;;
+    --model)
+      if [ -z "${2:-}" ]; then
+        echo "ERROR: --model requires a model slug" >&2
+        exit 2
+      fi
+      export EDC_BUILD_MODEL="$2"
+      export EDC_REVIEW_MODEL="$2"
+      shift 2
+      ;;
+    --model=*)
+      export EDC_BUILD_MODEL="${1#--model=}"
+      export EDC_REVIEW_MODEL="${1#--model=}"
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+edc_normalize_model_env_for_agent "$EDC_AGENT_CLI"
 
 case "${1:-}" in
   --build)

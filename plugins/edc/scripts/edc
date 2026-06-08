@@ -157,6 +157,7 @@ build_cmd() {
 
   [ -n "$agent" ] || die "--agent is required"
   require_command "$agent"
+  edc_normalize_model_env_for_agent "$agent"
   _check_model_or_prompt "$agent"
 
   if [ -n "$positional_target" ]; then
@@ -221,6 +222,7 @@ review_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  edc_normalize_model_env_for_agent "$agent"
   _check_model_or_prompt "$agent"
 
   local review_script
@@ -271,6 +273,7 @@ audit_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  edc_normalize_model_env_for_agent "$agent"
   _check_model_or_prompt "$agent"
 
   local audit_script
@@ -326,6 +329,7 @@ update_cmd() {
   fi
   enforce_agent_context_mode "$agent" "$context_mode"
   require_command "$agent"
+  edc_normalize_model_env_for_agent "$agent"
   _check_model_or_prompt "$agent"
 
   local update_script

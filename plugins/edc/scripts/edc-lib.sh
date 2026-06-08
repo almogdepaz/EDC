@@ -415,6 +415,28 @@ edc_load_config() {
   done < "$cfg"
 }
 
+edc_normalize_model_for_agent() {
+  local agent="$1" model="$2"
+  case "$agent:$model" in
+    pi:gpt-5.5)
+      printf '%s' 'openai-codex/gpt-5.5'
+      ;;
+    *)
+      printf '%s' "$model"
+      ;;
+  esac
+}
+
+edc_normalize_model_env_for_agent() {
+  local agent="$1" key val normalized
+  for key in EDC_BUILD_MODEL EDC_REVIEW_MODEL EDC_PI_MODEL; do
+    val="${!key:-}"
+    [ -n "$val" ] || continue
+    normalized="$(edc_normalize_model_for_agent "$agent" "$val")"
+    export "$key=$normalized"
+  done
+}
+
 # resolve_model_for_phase <phase> <out-var-name>
 # Phases starting with "edc-review" → EDC_REVIEW_MODEL, everything else →
 # EDC_BUILD_MODEL. Writes the resolved slug (possibly empty) to the named
@@ -427,6 +449,9 @@ resolve_model_for_phase() {
   esac
   if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
     __resolved="${EDC_PI_MODEL:-}"
+  fi
+  if [ "${EDC_AGENT_CLI:-}" = "pi" ] && [ -n "$__resolved" ]; then
+    __resolved="$(edc_normalize_model_for_agent pi "$__resolved")"
   fi
   # Refuse to assign back into our own locals — caller must pass a unique var name.
   case "$__outvar" in

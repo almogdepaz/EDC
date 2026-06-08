@@ -886,8 +886,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-edc_normalize_model_env_for_agent "$EDC_AGENT_CLI"
-
 case "${1:-}" in
   --build)
     shift

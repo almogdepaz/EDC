@@ -136,13 +136,13 @@ else
   exit 1
 fi
 
-# ── 7c2: pi short model aliases normalize before orchestrator dispatch ──────
+# ── 7c2: pi model slugs are forwarded exactly ───────────────────────────────
 rm -rf "$CAPTURE/review"
 (cd "$PROJECT" && run_cli --model gpt-5.5 review --agent pi HEAD --base main)
-if [ "$(cat "$CAPTURE/review/review_model")" = "openai-codex/gpt-5.5" ]; then
-  echo "PASS: pi review normalizes gpt-5.5 model alias"
+if [ "$(cat "$CAPTURE/review/review_model")" = "gpt-5.5" ]; then
+  echo "PASS: pi review forwards model slug without mutation"
 else
-  echo "FAIL: pi review did not normalize gpt-5.5 model alias"
+  echo "FAIL: pi review mutated model slug"
   cat "$CAPTURE/review/review_model"
   exit 1
 fi

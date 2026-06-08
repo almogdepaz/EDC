@@ -4,8 +4,6 @@ Deep codebase understanding and context-aware review for AI coding agents. EDC b
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
-![EDC pi menu](media/edc-pi-screenshot.png)
-
 ## What EDC Does
 
 EDC separates deterministic orchestration from LLM analysis:

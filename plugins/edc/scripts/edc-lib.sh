@@ -109,6 +109,8 @@ run_with_timeout() {
   exec 3<&0
   "$@" <&3 &
   local cmd_pid=$!
+  local watchdog_pid=""
+  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; exit 143' TERM INT
   exec 3<&-
   # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
   # the pipe write-end. If it did, the sleep (reparented to init when the
@@ -116,21 +118,16 @@ run_with_timeout() {
   # blocked for the full watchdog duration after the real command already exited.
   (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
     echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
-  local watchdog_pid=$!
+  watchdog_pid=$!
   wait "$cmd_pid"
   local rc=$?
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
+  trap - TERM INT
   return $rc
 }
 
-# ── codex isolation ──────────────────────────────────────────────────────────
-
-cleanup_codex_exec_home() {
-  if [ "${CODEX_EXEC_HOME_OWNED:-0}" -eq 1 ] && [ -n "${CODEX_EXEC_HOME:-}" ] && [ -d "$CODEX_EXEC_HOME" ]; then
-    rm -rf "$CODEX_EXEC_HOME"
-  fi
-}
+# ── codex home override ──────────────────────────────────────────────────────
 
 ensure_codex_exec_home() {
   if [ -n "${CODEX_EXEC_HOME:-}" ]; then
@@ -140,14 +137,10 @@ ensure_codex_exec_home() {
   if [ -n "${EDC_CODEX_HOME:-}" ]; then
     mkdir -p "$EDC_CODEX_HOME"
     CODEX_EXEC_HOME="$EDC_CODEX_HOME"
-    CODEX_EXEC_HOME_OWNED=0
     return 0
   fi
 
-  CODEX_EXEC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-codex-home.XXXXXX") \
-    || { echo "ERROR: could not create temporary CODEX_HOME" >&2; return 1; }
-  CODEX_EXEC_HOME_OWNED=1
-  trap cleanup_codex_exec_home EXIT
+  CODEX_EXEC_HOME=""
 }
 
 edc_require_agent_cli() {
@@ -310,11 +303,33 @@ PY
 
 # ── stream filter ────────────────────────────────────────────────────────────
 
+edc_is_codex_auth_failure_text() {
+  case "$1" in
+    *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+edc_print_codex_auth_failure() {
+  printf '%s\n' "ERROR: Codex authentication failed. Run 'codex logout && codex login' for ChatGPT OAuth, or pipe an API key with 'codex login --with-api-key'." >&2
+}
+
 # stream_filter: read NDJSON from agent CLI output and print human-readable
 # progress lines. Handles Claude, Cursor, and Codex formats.
 stream_filter() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
+    if [ -n "${STREAM_FILTER_CAPTURE:-}" ]; then
+      printf '%s\n' "$line" >> "$STREAM_FILTER_CAPTURE" 2>/dev/null || true
+    fi
+    if edc_is_codex_auth_failure_text "$line"; then
+      edc_print_codex_auth_failure
+      return 86
+    fi
     # type=assistant with text content
     text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
     if [ -n "$text" ]; then
@@ -373,12 +388,26 @@ stream_filter() {
       continue
     fi
     # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
-    codex_err=$(printf '%s' "$line" | jq -r '
-      if .type == "error" then "ERROR (subprocess): \(.message // "unknown error")"
-      elif (.msg.type // "") == "error" then "ERROR (subprocess): \(.msg.message // "unknown error")"
+    codex_err_msg=$(printf '%s' "$line" | jq -r '
+      def readable_error($v):
+        if ($v | type) == "string" then
+          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
+        else
+          ($v.error.message // $v.message // ($v | tostring))
+        end;
+      if .type == "error" then readable_error(.message // .error // "unknown error")
+      elif (.msg.type // "") == "error" then readable_error(.msg.message // "unknown error")
       else empty end' 2>/dev/null)
-    if [ -n "$codex_err" ]; then
-      printf '%s\n' "$codex_err" >&2
+    if [ -n "$codex_err_msg" ]; then
+      case "$codex_err_msg" in
+        *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
+          edc_print_codex_auth_failure
+          return 86
+          ;;
+        *)
+          printf '%s\n' "ERROR (subprocess): $codex_err_msg" >&2
+          ;;
+      esac
     fi
   done
 }
@@ -543,6 +572,64 @@ _edc_log_spawn_metrics() {
   fi
 }
 
+edc_kill_process_tree() {
+  local pid="$1" child
+  [ -n "$pid" ] || return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    edc_kill_process_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
+edc_run_codex_stream() {
+  local timeout_secs="$1" phase="$2" capture="$3" effective_prompt="$4"
+  shift 4
+
+  local fifo timeout_flag
+  fifo=$(mktemp "${TMPDIR:-/tmp}/edc-codex-stream-$$.XXXXXX") || return 1
+  timeout_flag=$(mktemp "${TMPDIR:-/tmp}/edc-codex-timeout-$$.XXXXXX") || { rm -f "$fifo"; return 1; }
+  : > "$timeout_flag"
+  rm -f "$fifo"
+  mkfifo "$fifo" || { rm -f "$fifo" "$timeout_flag"; return 1; }
+
+  "$@" <<< "$effective_prompt" > "$fifo" 2>&1 &
+  local cmd_pid=$!
+  (sleep "$timeout_secs" && {
+    printf '1' > "$timeout_flag"
+    edc_kill_process_tree "$cmd_pid"
+  }) >/dev/null 2>&1 &
+  local watchdog_pid=$!
+  local filter_rc=0
+
+  if [ -n "$capture" ]; then
+    STREAM_FILTER_CAPTURE="$capture" stream_filter < "$fifo"
+    filter_rc=$?
+  else
+    stream_filter < "$fifo"
+    filter_rc=$?
+  fi
+
+  if [ "$filter_rc" -eq 86 ]; then
+    edc_kill_process_tree "$cmd_pid"
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    rm -f "$fifo" "$timeout_flag"
+    return 1
+  fi
+
+  wait "$cmd_pid"
+  local runner_rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  if [ -s "$timeout_flag" ]; then
+    echo "ERROR: phase '$phase' timed out after ${timeout_secs}s" >&2
+    runner_rc=1
+  fi
+  rm -f "$fifo" "$timeout_flag"
+  return "$runner_rc"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # 5. SPAWN — per-CLI subprocess dispatch.
 # ════════════════════════════════════════════════════════════════════════════
@@ -663,7 +750,12 @@ edc_spawn() {
       fi
       ;;
     codex)
-      local -a cmd=(env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write)
+      local -a cmd=()
+      if [ -n "$CODEX_EXEC_HOME" ]; then
+        cmd=(env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write)
+      else
+        cmd=(codex exec --json --color never --sandbox workspace-write)
+      fi
       [ -n "$model" ] && cmd+=(--model "$model")
       cmd+=(-)
       local effective_prompt
@@ -672,17 +764,8 @@ edc_spawn() {
       else
         effective_prompt="$prompt"
       fi
-      if [ -n "$capture" ]; then
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | tee "$capture" | stream_filter
-        rc=${PIPESTATUS[0]}
-      else
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | stream_filter
-        rc=${PIPESTATUS[0]}
-      fi
+      edc_run_codex_stream "$timeout_secs" "$phase" "$capture" "$effective_prompt" "${cmd[@]}"
+      rc=$?
       ;;
     pi)
       local effective_prompt_file="" cleanup_prompt_file=0

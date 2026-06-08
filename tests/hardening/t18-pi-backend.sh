@@ -211,11 +211,12 @@ else
   cat pi-calls.log 2>/dev/null || true
 fi
 
+rm -f review-HEAD.md
 raw_before=$(grep -c -- '--model openai-codex/gpt-5.5' pi-calls.log 2>/dev/null || true)
 PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 >raw-model-review.out 2>raw-model-review.err
 rc=$?
 raw_after=$(grep -c -- '--model openai-codex/gpt-5.5' pi-calls.log 2>/dev/null || true)
-if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && [ "$raw_after" -gt "$raw_before" ]; then
+if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md && [ "$raw_after" -gt "$raw_before" ]; then
   check "18.9: raw edc-review.sh accepts --agent/--model and normalizes model" 1
 else
   check "18.9: raw edc-review.sh accepts --agent/--model and normalizes model" 0

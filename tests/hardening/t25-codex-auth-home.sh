@@ -113,11 +113,12 @@ edc_spawn edc-review-smoke 20 'prompt' >model.out 2>model.err
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] \
-  && grep -q "ERROR (subprocess): The model is not supported" model.err \
+  && grep -q "ERROR: model was rejected by codex" model.err \
+  && grep -q "The model is not supported" model.err \
   && ! grep -q '"type":"error"' model.err; then
-  check "codex structured provider errors print readable messages" 1
+  check "codex structured provider errors print readable model guidance" 1
 else
-  check "codex structured provider errors print readable messages" 0
+  check "codex structured provider errors print readable model guidance" 0
   echo "--- stdout ---"; cat model.out
   echo "--- stderr ---"; cat model.err
 fi

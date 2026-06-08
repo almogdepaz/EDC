@@ -207,7 +207,7 @@ proc = subprocess.Popen(
     cmd,
     stdin=subprocess.DEVNULL,
     stdout=subprocess.PIPE,
-    stderr=None,
+    stderr=subprocess.STDOUT,
     text=True,
     bufsize=1,
 )
@@ -318,6 +318,64 @@ edc_print_codex_auth_failure() {
   printf '%s\n' "ERROR: Codex authentication failed. Run 'codex logout && codex login' for ChatGPT OAuth, or pipe an API key with 'codex login --with-api-key'." >&2
 }
 
+edc_is_model_rejection_text() {
+  local text
+  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case "$text" in
+    *model*not\ found*|*model*not\ supported*|*unsupported\ model*|*unknown\ model*|*invalid\ model*|*model_not_found*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+edc_print_agent_model_list_hint() {
+  local agent="$1" model="$2" output=""
+  case "$agent" in
+    pi)
+      if command -v pi >/dev/null 2>&1; then
+        if [ -n "$TIMEOUT_BIN" ]; then
+          output=$("$TIMEOUT_BIN" 10 pi --list-models "$model" 2>&1 || true)
+          [ -n "$output" ] || output=$("$TIMEOUT_BIN" 10 pi --list-models 2>&1 || true)
+        else
+          output=$(pi --list-models "$model" 2>&1 || true)
+          [ -n "$output" ] || output=$(pi --list-models 2>&1 || true)
+        fi
+        if [ -n "$output" ]; then
+          printf '%s\n' "available pi models matching '$model' (or all models if no exact search result):" >&2
+          printf '%s\n' "$output" | sed -n '1,80p' >&2
+          return 0
+        fi
+      fi
+      printf '%s\n' "could not fetch pi models. run: pi --list-models" >&2
+      ;;
+    codex)
+      printf '%s\n' "Codex CLI does not expose a stable model-list command in this version. Run 'codex --help', omit --model to use the backend default, or choose a model supported by your Codex auth mode." >&2
+      ;;
+    claude)
+      printf '%s\n' "Claude CLI does not expose a stable model-list command in this version. Run 'claude --help', omit --model to use the backend default, or use a supported alias/full model name." >&2
+      ;;
+    *)
+      printf '%s\n' "omit --model to use the backend default, or choose a model supported by '$agent'." >&2
+      ;;
+  esac
+}
+
+edc_print_model_rejection() {
+  local agent="${STREAM_FILTER_AGENT:-${EDC_AGENT_CLI:-agent}}"
+  local model="${STREAM_FILTER_MODEL:-}"
+  local message="$1"
+  if [ -n "$model" ]; then
+    printf '%s\n' "ERROR: model '$model' was rejected by $agent: $message" >&2
+    edc_print_agent_model_list_hint "$agent" "$model"
+  else
+    printf '%s\n' "ERROR: model was rejected by $agent: $message" >&2
+    printf '%s\n' "hint: omit --model to use the backend default, or set EDC_BUILD_MODEL / EDC_REVIEW_MODEL to a supported model." >&2
+  fi
+}
+
 # stream_filter: read NDJSON from agent CLI output and print human-readable
 # progress lines. Handles Claude, Cursor, and Codex formats.
 stream_filter() {
@@ -330,6 +388,15 @@ stream_filter() {
       edc_print_codex_auth_failure
       return 86
     fi
+    case "$line" in
+      \{*) ;;
+      *)
+        if edc_is_model_rejection_text "$line"; then
+          edc_print_model_rejection "$line"
+          return 87
+        fi
+        ;;
+    esac
     # type=assistant with text content
     text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
     if [ -n "$text" ]; then
@@ -353,9 +420,20 @@ stream_filter() {
       continue
     fi
     # type=result with is_error=true
-    err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
-    if [ -n "$err" ]; then
-      printf '%s\n' "$err" >&2
+    err_msg=$(printf '%s' "$line" | jq -r '
+      def readable_error($v):
+        if ($v | type) == "string" then
+          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
+        else
+          ($v.error.message // $v.message // ($v | tostring))
+        end;
+      if .type == "result" and .is_error == true then readable_error(.result // "unknown error") else empty end' 2>/dev/null)
+    if [ -n "$err_msg" ]; then
+      if edc_is_model_rejection_text "$err_msg"; then
+        edc_print_model_rejection "$err_msg"
+        return 87
+      fi
+      printf '%s\n' "ERROR (subprocess): $err_msg" >&2
       continue
     fi
     # Pi JSON mode: stream text deltas and tool starts from AgentSession events.
@@ -372,6 +450,10 @@ stream_filter() {
       elif .type == "auto_retry_end" and .success == false then "ERROR (subprocess): \(.finalError // "provider request failed")"
       else empty end' 2>/dev/null)
     if [ -n "$pi_err" ]; then
+      if edc_is_model_rejection_text "$pi_err"; then
+        edc_print_model_rejection "$pi_err"
+        return 87
+      fi
       printf '%s\n' "$pi_err" >&2
       continue
     fi
@@ -405,6 +487,10 @@ stream_filter() {
           return 86
           ;;
         *)
+          if edc_is_model_rejection_text "$codex_err_msg"; then
+            edc_print_model_rejection "$codex_err_msg"
+            return 87
+          fi
           printf '%s\n' "ERROR (subprocess): $codex_err_msg" >&2
           ;;
       esac
@@ -584,7 +670,7 @@ edc_run_codex_stream() {
     filter_rc=$?
   fi
 
-  if [ "$filter_rc" -eq 86 ]; then
+  if [ "$filter_rc" -eq 86 ] || [ "$filter_rc" -eq 87 ]; then
     edc_kill_process_tree "$cmd_pid"
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$cmd_pid" 2>/dev/null || true
@@ -677,13 +763,13 @@ edc_spawn() {
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
-            | tee "$capture" | stream_filter
+            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
-            | stream_filter
+            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         fi
       else
@@ -691,12 +777,12 @@ edc_spawn() {
         if [ -n "$capture" ]; then
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
-            | tee "$capture" | stream_filter
+            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
-            | stream_filter
+            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         fi
       fi
@@ -715,12 +801,12 @@ edc_spawn() {
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
-          | tee "$capture" | stream_filter
+          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
-          | stream_filter
+          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       fi
       ;;
@@ -739,7 +825,7 @@ edc_spawn() {
       else
         effective_prompt="$prompt"
       fi
-      edc_run_codex_stream "$timeout_secs" "$phase" "$capture" "$effective_prompt" "${cmd[@]}"
+      STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" edc_run_codex_stream "$timeout_secs" "$phase" "$capture" "$effective_prompt" "${cmd[@]}"
       rc=$?
       ;;
     pi)
@@ -762,12 +848,12 @@ edc_spawn() {
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | tee "$capture" | stream_filter
+          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | stream_filter
+          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       fi
       rm -f "$pi_supervisor"

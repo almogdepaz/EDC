@@ -176,5 +176,39 @@ else
   echo "INFO: stale detection: $result (may be same mtime — acceptable)"
 fi
 
+# ── 5j: installer adds ~/.edc/scripts to shell rc idempotently ───────────────
+PATH_HOME=$(mktemp -d)
+PATH_RC="$PATH_HOME/.zshrc"
+HOME="$PATH_HOME" SHELL=/bin/zsh CI=0 EDC_INSTALL_SHELL_RC="$PATH_RC" bash install.sh --agent claude >"$PATH_HOME/install-1.out" 2>&1
+if [ -f "$PATH_RC" ] && grep -q 'export PATH="\$HOME/.edc/scripts:\$PATH"' "$PATH_RC"; then
+  echo "PASS: installer adds EDC CLI path to shell rc"
+else
+  echo "FAIL: installer did not add EDC CLI path to shell rc"
+  cat "$PATH_HOME/install-1.out"
+  [ -f "$PATH_RC" ] && cat "$PATH_RC"
+  exit 1
+fi
+
+HOME="$PATH_HOME" SHELL=/bin/zsh CI=0 EDC_INSTALL_SHELL_RC="$PATH_RC" bash install.sh --agent claude >"$PATH_HOME/install-2.out" 2>&1
+path_block_count=$(grep -c '# EDC CLI' "$PATH_RC" || true)
+if [ "$path_block_count" -eq 1 ]; then
+  echo "PASS: installer PATH block is idempotent"
+else
+  echo "FAIL: installer duplicated PATH block ($path_block_count)"
+  cat "$PATH_RC"
+  exit 1
+fi
+
+NO_PATH_HOME=$(mktemp -d)
+NO_PATH_RC="$NO_PATH_HOME/.zshrc"
+HOME="$NO_PATH_HOME" SHELL=/bin/zsh CI=0 EDC_INSTALL_SHELL_RC="$NO_PATH_RC" bash install.sh --agent claude --no-path >"$NO_PATH_HOME/install.out" 2>&1
+if [ ! -f "$NO_PATH_RC" ] || ! grep -q '.edc/scripts' "$NO_PATH_RC"; then
+  echo "PASS: --no-path skips shell rc edit"
+else
+  echo "FAIL: --no-path still edited shell rc"
+  cat "$NO_PATH_RC"
+  exit 1
+fi
+
 echo ""
 echo "All T5 checks passed."

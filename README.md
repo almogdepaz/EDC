@@ -27,7 +27,9 @@ The generated context lives in the target repository under `edc-context/`. Build
 
 ### Terminal CLI
 
-Every installer places a shared terminal wrapper at `~/.edc/scripts/edc` alongside the orchestrator scripts. From any terminal, in the target repo:
+The unified installer (`bash install.sh --agent <agent>`) places a shared terminal wrapper at `~/.edc/scripts/edc` alongside the orchestrator scripts and adds `~/.edc/scripts` to your shell `PATH` when it can detect a zsh/bash rc file. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Pass `--no-path` to skip rc-file edits.
+
+From any terminal, in the target repo:
 
 ```bash
 # build or update context in the current repo
@@ -77,7 +79,7 @@ Alternative — install the runtime directly from a clone:
 bash install.sh --agent claude
 ```
 
-Both paths install the plugin surface (slash commands + hooks + skills) and the terminal CLI (`~/.edc/scripts/edc`).
+Both paths install the plugin surface (slash commands + hooks + skills) and the terminal CLI (`~/.edc/scripts/edc`). The direct installer also adds a zsh/bash `PATH` entry when possible; use `--no-path` to skip shell rc edits.
 
 ### Cursor
 
@@ -131,16 +133,14 @@ Quick pi path:
 4. Run `/edc` → **Review current branch vs main**.
 5. Poll `/edc` → **Job status** while the background job runs.
 
-All installers also drop the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` so `edc build|update|review|audit|mode|doctor` works from any shell after that directory is on `PATH`.
+The unified installer also drops the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` and adds that directory to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Package-manager installs may install the same runtime without editing shell rc files. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
 #### Codex auth with the orchestrator
 
-The orchestrator spawns `codex exec` subprocesses under an isolated `CODEX_HOME` (a fresh temp dir per run) so pipeline state never collides with your interactive Codex sessions. That isolation also means subprocesses do not inherit your Codex login.
-
-If `codex exec` fails with an auth error inside the pipeline, point the orchestrator at your real Codex home before invoking EDC:
+The orchestrator spawns `codex exec` using your normal Codex configuration by default, so ChatGPT OAuth/API-key login state under `~/.codex` is inherited. If you need an isolated Codex home for tests or benchmarks, set:
 
 ```bash
-export EDC_CODEX_HOME="$HOME/.codex"
+export EDC_CODEX_HOME=/path/to/isolated/codex-home
 ```
 
 When `EDC_CODEX_HOME` is set, the orchestrator uses it verbatim and does not clean it up.

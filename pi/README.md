@@ -77,6 +77,8 @@ edc build --agent pi
 edc update --agent pi --base main
 ```
 
+The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
+
 Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state

@@ -2,7 +2,7 @@
 # EDC — Every Day Carry Skills installer
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/almogdepaz/edc/main/install.sh | bash -s <agent>
-#   bash install.sh --agent <agent>
+#   bash install.sh --agent <agent> [--no-path]
 #
 # Agents: claude, cursor, codex, pi
 #
@@ -18,14 +18,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_PLUGIN_ROOT="$SCRIPT_DIR/plugins/edc"
 
 AGENT=""
+ADD_PATH=1
 
 usage() {
   cat <<EOF
 Usage:
   curl -fsSL $BASE/install.sh | bash -s <agent>
-  bash install.sh --agent <agent>
+  bash install.sh --agent <agent> [--no-path]
 
 Agents: claude, cursor, codex, pi
+
+Options:
+  --no-path   Do not edit shell rc files to add ~/.edc/scripts to PATH
 
 After install, toggle runtime mode in any repo with:
   edc mode advisory   # docs only (default), hooks no-op
@@ -44,6 +48,10 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || die "--agent requires a value"
       AGENT="$2"
       shift 2
+      ;;
+    --no-path)
+      ADD_PATH=0
+      shift
       ;;
     --help|-h)
       usage
@@ -147,6 +155,56 @@ install_terminal_cli() {
     "$scripts_target/edc-build-plan.sh" \
     "$scripts_target/edc-spawn-analyze.sh"
   # edc-lib.sh is sourced, not exec'd — no chmod needed
+  install_shell_path
+}
+
+edc_shell_rc_file() {
+  if [ -n "${EDC_INSTALL_SHELL_RC:-}" ]; then
+    echo "$EDC_INSTALL_SHELL_RC"
+    return 0
+  fi
+
+  case "$(basename "${SHELL:-}")" in
+    zsh)  echo "$HOME/.zshrc" ;;
+    bash) echo "$HOME/.bashrc" ;;
+    *)    return 1 ;;
+  esac
+}
+
+install_shell_path() {
+  local edc_path="$HOME/.edc/scripts"
+  if [ "$ADD_PATH" -eq 0 ]; then
+    return 0
+  fi
+
+  case ":$PATH:" in
+    *":$edc_path:"*) return 0 ;;
+  esac
+
+  if [ "${CI:-0}" = "1" ]; then
+    return 0
+  fi
+
+  local rc_file
+  if ! rc_file="$(edc_shell_rc_file)"; then
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$rc_file")"
+  touch "$rc_file"
+  if grep -Fq '.edc/scripts' "$rc_file"; then
+    return 0
+  fi
+
+  cat >> "$rc_file" <<'EOF'
+
+# EDC CLI
+if [ -d "$HOME/.edc/scripts" ]; then
+  export PATH="$HOME/.edc/scripts:$PATH"
+fi
+EOF
+  echo "Added EDC CLI to PATH in $rc_file. Restart your shell or run:"
+  echo "  export PATH=\"\$HOME/.edc/scripts:\$PATH\""
 }
 
 # write_cursor_commands <cursor-target>
@@ -232,7 +290,11 @@ print_path_hint() {
     *":$HOME/.edc/scripts:"*) ;;
     *)
       echo
-      echo "NOTE: $HOME/.edc/scripts is not on PATH. Add this to your shell rc to call 'edc' from anywhere:"
+      if [ "$ADD_PATH" -eq 0 ]; then
+        echo "NOTE: PATH setup was skipped (--no-path). To call 'edc' from anywhere, add:"
+      else
+        echo "NOTE: Restart your shell, or run this now to call 'edc' from the current shell:"
+      fi
       echo "  export PATH=\"\$HOME/.edc/scripts:\$PATH\""
       ;;
   esac

@@ -11,7 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 INDEX="$EDC_INDEX"
-ROOT_AGENTS="AGENTS.md"
+ROOT_AGENTS="$EDC_ROOT_AGENTS"
+ALT_AGENTS="$EDC_ALT_AGENTS"
 ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
 TMP_ERR="${TMPDIR:-/tmp}/edc-doctor-route.$$"
 
@@ -42,7 +43,7 @@ matches_allowed_glob() {
   return 1
 }
 
-[ -f "$ROOT_AGENTS" ] || fail "missing $ROOT_AGENTS"
+edc_entrypoint_valid || fail "missing valid EDC agent entrypoint: expected generated $ROOT_AGENTS, or generated $ALT_AGENTS referenced from $ROOT_AGENTS/$EDC_CLAUDE_AGENTS"
 [ -f "$INDEX" ] || fail "missing $INDEX"
 [ -f "$MANIFEST" ] || fail "missing $MANIFEST"
 

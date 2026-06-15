@@ -61,7 +61,7 @@ Build provenance only. Runtime adapters MUST NOT auto-load it.
 | `defaultMode` | enum: `"advisory"` \| `"inject"` | yes | Repo-default runtime mode. `advisory` means EDC only ships docs and instructions; `inject` means the harness auto-loads the matching module doc when it can. Flip with `edc mode advisory\|inject`. |
 | `guardedTools` | string[] | optional | Tools that, in inject installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
 | `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `edc-context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
-| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
+| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `EDC_AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
 | `unmatchedPathPolicy` | enum: `"warn-allow"` | yes | Behavior for code paths that match no module. v2 only defines `"warn-allow"`: edits/writes against unmatched paths are warned and allowed; `edc doctor` flags the gap. This keeps the manifest an honest contract instead of a precondition for adding new code. |
 
 ---
@@ -195,6 +195,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     "bootstrapAlwaysReadable": [
       "edc-context/**",
       "AGENTS.md",
+      "EDC_AGENTS.md",
       ".edc/**",
       "LICENSE*",
       "package.json",
@@ -263,9 +264,9 @@ A file like `chia/consensus/blockchain.py` resolves at Tier 1 directly to `conse
 
 ---
 
-## `AGENTS.md` Template
+## Agent entrypoint template
 
-`edc build` emits `AGENTS.md` at the repo root as the universal startup-orientation file for any agent harness that honors repo instruction files. It MUST contain the following sections in order:
+`edc build` emits a short EDC startup-orientation file at the repo root. The default path is `AGENTS.md`; when a repo already owns `AGENTS.md`, the build prompt may set `EDC_AGENTS_TARGET: EDC_AGENTS.md` so EDC preserves existing instructions and tells the user how to replace, append, or reference the generated file. The generated EDC entrypoint MUST contain the following sections in order:
 
 1. **Startup orientation header.** A short title and one-paragraph statement of what this file is and why the agent should read it first. Example:
    ```md
@@ -299,4 +300,4 @@ A file like `chia/consensus/blockchain.py` resolves at Tier 1 directly to `conse
    Runtime mode: **advisory**. EDC ships docs only; loading is best-effort. Read `edc-context/index.md` first, then the relevant `edc-context/modules/<name>.md`.
    ```
 
-`edc build` MUST emit all four sections. Flip the runtime mode at any time with `edc mode advisory|inject`; rebuilds preserve the existing value.
+`edc build` MUST emit all four sections to the configured EDC agent entrypoint. Flip the runtime mode at any time with `edc mode advisory|inject`; rebuilds preserve the existing value.

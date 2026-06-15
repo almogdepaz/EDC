@@ -18,7 +18,7 @@ The generated context lives in the target repository under `edc-context/`. Build
 
 | Command | When to run it |
 |---------|----------------|
-| **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short `AGENTS.md` orientation. |
+| **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
 | **update** | Before review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
 | **review** | On a PR, branch, commit, or diff file. Runs context-aware differential review and writes a consolidated `review-*.md` report. |
 | **audit** | Anytime. Compares context expectations against actual code to flag overengineering, bloat, duplication, and dead exports. |
@@ -179,7 +179,7 @@ Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi s
 EDC writes generated context and local runtime state in a few places:
 
 - `edc-context/` — generated per-module deep context written by build/update; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may wipe and rebuild it.
-- `AGENTS.md` — short generated orientation pointing agents at `edc-context/`.
+- `AGENTS.md` / `EDC_AGENTS.md` — short generated orientation pointing agents at `edc-context/`. If a repo already has a non-EDC `AGENTS.md`, non-pi builds preserve it, write `EDC_AGENTS.md`, and explain how to replace, append, or reference it. Set `EDC_AGENTS_MODE=overwrite` to replace `AGENTS.md`.
 - `review-*.md` — consolidated review output.
 - `.edc/` — project-local runtime copy used by hooks/extensions when they need deterministic access to orchestrator scripts and private prompt bundles. Global installs also live under `~/.edc/`.
 - `.git/edc/status` and `.git/edc/<kind>.log` — pi's current background job status/logs. These are git metadata files, not worktree files, and need no `.gitignore` entry.
@@ -188,6 +188,7 @@ For repos where you do not want generated EDC artifacts tracked, add:
 
 ```gitignore
 AGENTS.md
+EDC_AGENTS.md
 edc-context/
 review-*.md
 .edc/
@@ -200,7 +201,7 @@ If generated context or review outputs get committed, `edc review` filters them 
 ```
 edc/
   install.sh                           # one-line installer for all agents
-  AGENTS.md                            # generated agent entrypoint/orientation
+  AGENTS.md / EDC_AGENTS.md            # generated agent entrypoint/orientation
   .claude-plugin/marketplace.json      # Claude plugin marketplace manifest
   plugins/edc/                         # plugin, skills, hooks, and shared orchestrators
     commands/                          # user-facing Claude slash commands

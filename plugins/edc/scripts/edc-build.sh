@@ -118,6 +118,87 @@ decide_route() {
   esac
 }
 
+# ── AGENTS.md conflict handling ──────────────────────────────────────────────
+
+choose_agents_mode() {
+  local mode="${EDC_AGENTS_MODE:-}"
+  case "$mode" in
+    ""|edc-agents|overwrite) ;;
+    *) echo "ERROR: EDC_AGENTS_MODE must be 'edc-agents' or 'overwrite'" >&2; return 2 ;;
+  esac
+
+  if [ ! -f "$EDC_ROOT_AGENTS" ] || edc_is_generated_agents_file "$EDC_ROOT_AGENTS"; then
+    echo "overwrite"
+    return 0
+  fi
+
+  if [ -n "$mode" ]; then
+    echo "$mode"
+    return 0
+  fi
+
+  if [ "${EDC_AGENT_CLI:-}" = "pi" ] && [ -t 0 ] && [ -t 2 ]; then
+    cat >&2 <<EOF
+EDC found an existing AGENTS.md that does not look EDC-generated.
+
+Choose how to add EDC's generated repo-context entrypoint:
+  1) preserve AGENTS.md, write EDC_AGENTS.md, and add a reference block (recommended)
+  2) overwrite AGENTS.md with EDC's generated entrypoint
+
+EOF
+    local answer=""
+    printf 'Select [1/2] (default 1): ' >&2
+    read -r answer || true
+    case "$answer" in
+      2|o|overwrite) echo "overwrite" ;;
+      *) echo "edc-agents" ;;
+    esac
+    return 0
+  fi
+
+  echo "WARNING: existing non-EDC AGENTS.md detected; preserving it and writing EDC context instructions to $EDC_ALT_AGENTS. Set EDC_AGENTS_MODE=overwrite to replace AGENTS.md." >&2
+  echo "edc-agents"
+}
+
+prepare_agents_entrypoint() {
+  local mode
+  mode=$(choose_agents_mode) || return $?
+  case "$mode" in
+    overwrite)
+      export EDC_AGENTS_TARGET="$EDC_ROOT_AGENTS"
+      ;;
+    edc-agents)
+      export EDC_AGENTS_TARGET="$EDC_ALT_AGENTS"
+      ;;
+  esac
+}
+
+finalize_agents_entrypoint() {
+  case "${EDC_AGENTS_TARGET:-$EDC_ROOT_AGENTS}" in
+    "$EDC_ALT_AGENTS")
+      if [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
+        if [ -f "$EDC_ROOT_AGENTS" ]; then
+          edc_add_alt_agents_reference "$EDC_ROOT_AGENTS"
+        fi
+        if [ -f "$EDC_CLAUDE_AGENTS" ]; then
+          edc_add_alt_agents_reference "$EDC_CLAUDE_AGENTS"
+        fi
+      else
+        cat >&2 <<EOF
+EDC wrote its generated agent entrypoint to $EDC_ALT_AGENTS and preserved your existing $EDC_ROOT_AGENTS.
+
+Choose how you want to expose it to agents:
+  - replace $EDC_ROOT_AGENTS with $EDC_ALT_AGENTS,
+  - append the relevant EDC section into $EDC_ROOT_AGENTS, or
+  - add a short reference from $EDC_ROOT_AGENTS / $EDC_CLAUDE_AGENTS to $EDC_ALT_AGENTS.
+
+To force overwrite on the next build, run with EDC_AGENTS_MODE=overwrite.
+EOF
+      fi
+      ;;
+  esac
+}
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 build_main() {
@@ -174,6 +255,10 @@ build_main() {
       ;;
   esac
 
+  if [ "$action" = "build" ]; then
+    prepare_agents_entrypoint || exit $?
+  fi
+
   echo "→ spawning $EDC_AGENT_CLI for edc-$action..."
   prompt=$(resolve_prompt "$action" "${passthrough[@]}") || exit 1
   local timeout_var
@@ -184,6 +269,10 @@ build_main() {
   fi
   edc_spawn "edc-$action" "$timeout_var" "$prompt" \
     || { echo "ERROR: edc-$action invocation failed" >&2; exit 1; }
+
+  if [ "$action" = "build" ]; then
+    finalize_agents_entrypoint
+  fi
 
   # Validate via doctor — deterministic end-to-end check.
   if [ ! -x "$DOCTOR_SH" ] && [ ! -f "$DOCTOR_SH" ]; then

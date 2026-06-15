@@ -136,6 +136,6 @@ recover_context_if_needed() {
   echo "ERROR: context still not ready after recovery (manifest.json missing or invalid)." >&2
   echo "HINT: the build agent likely failed to produce a valid v2 layout." >&2
   echo "      check the build agent output above; you can also try:" >&2
-  echo "      rm -rf $EDC_CONTEXT_DIR AGENTS.md && edc build --agent <agent>" >&2
+  echo "      rm -rf $EDC_CONTEXT_DIR AGENTS.md EDC_AGENTS.md && edc build --agent <agent>" >&2
   return 1
 }

@@ -4,14 +4,14 @@ This document defines the runtime contract every EDC adapter must implement agai
 
 ## Shared Inputs
 
-- `AGENTS.md`: short startup orientation for humans and runtimes.
+- `AGENTS.md` or referenced `EDC_AGENTS.md`: short startup orientation for humans and runtimes.
 - `edc-context/index.md`: lightweight architecture overview loaded at session start or on demand.
 - `edc-context/manifest.json`: authoritative routing and policy contract.
 - `edc-context/modules/<name>.md`: deep per-module context selected by manifest routing.
 
 ## Advisory Mode
 
-- The adapter MAY surface `AGENTS.md` and `edc-context/index.md`, but MUST NOT auto-inject module docs on tool use.
+- The adapter MAY surface the EDC agent entrypoint (`AGENTS.md`, or `EDC_AGENTS.md` when referenced) and `edc-context/index.md`, but MUST NOT auto-inject module docs on tool use.
 - Review/build entrypoints still use `edc-context/manifest.json` as the source of truth for report paths and freshness checks.
 - Missing hook support is acceptable because advisory mode is documentation-only.
 - Failure mode: if advisory is requested but the adapter cannot even expose the docs, it must fail loudly.

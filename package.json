@@ -58,8 +58,7 @@
   "pi": {
     "extensions": [
       "./pi/index.mjs"
-    ],
-    "image": "https://raw.githubusercontent.com/almogdepaz/EDC/main/media/edc-pi-screenshot.png"
+    ]
   },
   "scripts": {
     "test": "bash tests/hardening/run-all.sh",

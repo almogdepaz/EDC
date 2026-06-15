@@ -110,30 +110,11 @@ pi install npm:@sgtbeatdown/edc
 # project-local install for a team repo
 pi install npm:@sgtbeatdown/edc -l
 
-# git install works for pinned refs or source installs
-pi install git:github.com/almogdepaz/edc
-pi install git:github.com/almogdepaz/edc@v1.1.1
-
-# list/update/remove through pi
-pi list
-pi update npm:@sgtbeatdown/edc
-pi remove npm:@sgtbeatdown/edc
-
-# or via the unified installer
+# or from a local checkout
 bash install.sh --agent pi
 ```
 
-Pi exposes one interactive `/edc` menu inside pi: review current branch vs `main`, job status, build, update, audit, doctor, and cancel. Review/build/update/audit actions run in the background through one shared job slot; current job status is written to `.git/edc/status` and raw logs to `.git/edc/<kind>.log`. Job status reports classified failure reasons when possible, including HEAD movement during the run and incomplete context recovery. Pi also exposes the human-facing `edc-review` and `edc-audit` skills for ad hoc methodology use; internal build/update/context prompt bundles stay hidden from pi autocomplete. See [`pi/README.md`](pi/README.md).
-
-Quick pi path:
-
-1. Install EDC with `pi install npm:@sgtbeatdown/edc`.
-2. Start `pi` in a git repository.
-3. Run `/edc` and choose **Build context** once.
-4. Run `/edc` → **Review current branch vs main**.
-5. Poll `/edc` → **Job status** while the background job runs.
-
-The unified installer also drops the shared terminal CLI and orchestrator scripts under `~/.edc/scripts/` and adds that directory to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Package-manager installs may install the same runtime without editing shell rc files. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
+For pi commands, menu behavior, background jobs, modes, requirements, and troubleshooting, see [`pi/README.md`](pi/README.md).
 
 #### Codex auth with the orchestrator
 
@@ -192,17 +173,6 @@ edc mode inject
 ```
 
 Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi support injection.
-
-## Pi Package Compatibility
-
-EDC is intentionally conservative as a pi package: it registers one `/edc` command, does not override built-in tools, and exposes only the `edc-review` and `edc-audit` skills. Provider packages such as Cursor/Anthropic OAuth extensions should coexist normally.
-
-Known interactions:
-
-- Context-pruning packages can be used with EDC. Prefer EDC's default `advisory` mode for maximum compatibility; `inject` mode intentionally adds EDC context messages to the session.
-- Permission, plan-mode, sandbox, SSH, or protected-path extensions may block or redirect EDC's `bash`, `edit`, and `write` activity. That is expected. EDC build/update/audit/review needs shell access plus write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`.
-- EDC's pi subprocesses require `pi`, `git`, `jq`, `python3`, and Bash >= 4. On macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2.
-- Nested pi subprocesses receive the active pi model through `EDC_PI_MODEL` when pi exposes `ctx.model.provider` and `ctx.model.id`; check `.git/edc/<kind>.log` if provider/model propagation looks wrong.
 
 ## Generated Files and Local State
 

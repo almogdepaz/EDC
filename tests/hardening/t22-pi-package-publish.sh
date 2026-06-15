@@ -24,7 +24,7 @@ ok('package declares bugs url', pkg.bugs?.url === 'https://github.com/almogdepaz
 ok('node engine follows pi package baseline', pkg.engines?.node === '>=20.6.0');
 ok('publishConfig exposes scoped package publicly', pkg.publishConfig?.access === 'public');
 ok('pi manifest exposes the pi extension', Array.isArray(pkg.pi?.extensions) && pkg.pi.extensions.includes('./pi/index.mjs'));
-ok('pi manifest declares gallery image', pkg.pi?.image === 'https://raw.githubusercontent.com/almogdepaz/EDC/main/media/edc-pi-screenshot.png');
+ok('pi manifest omits gallery image', pkg.pi && !Object.hasOwn(pkg.pi, 'image'));
 ok('current pi peer dependency namespace is used', pkg.peerDependencies?.['@earendil-works/pi-coding-agent'] === '*');
 ok('legacy pi peer dependency namespace is absent', !pkg.peerDependencies?.['@mariozechner/pi-coding-agent']);
 ok('package has a runtime files allowlist', Array.isArray(pkg.files) && pkg.files.length > 0);

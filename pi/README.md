@@ -2,8 +2,6 @@
 
 EDC adds repository architecture context and context-aware review workflows to [pi](https://pi.dev).
 
-![EDC pi menu](../media/edc-pi-screenshot.png)
-
 ## Install
 
 ```bash

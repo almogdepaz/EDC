@@ -8,6 +8,16 @@ cd "$ROOT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+if ! command -v pi >/dev/null 2>&1; then
+  PI_CLI_ROOT="$TMP/pi-cli"
+  npm install --prefix "$PI_CLI_ROOT" --silent @earendil-works/pi-coding-agent
+  export PATH="$PI_CLI_ROOT/node_modules/.bin:$PATH"
+fi
+if ! command -v pi >/dev/null 2>&1; then
+  echo "FAIL: pi CLI is required for t25-pi-tarball-install-smoke; install @earendil-works/pi-coding-agent"
+  exit 1
+fi
+
 PACK_DIR="$TMP/pack"
 INSTALL_ROOT="$TMP/npm-install"
 AGENT_DIR="$TMP/pi-agent"

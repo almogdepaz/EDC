@@ -199,21 +199,46 @@ else
   cat pi-calls.log 2>/dev/null || true
 fi
 
+alias_before=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >alias-update.out 2>alias-update.err
+rc=$?
+alias_after=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' alias-update.out && [ "$alias_after" -gt "$alias_before" ]; then
+  check "18.8: pi backend forwards EDC_PI_MODEL exactly" 1
+else
+  check "18.8: pi backend forwards EDC_PI_MODEL exactly" 0
+  cat alias-update.out alias-update.err
+  cat pi-calls.log 2>/dev/null || true
+fi
+
+rm -f review-HEAD.md
+raw_before=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
+PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 >raw-model-review.out 2>raw-model-review.err
+rc=$?
+raw_after=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
+if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md && [ "$raw_after" -gt "$raw_before" ]; then
+  check "18.9: raw edc-review.sh accepts --agent/--model and forwards model exactly" 1
+else
+  check "18.9: raw edc-review.sh accepts --agent/--model and forwards model exactly" 0
+  cat raw-model-review.out raw-model-review.err
+  cat pi-calls.log 2>/dev/null || true
+fi
+
 PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
-  check "18.8: pi backend stops reading after agent_end" 1
+  check "18.10: pi backend stops reading after agent_end" 1
 else
-  check "18.8: pi backend stops reading after agent_end" 0
+  check "18.10: pi backend stops reading after agent_end" 0
   cat hang-update.out hang-update.err
 fi
 
 PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >agent-end-error.out 2>agent-end-error.err
 rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'provider down' agent-end-error.err; then
-  check "18.9: pi backend fails on agent_end assistant error" 1
+  check "18.11: pi backend fails on agent_end assistant error" 1
 else
-  check "18.9: pi backend fails on agent_end assistant error" 0
+  check "18.11: pi backend fails on agent_end assistant error" 0
   cat agent-end-error.out agent-end-error.err
 fi
 

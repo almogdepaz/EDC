@@ -109,6 +109,8 @@ run_with_timeout() {
   exec 3<&0
   "$@" <&3 &
   local cmd_pid=$!
+  local watchdog_pid=""
+  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; exit 143' TERM INT
   exec 3<&-
   # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
   # the pipe write-end. If it did, the sleep (reparented to init when the
@@ -116,21 +118,16 @@ run_with_timeout() {
   # blocked for the full watchdog duration after the real command already exited.
   (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
     echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
-  local watchdog_pid=$!
+  watchdog_pid=$!
   wait "$cmd_pid"
   local rc=$?
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
+  trap - TERM INT
   return $rc
 }
 
-# ── codex isolation ──────────────────────────────────────────────────────────
-
-cleanup_codex_exec_home() {
-  if [ "${CODEX_EXEC_HOME_OWNED:-0}" -eq 1 ] && [ -n "${CODEX_EXEC_HOME:-}" ] && [ -d "$CODEX_EXEC_HOME" ]; then
-    rm -rf "$CODEX_EXEC_HOME"
-  fi
-}
+# ── codex home override ──────────────────────────────────────────────────────
 
 ensure_codex_exec_home() {
   if [ -n "${CODEX_EXEC_HOME:-}" ]; then
@@ -140,14 +137,10 @@ ensure_codex_exec_home() {
   if [ -n "${EDC_CODEX_HOME:-}" ]; then
     mkdir -p "$EDC_CODEX_HOME"
     CODEX_EXEC_HOME="$EDC_CODEX_HOME"
-    CODEX_EXEC_HOME_OWNED=0
     return 0
   fi
 
-  CODEX_EXEC_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-codex-home.XXXXXX") \
-    || { echo "ERROR: could not create temporary CODEX_HOME" >&2; return 1; }
-  CODEX_EXEC_HOME_OWNED=1
-  trap cleanup_codex_exec_home EXIT
+  CODEX_EXEC_HOME=""
 }
 
 edc_require_agent_cli() {
@@ -214,7 +207,7 @@ proc = subprocess.Popen(
     cmd,
     stdin=subprocess.DEVNULL,
     stdout=subprocess.PIPE,
-    stderr=None,
+    stderr=subprocess.STDOUT,
     text=True,
     bufsize=1,
 )
@@ -310,11 +303,100 @@ PY
 
 # ── stream filter ────────────────────────────────────────────────────────────
 
+edc_is_codex_auth_failure_text() {
+  case "$1" in
+    *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+edc_print_codex_auth_failure() {
+  printf '%s\n' "ERROR: Codex authentication failed. Run 'codex logout && codex login' for ChatGPT OAuth, or pipe an API key with 'codex login --with-api-key'." >&2
+}
+
+edc_is_model_rejection_text() {
+  local text
+  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  case "$text" in
+    *model*not\ found*|*model*not\ supported*|*unsupported\ model*|*unknown\ model*|*invalid\ model*|*model_not_found*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+edc_print_agent_model_list_hint() {
+  local agent="$1" model="$2" output=""
+  case "$agent" in
+    pi)
+      if command -v pi >/dev/null 2>&1; then
+        if [ -n "$TIMEOUT_BIN" ]; then
+          output=$("$TIMEOUT_BIN" 10 pi --list-models "$model" 2>&1 || true)
+          [ -n "$output" ] || output=$("$TIMEOUT_BIN" 10 pi --list-models 2>&1 || true)
+        else
+          output=$(pi --list-models "$model" 2>&1 || true)
+          [ -n "$output" ] || output=$(pi --list-models 2>&1 || true)
+        fi
+        if [ -n "$output" ]; then
+          printf '%s\n' "available pi models matching '$model' (or all models if no exact search result):" >&2
+          printf '%s\n' "$output" | sed -n '1,80p' >&2
+          return 0
+        fi
+      fi
+      printf '%s\n' "could not fetch pi models. run: pi --list-models" >&2
+      ;;
+    codex)
+      printf '%s\n' "Codex CLI does not expose a stable model-list command in this version. Run 'codex --help', omit --model to use the backend default, or choose a model supported by your Codex auth mode." >&2
+      ;;
+    claude)
+      printf '%s\n' "Claude CLI does not expose a stable model-list command in this version. Run 'claude --help', omit --model to use the backend default, or use a supported alias/full model name." >&2
+      ;;
+    *)
+      printf '%s\n' "omit --model to use the backend default, or choose a model supported by '$agent'." >&2
+      ;;
+  esac
+}
+
+edc_print_model_rejection() {
+  local agent="${STREAM_FILTER_AGENT:-${EDC_AGENT_CLI:-agent}}"
+  local model="${STREAM_FILTER_MODEL:-}"
+  local message="$1"
+  if [ -n "$model" ]; then
+    printf '%s\n' "ERROR: model '$model' was rejected by $agent: $message" >&2
+    edc_print_agent_model_list_hint "$agent" "$model"
+  else
+    printf '%s\n' "ERROR: model was rejected by $agent: $message" >&2
+    printf '%s\n' "hint: omit --model to use the backend default, or set EDC_BUILD_MODEL / EDC_REVIEW_MODEL to a supported model." >&2
+  fi
+}
+
 # stream_filter: read NDJSON from agent CLI output and print human-readable
 # progress lines. Handles Claude, Cursor, and Codex formats.
 stream_filter() {
   while IFS= read -r line; do
     [ -z "$line" ] && continue
+    if [ -n "${STREAM_FILTER_CAPTURE:-}" ]; then
+      printf '%s\n' "$line" >> "$STREAM_FILTER_CAPTURE" 2>/dev/null || true
+    fi
+    if edc_is_codex_auth_failure_text "$line"; then
+      edc_print_codex_auth_failure
+      return 86
+    fi
+    case "$line" in
+      \{*) ;;
+      *)
+        if edc_is_model_rejection_text "$line"; then
+          edc_print_model_rejection "$line"
+          return 87
+        fi
+        ;;
+    esac
     # type=assistant with text content
     text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
     if [ -n "$text" ]; then
@@ -338,9 +420,20 @@ stream_filter() {
       continue
     fi
     # type=result with is_error=true
-    err=$(printf '%s' "$line" | jq -r 'if .type == "result" and .is_error == true then "ERROR (subprocess): \(.result // "unknown error")" else empty end' 2>/dev/null)
-    if [ -n "$err" ]; then
-      printf '%s\n' "$err" >&2
+    err_msg=$(printf '%s' "$line" | jq -r '
+      def readable_error($v):
+        if ($v | type) == "string" then
+          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
+        else
+          ($v.error.message // $v.message // ($v | tostring))
+        end;
+      if .type == "result" and .is_error == true then readable_error(.result // "unknown error") else empty end' 2>/dev/null)
+    if [ -n "$err_msg" ]; then
+      if edc_is_model_rejection_text "$err_msg"; then
+        edc_print_model_rejection "$err_msg"
+        return 87
+      fi
+      printf '%s\n' "ERROR (subprocess): $err_msg" >&2
       continue
     fi
     # Pi JSON mode: stream text deltas and tool starts from AgentSession events.
@@ -357,6 +450,10 @@ stream_filter() {
       elif .type == "auto_retry_end" and .success == false then "ERROR (subprocess): \(.finalError // "provider request failed")"
       else empty end' 2>/dev/null)
     if [ -n "$pi_err" ]; then
+      if edc_is_model_rejection_text "$pi_err"; then
+        edc_print_model_rejection "$pi_err"
+        return 87
+      fi
       printf '%s\n' "$pi_err" >&2
       continue
     fi
@@ -373,12 +470,30 @@ stream_filter() {
       continue
     fi
     # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
-    codex_err=$(printf '%s' "$line" | jq -r '
-      if .type == "error" then "ERROR (subprocess): \(.message // "unknown error")"
-      elif (.msg.type // "") == "error" then "ERROR (subprocess): \(.msg.message // "unknown error")"
+    codex_err_msg=$(printf '%s' "$line" | jq -r '
+      def readable_error($v):
+        if ($v | type) == "string" then
+          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
+        else
+          ($v.error.message // $v.message // ($v | tostring))
+        end;
+      if .type == "error" then readable_error(.message // .error // "unknown error")
+      elif (.msg.type // "") == "error" then readable_error(.msg.message // "unknown error")
       else empty end' 2>/dev/null)
-    if [ -n "$codex_err" ]; then
-      printf '%s\n' "$codex_err" >&2
+    if [ -n "$codex_err_msg" ]; then
+      case "$codex_err_msg" in
+        *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
+          edc_print_codex_auth_failure
+          return 86
+          ;;
+        *)
+          if edc_is_model_rejection_text "$codex_err_msg"; then
+            edc_print_model_rejection "$codex_err_msg"
+            return 87
+          fi
+          printf '%s\n' "ERROR (subprocess): $codex_err_msg" >&2
+          ;;
+      esac
     fi
   done
 }
@@ -518,6 +633,64 @@ _edc_log_spawn_metrics() {
   fi
 }
 
+edc_kill_process_tree() {
+  local pid="$1" child
+  [ -n "$pid" ] || return 0
+  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+    edc_kill_process_tree "$child"
+  done
+  kill "$pid" 2>/dev/null || true
+}
+
+edc_run_codex_stream() {
+  local timeout_secs="$1" phase="$2" capture="$3" effective_prompt="$4"
+  shift 4
+
+  local fifo timeout_flag
+  fifo=$(mktemp "${TMPDIR:-/tmp}/edc-codex-stream-$$.XXXXXX") || return 1
+  timeout_flag=$(mktemp "${TMPDIR:-/tmp}/edc-codex-timeout-$$.XXXXXX") || { rm -f "$fifo"; return 1; }
+  : > "$timeout_flag"
+  rm -f "$fifo"
+  mkfifo "$fifo" || { rm -f "$fifo" "$timeout_flag"; return 1; }
+
+  "$@" <<< "$effective_prompt" > "$fifo" 2>&1 &
+  local cmd_pid=$!
+  (sleep "$timeout_secs" && {
+    printf '1' > "$timeout_flag"
+    edc_kill_process_tree "$cmd_pid"
+  }) >/dev/null 2>&1 &
+  local watchdog_pid=$!
+  local filter_rc=0
+
+  if [ -n "$capture" ]; then
+    STREAM_FILTER_CAPTURE="$capture" stream_filter < "$fifo"
+    filter_rc=$?
+  else
+    stream_filter < "$fifo"
+    filter_rc=$?
+  fi
+
+  if [ "$filter_rc" -eq 86 ] || [ "$filter_rc" -eq 87 ]; then
+    edc_kill_process_tree "$cmd_pid"
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    rm -f "$fifo" "$timeout_flag"
+    return 1
+  fi
+
+  wait "$cmd_pid"
+  local runner_rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  if [ -s "$timeout_flag" ]; then
+    echo "ERROR: phase '$phase' timed out after ${timeout_secs}s" >&2
+    runner_rc=1
+  fi
+  rm -f "$fifo" "$timeout_flag"
+  return "$runner_rc"
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # 5. SPAWN — per-CLI subprocess dispatch.
 # ════════════════════════════════════════════════════════════════════════════
@@ -590,13 +763,13 @@ edc_spawn() {
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
-            | tee "$capture" | stream_filter
+            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
-            | stream_filter
+            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         fi
       else
@@ -604,12 +777,12 @@ edc_spawn() {
         if [ -n "$capture" ]; then
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
-            | tee "$capture" | stream_filter
+            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
-            | stream_filter
+            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
           rc=${PIPESTATUS[0]}
         fi
       fi
@@ -628,17 +801,22 @@ edc_spawn() {
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
-          | tee "$capture" | stream_filter
+          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
-          | stream_filter
+          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       fi
       ;;
     codex)
-      local -a cmd=(env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write)
+      local -a cmd=()
+      if [ -n "$CODEX_EXEC_HOME" ]; then
+        cmd=(env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write)
+      else
+        cmd=(codex exec --json --color never --sandbox workspace-write)
+      fi
       [ -n "$model" ] && cmd+=(--model "$model")
       cmd+=(-)
       local effective_prompt
@@ -647,17 +825,8 @@ edc_spawn() {
       else
         effective_prompt="$prompt"
       fi
-      if [ -n "$capture" ]; then
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | tee "$capture" | stream_filter
-        rc=${PIPESTATUS[0]}
-      else
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | stream_filter
-        rc=${PIPESTATUS[0]}
-      fi
+      STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" edc_run_codex_stream "$timeout_secs" "$phase" "$capture" "$effective_prompt" "${cmd[@]}"
+      rc=$?
       ;;
     pi)
       local effective_prompt_file="" cleanup_prompt_file=0
@@ -679,12 +848,12 @@ edc_spawn() {
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | tee "$capture" | stream_filter
+          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | stream_filter
+          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         rc=${PIPESTATUS[0]}
       fi
       rm -f "$pi_supervisor"

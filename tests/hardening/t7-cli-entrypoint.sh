@@ -61,6 +61,9 @@ esac
 out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
 mkdir -p "$out"
 printf '%s\n' "${EDC_AGENT_CLI:-}" > "$out/agent"
+printf '%s\n' "${EDC_BUILD_MODEL:-}" > "$out/build_model"
+printf '%s\n' "${EDC_REVIEW_MODEL:-}" > "$out/review_model"
+printf '%s\n' "${EDC_PI_MODEL:-}" > "$out/pi_model"
 printf '%s\n' "$1" > "$out/script"
 shift
 printf '%s\n' "$@" > "$out/args"
@@ -130,6 +133,17 @@ if [ "$(cat "$CAPTURE/build/agent")" = "pi" ]; then
   echo "PASS: pi build accepts EDC_PI_MODEL-only configuration"
 else
   echo "FAIL: pi build rejected EDC_PI_MODEL-only configuration"
+  exit 1
+fi
+
+# ── 7c2: pi model slugs are forwarded exactly ───────────────────────────────
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli --model gpt-5.5 review --agent pi HEAD --base main)
+if [ "$(cat "$CAPTURE/review/review_model")" = "gpt-5.5" ]; then
+  echo "PASS: pi review forwards model slug without mutation"
+else
+  echo "FAIL: pi review mutated model slug"
+  cat "$CAPTURE/review/review_model"
   exit 1
 fi
 

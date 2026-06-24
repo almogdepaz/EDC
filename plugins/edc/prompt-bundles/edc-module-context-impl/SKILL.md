@@ -3,7 +3,7 @@ name: edc-module-context-impl
 description: Enables ultra-granular, line-by-line code analysis to build deep architectural context for any codebase.
 ---
 
-# Module Context Methodology (Ultra-Granular Pure Context Mode)
+# Module Context Methodology (Distilled High-Signal Context Mode)
 
 ## 1. Purpose
 
@@ -16,9 +16,11 @@ When active, the agent will:
 - Maintain a stable, explicit mental model that evolves with new evidence.
 - Identify invariants, assumptions, flows, and reasoning hazards.
 
+Ultra-granular analysis depth is the reasoning method, not the persisted artifact shape. The final module doc must be distilled high-signal module context: persist only what saves a future agent time or prevents wrong assumptions. If an agent can discover it with one Read, Grep, or Glob, leave it out.
+
 This skill defines a structured analysis format (see Example: Function Micro-Analysis below) and runs **before** the vulnerability-hunting phase.
 
-When invoked from a v2 build, the per-module deep-context output is written to `edc-context/modules/<name>.md` (one file per module, kebab-case names). Do not write per-module docs at the top level of `edc-context/`.
+When invoked from a v2 build, the per-module distilled-context output is written to `edc-context/modules/<name>.md` (one file per module, kebab-case names). Do not write per-module docs at the top level of `edc-context/`.
 
 ---
 
@@ -48,7 +50,7 @@ When active, the agent will:
 - Periodically anchor summaries to maintain stable context.
 - Avoid speculation; express uncertainty explicitly when needed.
 
-Goal: **deep, accurate understanding**, not conclusions.
+Goal: **deep, accurate understanding**, then a concise persisted doc containing non-obvious contracts and hazards, not exhaustive code narration.
 
 ---
 
@@ -206,18 +208,35 @@ This example demonstrates the level of depth and structure required for all anal
 
 ### 5.4 Output Requirements
 
-When performing ultra-granular analysis, the agent MUST structure output following the format defined in [OUTPUT_REQUIREMENTS.md](resources/OUTPUT_REQUIREMENTS.md).
+When performing ultra-granular analysis, use [OUTPUT_REQUIREMENTS.md](resources/OUTPUT_REQUIREMENTS.md) as the private scratch/reasoning structure. Do not dump that scratch structure directly into the final module doc unless a detail passes the signal filter.
 
-Key requirements:
-- **Purpose** (2-3 sentences minimum)
-- **Inputs & Assumptions** (all parameters, preconditions, trust assumptions)
-- **Outputs & Effects** (returns, state writes, external calls, events, postconditions)
-- **Block-by-Block Analysis** (What, Why here, Assumptions, First Principles/5 Whys/5 Hows)
-- **Cross-Function Dependencies** (internal calls, external calls with risk analysis, shared state)
+The final persisted doc MUST be distilled high-signal module context. Keep:
+- read-boundary guidance when it changes agent behavior: when to read this module doc, when not to read it, and what adjacent docs are conditional rather than mandatory
+- ownership/authority boundaries near the start of the doc
+- implicit contracts and ordering constraints
+- cross-module coupling and cascade risks
+- trust boundaries and validation authority
+- historical footguns, fragility points, and test/debug gotchas
+- source-truth pointers for exact constants, schemas, enum values, timeouts, limits, generated artifacts, or protocol workflow details mentioned in prose
+- rationale not obvious from reading source
 
-Quality thresholds:
-- Minimum 3 invariants per function
-- Minimum 5 assumptions documented
+Use explicit headings such as `## When To Read This` or `## Source Pointers` for ambiguous or high-blast-radius modules when they help scanning. Equivalent concise prose is acceptable for tiny/obvious modules. Do not add empty template sections just to satisfy a shape.
+
+Avoid exact reference material. Do not copy numeric constants, enum values, schema fields, service lists, file modes, timeout/count tables, generated artifact lists, command inventories, or protocol message maps unless the exact literal is necessary to explain a non-obvious invariant. Prefer category-level prose plus a source pointer. If keeping a literal, mark it as a snapshot and name the authoritative source file.
+
+Submodule/gitlink boundary rule: when the target is a git submodule/gitlink or otherwise only represented by a boundary pointer, write boundary-only context unless the task explicitly provides indexed submodule files. do not infer internal architecture, package structure, APIs, IPC, framework choices, permissions, or workflows from a submodule name. State that the parent repo owns only the visible integration boundary and that future agents must inspect the submodule checkout/source before relying on internals.
+
+Drop:
+- file inventories
+- function-by-function summaries
+- obvious call listings
+- line-by-line narration
+- copied constants, enum tables, schemas, message ids, field lists, timeout/count tables, service lists, or long workflow traces that should point to source truth
+- facts discoverable with one Read, Grep, or Glob
+
+Quality thresholds apply to the reasoning pass, not to persisted prose:
+- Minimum 3 invariants per non-trivial function considered during analysis
+- Minimum 5 assumptions documented in scratch while deriving module-level contracts
 - Minimum 3 risk considerations for external interactions
 - At least 1 First Principles application
 - At least 3 combined 5 Whys/5 Hows applications
@@ -299,12 +318,14 @@ This skill governs analysis of a **single target**. The target may be a whole re
 
 When invoked from the v2 build orchestrator (`edc-build-impl`), this skill is spawned **per-module**: the agent's target is one module, sibling modules are accessed only through their signature index (no sibling source bodies), and the orchestrator never reads source code itself.
 
-**Mandatory split rule.** If the target exceeds the agent's working budget (heuristic: > ~30k LOC, > ~80 source files, or any single file > ~3k LOC), the agent MUST split the target into submodules and spawn nested subagents — one per submodule — instead of attempting a single pass. Reading the entire target into one context is not an option for large targets.
+**Large target rule.** If the target is broad or exceeds the agent's working budget (heuristic: > ~30k LOC, > ~80 source files, or any single file > ~3k LOC), preserve the whole-target mental model first. Produce a concise parent context that explains the shared authority, invariants, coupling, and failure modes across the target. For broad test/tooling/support targets, add internal sub-routing or harness/workflow guidance so future agents can choose the right source/test area without losing the general context.
+
+Do not split solely because LOC or file count is high. Large coherent modules often need one general context doc so agents can reason across files. Split or promote only when subareas have independent durable ownership contracts, separate authority boundaries, or unrelated verification workflows that would make one parent doc misleading. If splitting would produce filesystem shards or inventory docs, keep the parent doc and add internal routing guidance instead.
 
 Subagents (nested or top-level) must:
 - Run with a clean context (no parent conversation inheritance).
 - Follow the same micro-first rules defined in this skill.
-- Write per-target deep docs directly to disk at the path the orchestrator specifies.
+- Write distilled high-signal context directly to disk at the path the orchestrator specifies.
 - Return a bounded summary (≤500 tokens) for the parent to integrate.
 
 Within a single-target run, the agent may also spawn nested subagents for:

@@ -13,34 +13,17 @@ MANIFEST="$EDC_MANIFEST"
 INDEX="$EDC_INDEX"
 ROOT_AGENTS="$EDC_ROOT_AGENTS"
 ALT_AGENTS="$EDC_ALT_AGENTS"
-ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
-TMP_ERR="${TMPDIR:-/tmp}/edc-doctor-route.$$"
+CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
 
 command -v jq >/dev/null 2>&1 || { echo "edc-doctor: jq required" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "edc-doctor: git required" >&2; exit 2; }
-[ -f "$ROUTE_SH" ] || { echo "edc-doctor: missing $ROUTE_SH" >&2; exit 2; }
+[ -f "$CLASSIFY_SH" ] || { echo "edc-doctor: missing $CLASSIFY_SH" >&2; exit 2; }
 
 failures=0
-
-cleanup() {
-  rm -f "$TMP_ERR"
-}
-trap cleanup EXIT
 
 fail() {
   echo "edc-doctor: $*" >&2
   failures=$((failures + 1))
-}
-
-matches_allowed_glob() {
-  local path="$1"
-  while IFS= read -r glob; do
-    [ -n "$glob" ] || continue
-    if [[ "$path" == $glob ]]; then
-      return 0
-    fi
-  done < <(jq -r '.unmapped.allowedGlobs[]? // empty' "$MANIFEST")
-  return 1
 }
 
 edc_entrypoint_valid || fail "missing valid EDC agent entrypoint: expected generated $ROOT_AGENTS, or generated $ALT_AGENTS referenced from $ROOT_AGENTS/$EDC_CLAUDE_AGENTS"
@@ -69,25 +52,33 @@ if [ -f "$MANIFEST" ]; then
 fi
 
 if [ "$failures" -eq 0 ]; then
+  ignore_args=()
+  while IFS= read -r glob; do
+    [ -n "$glob" ] || continue
+    ignore_args+=(--ignore "$glob")
+  done < <(jq -r '.coverage.ignoreGlobs[]? // empty' "$MANIFEST")
+
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     set +e
-    "$EDC_BASH" "$ROUTE_SH" "$MANIFEST" "$path" >/dev/null 2>"$TMP_ERR"
+    state=$("$EDC_BASH" "$CLASSIFY_SH" "${ignore_args[@]}" "$MANIFEST" "$path" 2>&1)
     rc=$?
     set -e
-    case "$rc" in
-      0)
+    if [ "$rc" -ne 0 ]; then
+      fail "classifier failed for $path (rc=$rc): $state"
+      continue
+    fi
+    case "$state" in
+      ignored|context-module:*|contextless:*)
         ;;
-      1)
-        if ! matches_allowed_glob "$path"; then
-          fail "orphan tracked path not covered by manifest or unmapped.allowedGlobs: $path"
-        fi
+      uncovered)
+        fail "uncovered tracked path not covered by manifest modules or contextless.entries: $path"
         ;;
-      2)
-        fail "ambiguous routing for $path: $(cat "$TMP_ERR")"
+      ambiguous)
+        fail "ambiguous routing for $path"
         ;;
       *)
-        fail "routing helper failed for $path (rc=$rc)"
+        fail "classifier returned invalid state for $path: $state"
         ;;
     esac
   done < <(git ls-files)

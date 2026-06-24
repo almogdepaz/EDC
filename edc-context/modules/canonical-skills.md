@@ -9,18 +9,18 @@ Owns all canonical prompt bundles and methodology documents consumed by EDC subp
 ## Purpose
 This module defines what spawned agents are instructed to do. Private implementation bundles (`edc-build-impl`, `edc-update-impl`, `edc-module-context-impl`) are resolved by orchestrators. Public skills (`edc-review`, `edc-audit`) are exposed to humans and agent wrappers. The runtime invokes the same bundles from Claude, Cursor, Codex, and Pi; prompt text remains backend-neutral while `runtime-cli` injects backend/install-specific script-substitution preambles.
 
-The current repository packaging keeps private implementation bundles hidden from normal Pi resource discovery while still installing/copying them into `.edc/skills` for orchestrator subprocesses. Hardening tests seed a temporary HOME with these bundles so prompt-resolution behavior is deterministic in CI.
+The current prompt contract makes `edc-context/index.md` a routing-first operational index and treats ultra-granular module analysis as private reasoning rather than persisted prose. Module docs should retain non-obvious contracts, coupling, trust boundaries, and footguns while dropping scratch analysis and obvious inventories. Packaging still keeps private implementation bundles hidden from normal Pi resource discovery while installing/copying them into `.edc/skills` for orchestrator subprocesses.
 
 ## Skill inventory
-- `edc-build-impl`: full v2 context build contract, module discovery/fanout, reports, manifest post-step, `AGENTS.md` entrypoint, and validation.
-- `edc-update-impl`: incremental update contract for changed files/modules; preserves runtime policy and refreshes manifest through the deterministic post-step.
-- `edc-module-context-impl`: granular per-module analysis methodology covering invariants, assumptions, state/flag/arithmetic/error paths, and clean subagent isolation.
-- `edc-review`: differential review methodology with scoped task-file mode, context loading, risk triage, git history, blast radius, adversarial analysis, and report artifacts.
+- `edc-build-impl`: full v2 context build contract, mandatory module fanout, routing-first index shape, reports, manifest post-step, `AGENTS.md` entrypoint, and validation.
+- `edc-update-impl`: incremental update contract for changed files/modules; preserves runtime policy, avoids noisy index rewrites for local-only changes, and refreshes manifest through the deterministic post-step.
+- `edc-module-context-impl`: micro-first analysis methodology whose persisted output is distilled high-signal module context, not scratch analysis or obvious inventory.
+- `edc-review`: differential review methodology with scoped task-file mode, routing-index context loading, risk triage, git history, blast radius, adversarial analysis, and report artifacts.
 - `edc-audit`: complexity/bloat/duplication audit methodology producing `edc-context/reports/{complexity,issues}.md`.
 
 ## Key documents
-- `edc-build-impl/manifest-schema.md`: authoritative v2 manifest schema, routing algorithm, field ownership, AGENTS template, and doctor validation rules.
-- `edc-build-impl/adapter-contract.md`: integration contract for context adapters.
+- `edc-build-impl/manifest-schema.md`: authoritative v2 manifest schema, routing algorithm, field ownership, routing-index AGENTS template, and doctor validation rules.
+- `edc-build-impl/adapter-contract.md`: integration contract for context adapters that treats `index.md` as the routing/coupling/invariant entrypoint, not just an architecture overview.
 - `edc-module-context-impl/resources/*`: output/completeness examples and checklists.
 - `edc-review/{methodology,adversarial,reporting,patterns}.md`: detailed review workflow embedded by `runtime-cli` into per-module review prompts.
 
@@ -31,6 +31,7 @@ The current repository packaging keeps private implementation bundles hidden fro
 - Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, or review-task routing.
 - v2 paths are canonical; v1 paths (`edc-context/.meta.json`, top-level `context.md`, top-level reports) are forbidden in production context.
 - Clean-slate isolation is part of the contract: module context, review, and audit analysis should run in fresh subprocesses with only code and skill prompt context.
+- Persisted module docs and the index must pass the signal filter: keep contracts/coupling/hazards; omit anything a future agent can rediscover with one Read, Grep, or Glob.
 - Manifest authoring is split: LLM authors structural fields; `edc-manifest.sh` owns `generatedAt`, `sourceCommit`, and coverage counts.
 - `policy.defaultMode` is operator-controlled and must be preserved by rebuild/update flows.
 - Public skills and private implementation bundles must remain distinguishable; Pi resource discovery intentionally exposes only public review/audit skills.
@@ -54,3 +55,4 @@ The current repository packaging keeps private implementation bundles hidden fro
 - Duplicate/private bundle material versus public skill material requires installer/resource discovery discipline.
 - Host support for clean subprocesses varies; the build skill's fanout contract depends on `runtime-cli` enforcing isolated spawns.
 - Prompt text references helper paths that are only valid in the dev repo; the runtime preamble must stay aligned with installer layout and `EDC_BASH` semantics.
+- Routing-first index requirements are now prompt/test-enforced; changing section labels/order can break review guidance and hardening tests even when runtime routing still works.

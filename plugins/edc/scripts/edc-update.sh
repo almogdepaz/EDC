@@ -189,7 +189,16 @@ update_main() {
     exit 1
   fi
 
-  echo "Update OK. Layout validated by edc-doctor."
+  edc_run_context_curator || exit 1
+  edc_run_context_curator_edit || exit 1
+
+  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+    echo "ERROR: context curator edit produced an invalid v2 layout (edc-doctor failed)" >&2
+    exit 1
+  fi
+  edc_remove_context_curator_report
+
+  echo "Update OK. Layout validated by edc-doctor; context curator report/edit pass completed."
   exit 0
 }
 

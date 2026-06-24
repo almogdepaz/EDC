@@ -30,16 +30,28 @@ set -euo pipefail
 prompt=$(cat)
 LOG="${EDC_T13_LOG:?}"
 echo "spawned: $(echo "$prompt" | head -1)" >> "$LOG"
-echo "$prompt" > "$EDC_T13_LOG.prompt"
 
-if [[ "$prompt" == *"edc-update"* ]]; then
+if [[ "$prompt" == *"name: edc-update-impl"* ]] || [[ "$prompt" == *"# Update Context"* ]]; then
+  echo "$prompt" > "$EDC_T13_LOG.prompt"
   head=$(git rev-parse HEAD)
   sed -i.bak 's/"sourceCommit":"[^"]*"/"sourceCommit":"'"$head"'"/' edc-context/manifest.json
   rm -f edc-context/manifest.json.bak
   exit 0
 fi
 
-if [[ "$prompt" == *"edc-build"* ]]; then
+if [[ "$prompt" == *"name: edc-context-curator-edit-impl"* ]]; then
+  echo "curator-edit" >> "$LOG"
+  exit 0
+fi
+
+if [[ "$prompt" == *"edc-context-curator-impl"* ]] || [[ "$prompt" == *"Context Curator"* ]]; then
+  echo "curator" >> "$LOG"
+  mkdir -p edc-context/reports
+  printf '# Context Curation Report\n\n## Summary\n- t13 curator\n' > edc-context/reports/context-curation.md
+  exit 0
+fi
+
+if [[ "$prompt" == *"name: edc-build-impl"* ]] || [[ "$prompt" == *"# Build Context"* ]]; then
   # Should never happen in T13 — update orchestrator must not spawn build.
   echo "MOCK ERROR: update orchestrator spawned a build" >&2
   exit 1
@@ -61,6 +73,9 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
+  mkdir -p .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl
+  printf '%s\n' '---' 'name: edc-context-curator-impl' '---' '# Context Curator' > .edc/skills/edc-context-curator-impl/SKILL.md
+  printf '%s\n' '---' 'name: edc-context-curator-edit-impl' '---' '# Context Curator Edit' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T13/log"

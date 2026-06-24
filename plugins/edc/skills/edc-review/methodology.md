@@ -7,9 +7,9 @@ Detailed phase-by-phase workflow for code review.
 **FIRST ACTION — Check for existing context, then build baseline if needed:**
 
 If `edc-context/index.md` exists in the repository:
-1. Read `edc-context/index.md` for architecture overview, module map, actors, invariants, trust boundaries, coupling
+1. Read `edc-context/index.md` for the `Route by path/task` table, critical invariants, trust boundaries, coupling/blast-radius notes, compact architecture, and report links
 2. This IS your baseline — skip the full context build
-3. Map changed files to modules using the Module Map table
+3. Use `edc-context/manifest.json` or orchestrator-provided task files for authoritative path→module routing; do not treat the human routing table as the machine contract
 4. Load `edc-context/modules/{module}.md` for affected modules
 5. Load `edc-context/reports/issues.md` to check if changes touch known issues
 
@@ -67,8 +67,8 @@ find . -type f \( -name "*.ts" -o -name "*.rs" -o -name "*.go" -o -name "*.py" -
 - **LOW**: Comments, tests, UI, logging
 
 **Context-aware triage (if `edc-context/` exists):**
+- Check `edc-context/index.md` `Route by path/task` and `Cross-module coupling / blast radius` sections — does this change have cascade risk?
 - Check `edc-context/reports/issues.md` — does this PR touch files with known issues?
-- Check module coupling in `edc-context/index.md` — does this change have cascade risk?
 - Elevate risk for changes touching fragility clusters documented in `edc-context/modules/{module}.md`
 
 ---
@@ -269,9 +269,10 @@ grep -r "functionName(" . --include="*.ts" --include="*.rs" --include="*.py" | w
 - 50+ calls: CRITICAL
 
 **Context-aware blast radius (if `edc-context/` exists):**
-- Cross-module coupling section in `edc-context/index.md` maps cascade paths
+- `Route by path/task` in `edc-context/index.md` identifies what to read first and what else to inspect for cross-boundary work
+- `Cross-module coupling / blast radius` in `edc-context/index.md` maps cascade paths
 - `edc-context/modules/{module}.md` documents which modules depend on the changed module
-- Use these instead of grep when available — they capture non-obvious coupling
+- Use these before broad grep when available — they capture non-obvious coupling
 
 **Priority matrix:**
 

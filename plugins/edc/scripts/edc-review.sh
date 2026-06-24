@@ -59,6 +59,7 @@ SCRIPT_DIR="$(_edc_resolve_script_dir)"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
+CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -200,17 +201,42 @@ write_allowed_unmapped_report() {
     echo ""
     echo "## What Changed"
     echo ""
-    echo "The following changed paths match \`$MANIFEST\` \`unmapped.allowedGlobs\` and are intentionally outside module ownership:"
+    echo "The following changed paths match \`$MANIFEST\` legacy \`unmapped.allowedGlobs\` and are intentionally outside module ownership:"
     echo ""
     echo "$files" | grep -v '^$' | sed 's/^/- `/' | sed 's/$/`/'
     echo ""
     echo "## Findings"
     echo ""
-    echo "No module review was spawned for these paths. They are explicitly allowed as unmapped, so they are intentionally skipped but still accounted for in the final review."
+    echo "No module review was spawned for these paths. They are explicit account-only contextless coverage, so they are intentionally skipped but still accounted for in the final review."
     echo ""
     echo "## Coverage Notes"
     echo ""
-    echo "Unexpected unmapped source files are still routed through the synthetic \`unmapped\` review task according to \`policy.unmatchedPathPolicy\`."
+    echo "Unexpected uncovered source files are still routed through the synthetic \`unmapped\` review task according to \`policy.unmatchedPathPolicy\`."
+  } > "$report"
+}
+
+write_contextless_account_report() {
+  local module="$1"
+  local contextless_id="$2"
+  local files="$3"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+
+  {
+    echo "# Differential Review Report: ${module}"
+    echo ""
+    echo "## What Changed"
+    echo ""
+    echo "The following changed paths match \`$MANIFEST\` \`contextless.entries[]\` id \`${contextless_id}\` with \`reviewPolicy=account-only\`:"
+    echo ""
+    echo "$files" | grep -v '^$' | sed 's/^/- `/' | sed 's/$/`/'
+    echo ""
+    echo "## Findings"
+    echo ""
+    echo "No module review was spawned for these paths. They are intentionally contextless and accounted only."
+    echo ""
+    echo "## Coverage Notes"
+    echo ""
+    echo "If a future diff reveals durable agent context here, run update to promote the path into a real context module."
   } > "$report"
 }
 
@@ -603,13 +629,11 @@ TASK
     return 0
   fi
 
-  # Step 3: group by module via $EDC_MANIFEST routing.
-  # Use edc-route.sh - single source of truth, same logic the hooks use.
-  # Files with no module match go into a synthetic "unmapped" bucket and
-  # are surfaced according to policy.unmatchedPathPolicy. Ambiguous routing
-  # is a hard error (manifest bug, refuse to silently pick a winner).
-  if [ ! -x "$ROUTE_SH" ] && [ ! -f "$ROUTE_SH" ]; then
-    echo "ERROR: edc-route.sh not found at $ROUTE_SH" >&2
+  # Step 3: classify changed files through the shared coverage classifier.
+  # Real modules get normal module-review tasks. Contextless paths follow their
+  # deterministic reviewPolicy and never load fake module docs.
+  if [ ! -f "$CLASSIFY_SH" ]; then
+    echo "ERROR: edc-classify-path.sh not found at $CLASSIFY_SH" >&2
     exit 2
   fi
 
@@ -624,111 +648,121 @@ TASK
       ;;
   esac
 
-  # Pre-compile allowedGlobs so we can suppress per-file warnings for paths
-  # the manifest already declared as expected-unmapped (README, package.json,
-  # docs/*, etc).
-  local -a allowed_globs=()
-  while IFS= read -r g; do
-    [ -n "$g" ] && allowed_globs+=("$g")
-  done < <(jq -r '.unmapped.allowedGlobs // [] | .[]' "$MANIFEST")
-
-  _is_expected_unmapped() {
-    local path="$1" g
-    for g in "${allowed_globs[@]}"; do
-      # shellcheck disable=SC2053
-      [[ "$path" == $g ]] && return 0
-    done
-    return 1
-  }
-
-  declare -A MODULE_FILES
-  local ambiguous_count=0 unmapped_count=0 mapped_count=0 allowed_unmapped_count=0
-  local allowed_unmapped_files=""
+  declare -A MODULE_FILES MODULE_TYPE MODULE_POLICY MODULE_CONTEXTLESS_ID
+  local ambiguous_count=0 uncovered_count=0 mapped_count=0 contextless_count=0 allowed_unmapped_count=0
   local -a unmapped_unexpected=()
   local -a ambiguous_lines=()
 
-  while IFS= read -r file; do
-    [ -z "$file" ] && continue
-    local module route_err route_rc=0
-    route_err=$(mktemp)
-    module=$("$EDC_BASH" "$ROUTE_SH" "$MANIFEST" "$file" 2>"$route_err") || route_rc=$?
-
-    case "$route_rc" in
-      0)
-        MODULE_FILES["$module"]+="${file}"$'\n'
-        mapped_count=$((mapped_count + 1))
-        ;;
-      1)
-        # No module match. Expected unmapped paths are intentionally outside
-        # module ownership, so they get a deterministic skipped report instead
-        # of a fragile spawned reviewer task. Unexpected ones still route to
-        # the synthetic "unmapped" module for policy enforcement/review.
-        unmapped_count=$((unmapped_count + 1))
-        if _is_expected_unmapped "$file"; then
-          allowed_unmapped_files+="${file}"$'\n'
+  _record_contextless() {
+    local id="$1" policy="$2" file="$3" module
+    case "$policy" in
+      account-only)
+        if [ "$id" = "legacy-unmapped" ]; then
+          module="allowed-unmapped"
           allowed_unmapped_count=$((allowed_unmapped_count + 1))
         else
-          MODULE_FILES["unmapped"]+="${file}"$'\n'
-          unmapped_unexpected+=("$file")
+          module="contextless-${id}"
         fi
+        MODULE_TYPE["$module"]="contextless"
+        MODULE_POLICY["$module"]="account-only"
+        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
-      2)
-        ambiguous_count=$((ambiguous_count + 1))
-        ambiguous_lines+=("$file: $(cat "$route_err")")
+      promotion-check)
+        module="contextless-promotion-check"
+        MODULE_TYPE["$module"]="contextless"
+        MODULE_POLICY["$module"]="promotion-check"
+        MODULE_CONTEXTLESS_ID["$module"]="promotion-check"
+        ;;
+      no-context-review)
+        module="contextless-${id}"
+        MODULE_TYPE["$module"]="contextless"
+        MODULE_POLICY["$module"]="no-context-review"
+        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
       *)
-        echo "ERROR: edc-route.sh failed (rc=$route_rc) for path: $file" >&2
-        cat "$route_err" >&2
-        rm -f "$route_err"
+        echo "ERROR: invalid contextless reviewPolicy from classifier: $policy" >&2
         exit 2
         ;;
     esac
-    rm -f "$route_err"
+    MODULE_FILES["$module"]+="${file}"$'\n'
+  }
+
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    local state
+    state=$("$EDC_BASH" "$CLASSIFY_SH" "$MANIFEST" "$file") || {
+      echo "ERROR: edc-classify-path.sh failed for path: $file" >&2
+      exit 2
+    }
+
+    case "$state" in
+      context-module:*)
+        module="${state#context-module:}"
+        MODULE_FILES["$module"]+="${file}"$'\n'
+        MODULE_TYPE["$module"]="module"
+        mapped_count=$((mapped_count + 1))
+        ;;
+      contextless:*)
+        rest="${state#contextless:}"
+        contextless_id="${rest%:*}"
+        review_policy="${rest##*:}"
+        _record_contextless "$contextless_id" "$review_policy" "$file"
+        contextless_count=$((contextless_count + 1))
+        ;;
+      uncovered)
+        uncovered_count=$((uncovered_count + 1))
+        MODULE_FILES["unmapped"]+="${file}"$'\n'
+        MODULE_TYPE["unmapped"]="unmapped"
+        unmapped_unexpected+=("$file")
+        ;;
+      ambiguous)
+        ambiguous_count=$((ambiguous_count + 1))
+        ambiguous_lines+=("$file")
+        ;;
+      ignored)
+        ;;
+      *)
+        echo "ERROR: invalid classifier state for $file: $state" >&2
+        exit 2
+        ;;
+    esac
   done <<< "$files"
 
-  # Ambiguous routing is always fatal - manifest bug, not a runtime concern.
   if [ "$ambiguous_count" -gt 0 ]; then
-    echo "ERROR: $ambiguous_count file(s) match multiple modules at top priority:" >&2
+    echo "ERROR: $ambiguous_count file(s) match multiple modules or contextless entries:" >&2
     local line
     for line in "${ambiguous_lines[@]}"; do
       echo "  $line" >&2
     done
-    echo "HINT: edit $MANIFEST - bump priority on the intended" >&2
-    echo "      module or tighten its match.{exactFiles,prefixes,globs} rules" >&2
+    echo "HINT: edit $MANIFEST - bump priority, tighten match rules, or remove overlapping contextless globs" >&2
     exit 2
   fi
 
-  # Unmapped policy enforcement.
   if [ "${#unmapped_unexpected[@]}" -gt 0 ]; then
     case "$unmatched_policy" in
       fail)
-        echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (policy=fail):" >&2
+        echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (policy=fail):" >&2
         local f
         for f in "${unmapped_unexpected[@]}"; do
           echo "  $f" >&2
         done
-        echo "HINT: add a module rule in $MANIFEST or list the path" >&2
-        echo "      in unmapped.allowedGlobs, then re-run." >&2
+        echo "HINT: add a module rule or contextless.entries coverage in $MANIFEST, then re-run." >&2
         exit 2
         ;;
       warn-allow)
-        echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module (will review under 'unmapped'):" >&2
+        echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (will review under 'unmapped'):" >&2
         local f
         for f in "${unmapped_unexpected[@]}"; do
           echo "  $f" >&2
         done
         ;;
       allow)
-        : # silent - counted in summary below only
+        :
         ;;
     esac
   fi
 
-  if [ "$allowed_unmapped_count" -gt 0 ]; then
-    MODULE_FILES["allowed-unmapped"]="$allowed_unmapped_files"
-  fi
-
-  echo "routing summary: mapped=$mapped_count unmapped=$unmapped_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
+  echo "routing summary: mapped=$mapped_count contextless=$contextless_count uncovered=$uncovered_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
 
   # Step 4: write $EDC_REVIEW_TASKS_DIR/
   rm -rf "$EDC_REVIEW_TASKS_DIR"
@@ -752,12 +786,11 @@ TASK
     local first=1
     while IFS= read -r module; do
       [ "$first" -eq 0 ] && echo "    ,"
-      # Synthetic accounting/review buckets have no per-module doc; emit empty
-      # doc field so review subprocesses do not read nonexistent module context.
       local module_doc="${EDC_MODULES_DIR}/${module}.md"
-      case "$module" in
-        unmapped|allowed-unmapped) module_doc="" ;;
-      esac
+      local module_type="${MODULE_TYPE[$module]:-module}"
+      if [ "$module_type" != "module" ]; then
+        module_doc=""
+      fi
       echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
       local file_json
       file_json=$(echo "${MODULE_FILES[$module]}" \
@@ -766,7 +799,13 @@ TASK
         | tr '\n' ',' \
         | sed 's/,$//')
       echo -n "$file_json"
-      echo -n "] }"
+      if [ "$module_type" = "contextless" ]; then
+        echo -n "], \"type\": \"contextless\", \"contextlessId\": \"${MODULE_CONTEXTLESS_ID[$module]}\", \"reviewPolicy\": \"${MODULE_POLICY[$module]}\" }"
+      elif [ "$module_type" = "unmapped" ]; then
+        echo -n "], \"type\": \"uncovered\" }"
+      else
+        echo -n "] }"
+      fi
       first=0
     done <<< "$sorted_modules"
     echo ""
@@ -784,11 +823,64 @@ TASK
       continue
     fi
 
+    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "account-only" ]; then
+      write_contextless_account_report "$module" "${MODULE_CONTEXTLESS_ID[$module]}" "${MODULE_FILES[$module]}"
+      continue
+    fi
+
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
+    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "promotion-check" ]; then
+      cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
+# Review Task: \`${module}\`
+
+## Target
+${target}${baseline_line}
+
+## Files to review
+${file_list}
+
+## Instructions
+
+1. This is a promotion check only, not a full module review.
+2. Do not read generated module docs; these paths are intentionally contextless.
+3. Inspect only the listed diff and the smallest adjacent source needed to decide whether durable agent context now exists.
+4. Report whether update should promote these paths into a real context module, and why.
+5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
+
+DO NOT edit \`edc-context/manifest.json\`, \`edc-context/index.md\`, or \`edc-context/modules/*.md\`.
+DO NOT perform a full module review.
+TASK
+      continue
+    fi
+
+    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "no-context-review" ]; then
+      cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
+# Review Task: \`${module}\`
+
+## Target
+${target}${baseline_line}
+
+## Files to review
+${file_list}
+
+## Instructions
+
+1. These files are intentionally contextless but risk-bearing.
+2. Do not read generated module docs; there is no module context for these paths.
+3. Review only the changed files listed above and the smallest adjacent source needed to understand the diff.
+4. Use the edc-review skill to perform the full review on the files listed above.
+5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
+
+DO NOT build or update EDC context.
+DO NOT edit \`edc-context/manifest.json\`, \`edc-context/index.md\`, or \`edc-context/modules/*.md\`.
+TASK
+      continue
+    fi
+
     if [ "$module" = "unmapped" ]; then
-      module_context_line="3. NOTE: these files are not matched by the current ${EDC_MANIFEST} routing. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths. State this limitation clearly in the report."
+      module_context_line="3. NOTE: these files are not matched by the current ${EDC_MANIFEST} routing or contextless coverage. Use only \`${EDC_INDEX}\` for repo-level context; there is no per-module deep context for these paths. State this limitation clearly in the report."
     else
       module_context_line="3. Read \`${EDC_MODULES_DIR}/${module}.md\` if it exists - deep per-module context, invariants, call graphs"
     fi
@@ -822,7 +914,7 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    if [ "$module" = "allowed-unmapped" ]; then
+    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]:-}" = "account-only" ]; then
       continue
     fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"

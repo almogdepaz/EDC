@@ -7,16 +7,16 @@
 - Wrapper/helper clusters: 4 low-to-medium risk clusters
 - Over-abstracted modules: 0 clear cases
 - Duplicated code blocks: 3 families
-- Oversized tracked files: 11 source/test/planning files over 400 LOC, 9 core source/test files over 400 LOC
+- Oversized tracked files: 10 core source/test files over 400 LOC
 
 ## LOC Estimates vs Reality
 | Module | Estimated LOC | Actual tracked LOC | Ratio | Verdict |
 |---|---:|---:|---:|---|
-| runtime-cli | 3,000 | 4,602 | 1.5x | Broad but justified by multi-backend shell orchestration |
-| plugin-surface | 900 | 992 | 1.1x | Lean for shared hook/runtime/package behavior |
-| canonical-skills | 2,500 | 2,909 | 1.2x | Verbose by design; methodology text is product behavior |
-| agent-wrappers | 450 | 1,108 | 2.5x | Over threshold; Pi menu/background job/status UI logic dominates |
-| hardening-tests | 2,500 | 4,279 | 1.7x | Large but intentionally contract-heavy |
+| runtime-cli | 3,000 | 5,025 | 1.7x | Broad but justified by multi-backend shell orchestration |
+| plugin-surface | 900 | 993 | 1.1x | Lean for shared hook/runtime/package behavior |
+| canonical-skills | 2,500 | 2,965 | 1.2x | Verbose by design; methodology text is product behavior |
+| agent-wrappers | 600 | 1,528 | 2.5x | Over threshold; Pi menu/background job/status UI logic dominates |
+| hardening-tests | 2,500 | 5,122 | 2.0x | Large but intentionally contract-heavy; near threshold |
 | benchmarking | 3,000 | 4,214 | 1.4x | Broad benchmark/scoring surface |
 
 ## Dead Exports
@@ -38,17 +38,17 @@ No module currently has abstractions far beyond usage. The main abstraction boun
 
 ## Oversized Files
 Core tracked source/test files above ~400 LOC:
-- `plugins/edc/scripts/edc-lib.sh` — 942 LOC
-- `plugins/edc/scripts/edc-review.sh` — 931 LOC
-- `pi/index.mjs` — 889 LOC
+- `plugins/edc/scripts/edc-lib.sh` — 1,111 LOC
+- `plugins/edc/scripts/edc-review.sh` — 966 LOC
+- `pi/index.mjs` — 1,008 LOC
 - `plugins/edc/hooks/lib/route.mjs` — 555 LOC
 - `plugins/edc/scripts/edc` — 470 LOC
 - `tests/hardening/t15-review-routing.sh` — 591 LOC
-- `tests/hardening/t10-pi-extension.sh` — 548 LOC
+- `tests/hardening/t10-pi-extension.sh` — 597 LOC
 - `benchmark/autoresearch.sh` — 861 LOC
 - `benchmark/regression/run-regression.sh` — 659 LOC
 - `benchmark/score.py` — 551 LOC
-- `BENCHMARK_FORWARD_PLAN.md` — 510 LOC (planning/status, not runtime)
+
 
 ## Deep Call Chains
 - `edc review` path can traverse CLI parser → `edc-review.sh` auto mode → context recovery → build/update spawn → task generation → per-module review spawn → consolidation → verification. Depth is high but matches the multi-phase workflow.

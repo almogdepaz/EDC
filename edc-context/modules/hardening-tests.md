@@ -9,7 +9,7 @@ Owns shell/Node regression and hardening tests for the EDC runtime, plugins, Pi 
 ## Purpose
 This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background job UX, package publishing metadata, and runtime hooks.
 
-The current branch adds a CI workflow that runs the hardening suite and npm pack check, keeps Pi background status in git metadata while context is wiped, tests package publication metadata, and tightens Pi status UI behavior so completed reviews are reported on demand instead of pinned in the Pi footer/widget.
+The current branch adds prompt-contract coverage for the routing-first index and distilled module-doc shape, alongside CI/package/Pi/runtime contracts. The tests intentionally assert exact phrases and section-order cues in prompt markdown because those prompts are product behavior, not comments.
 
 ## Test organization
 - `run-all.sh`: suite runner. It creates an isolated temporary HOME, copies public/private EDC skills into that HOME, exports it, then runs every `tests/hardening/t*.sh` in order.
@@ -29,6 +29,7 @@ The current branch adds a CI workflow that runs the hardening suite and npm pack
 - `t20-pi-review-status-failures.sh`: background review failure status/reason/hint classification.
 - `t21-pi-review-status-report-validation.sh`: Pi background status behavior when review report validation fails.
 - `t22-pi-package-publish.sh`: package metadata and npm allowlist checks for scoped package name, Pi extension entry, gallery image, peer dependency namespace, docs/license inclusion, and benchmark/test/context exclusion.
+- `t27-index-context-contract.sh`: prompt/docs contract for the routing-first `index.md` shape, distilled module-doc signal filter, build-plan task wording, and review methodology's use of the route table.
 
 ## CI flow
 `.github/workflows/ci.yml` runs on pushes to main/master/refactor and PRs to main/master. It checks out the repo, installs Node 20 and `jq`, runs `npm test`, then runs `npm run pack:check`. CI therefore exercises the same suite and package contents that prepublish uses.
@@ -44,6 +45,7 @@ The current branch adds a CI workflow that runs the hardening suite and npm pack
 - Bash >=4 propagation is part of the public runtime contract and must be tested on macOS-like PATHs.
 - Pi completed/failed review state is retrievable by status command but should not remain pinned in live UI status widgets.
 - npm package contents are part of the public contract and must be regression-tested when layout changes.
+- Prompt markdown is a tested API surface; changing wording around routing-first index sections, signal filters, or review context loading can be a breaking behavior change.
 
 ## Trust boundaries
 - Tests invoke real shell scripts and Node modules; temp repos and fake binaries prevent accidental mutation of the development checkout.
@@ -64,5 +66,6 @@ The current branch adds a CI workflow that runs the hardening suite and npm pack
 - Several tests rely on `sed`, `bash`, `jq`, `git`, `node`, `python3`, temp-file semantics, and process detachment; portability is a first-class concern.
 - `t10-pi-extension.sh` is broad and can fail from timing around detached review completion; polling windows should stay conservative.
 - Long mocked scripts are sensitive to exact prompt wording and manifest schema evolution.
+- Prompt-contract tests trade semantic flexibility for regression protection; update tests and prompt docs together when intentionally renaming operational index concepts.
 - File-backed counters are required because subshell assertions would otherwise undercount failures.
 - CI package checks can fail from npm metadata drift even when runtime code still works; treat packaging as a supported surface.

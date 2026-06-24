@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "edcVersion": "1.1.0",
+  "edcVersion": "1.1.1",
   "repoContextFile": "edc-context/index.md",
   "reports": {
     "issues": "edc-context/reports/issues.md",
@@ -131,11 +131,11 @@
       "benchmark/redis/**"
     ]
   },
-  "generatedAt": "2026-05-31T07:40:56Z",
-  "sourceCommit": "efa5655362350d7e19f2eed8421f546c06fd83d2",
+  "generatedAt": "2026-06-17T10:03:34Z",
+  "sourceCommit": "acd02464901ac464c7d673a80859773a105671f8",
   "coverage": {
-    "mappedFileCount": 94,
-    "unmappedFileCount": 35,
+    "mappedFileCount": 99,
+    "unmappedFileCount": 36,
     "ambiguousPathCount": 0
   }
 }

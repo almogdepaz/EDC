@@ -86,7 +86,11 @@ SKILLS=(
   "plugins/edc/skills/edc-review/reporting.md"
   "plugins/edc/skills/edc-review/patterns.md"
   "plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
+  "plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
   "plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-context-curator-impl/SKILL.md"
+  "plugins/edc/prompt-bundles/edc-context-curator-edit-impl/SKILL.md"
   "plugins/edc/skills/edc-audit/SKILL.md"
 )
 
@@ -133,6 +137,7 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
   copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
   copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
+  copy_or_download "plugins/edc/scripts/edc-classify-path.sh" "$scripts_target/edc-classify-path.sh"
   copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
   copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
   copy_or_download "plugins/edc/scripts/edc-lib.sh"           "$scripts_target/edc-lib.sh"
@@ -148,6 +153,7 @@ install_terminal_cli() {
     "$scripts_target/edc-audit.sh" \
     "$scripts_target/edc-doctor.sh" \
     "$scripts_target/edc-route.sh" \
+    "$scripts_target/edc-classify-path.sh" \
     "$scripts_target/edc-manifest.sh" \
     "$scripts_target/edc-clean-slate.sh" \
     "$scripts_target/edc-assert-fresh.sh" \

@@ -10,13 +10,18 @@
 # fields, and writes the complete manifest to stdout.
 #
 # Fills:
-#   .generatedAt              (UTC ISO8601)
-#   .sourceCommit             (git rev-parse HEAD)
-#   .coverage.mappedFileCount
-#   .coverage.unmappedFileCount
+#   .generatedAt
+#   .sourceCommit
+#   .coverage.contextMappedFileCount
+#   .coverage.contextlessFileCount
+#   .coverage.uncoveredFileCount
 #   .coverage.ambiguousPathCount
+#   .coverage.ignoredFileCount
+#   .coverage.ignoreSource
+#   .coverage.ignoreGlobs
+#   legacy .coverage.mappedFileCount / .coverage.unmappedFileCount aliases
 #
-# Coverage walks `git ls-files` and routes each path via edc-route.sh.
+# Coverage walks `git ls-files` and classifies each path via edc-classify-path.sh.
 #
 # Exit codes:
 #   0   success
@@ -32,10 +37,44 @@ command -v jq  >/dev/null 2>&1 || { echo "edc-manifest: jq required"  >&2; exit 
 command -v git >/dev/null 2>&1 || { echo "edc-manifest: git required" >&2; exit 64; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-route_sh="$script_dir/edc-route.sh"
-[ -f "$route_sh" ] || { echo "edc-manifest: edc-route.sh not found at $route_sh" >&2; exit 64; }
+classify_sh="$script_dir/edc-classify-path.sh"
+[ -f "$classify_sh" ] || { echo "edc-manifest: edc-classify-path.sh not found at $classify_sh" >&2; exit 64; }
 EDC_BASH="${EDC_BASH:-$BASH}"
 export EDC_BASH
+
+ignore_source="none"
+ignore_globs=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --ignore)
+      [ "$#" -ge 2 ] || { echo "edc-manifest: --ignore requires a glob pattern" >&2; exit 64; }
+      ignore_globs+=("$2")
+      ignore_source="flags"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      echo "edc-manifest: unknown argument: $1" >&2
+      exit 64
+      ;;
+  esac
+done
+
+if [ "${#ignore_globs[@]}" -eq 0 ] && [ -f .edcignore ]; then
+  ignore_source="file"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+    ignore_globs+=("$line")
+  done < .edcignore
+fi
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
@@ -55,6 +94,22 @@ jq -e '.unmapped.allowedGlobs | type == "array"' "$input" >/dev/null \
 
 jq -e '.modules | (type == "array") and (length > 0)' "$input" >/dev/null \
   || reject "modules must be a non-empty array"
+
+jq -e '(.contextless.entries? // []) | type == "array"' "$input" >/dev/null \
+  || reject "contextless.entries must be an array when present"
+
+invalid_contextless=$(jq -r '
+  [(.contextless.entries // [])[]? |
+    select(
+      (.id | type != "string" or (test("^[a-z0-9]+(-[a-z0-9]+)*$") | not)) or
+      (.globs | type != "array" or length == 0) or
+      (.reason | type != "string" or length == 0) or
+      (.reviewPolicy | IN("account-only", "promotion-check", "no-context-review") | not)
+    ) |
+    (.id // "<missing-id>")
+  ] | join(",")
+' "$input")
+[ -z "$invalid_contextless" ] || reject "contextless.entries invalid id/globs/reason/reviewPolicy: $invalid_contextless"
 
 # Policy fields.
 jq -e '.policy | has("defaultMode")' "$input" >/dev/null \
@@ -82,34 +137,64 @@ jq -e 'has("sourceCommit") | not' "$input" >/dev/null \
 jq -e '(has("coverage") | not) or (.coverage | length == 0)' "$input" >/dev/null \
   || reject "coverage.* must not be authored by the LLM; the post-step fills it"
 
-# Walk tracked files, route each via edc-route.sh, tally coverage.
-mapped=0
-unmapped=0
+# Walk tracked files, classify each via edc-classify-path.sh, tally coverage.
+context_mapped=0
+contextless=0
+uncovered=0
 ambiguous=0
+ignored=0
+ignore_args=()
+for glob in "${ignore_globs[@]}"; do
+  ignore_args+=(--ignore "$glob")
+done
 
 while IFS= read -r path; do
   [ -z "$path" ] && continue
-  "$EDC_BASH" "$route_sh" "$input" "$path" >/dev/null 2>&1
+  state=$("$EDC_BASH" "$classify_sh" "${ignore_args[@]}" "$input" "$path")
   rc=$?
-  case $rc in
-    0) mapped=$((mapped + 1)) ;;
-    1) unmapped=$((unmapped + 1)) ;;
-    2) ambiguous=$((ambiguous + 1)) ;;
-    *) echo "edc-manifest: edc-route.sh failed (rc=$rc) for path: $path" >&2; exit 1 ;;
+  if [ "$rc" -ne 0 ]; then
+    echo "edc-manifest: edc-classify-path.sh failed (rc=$rc) for path: $path" >&2
+    exit 1
+  fi
+  case "$state" in
+    ignored) ignored=$((ignored + 1)) ;;
+    context-module:*) context_mapped=$((context_mapped + 1)) ;;
+    contextless:*) contextless=$((contextless + 1)) ;;
+    uncovered) uncovered=$((uncovered + 1)) ;;
+    ambiguous) ambiguous=$((ambiguous + 1)) ;;
+    *) echo "edc-manifest: invalid classifier state for path $path: $state" >&2; exit 1 ;;
   esac
 done < <(git ls-files)
 
 generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 source_commit="$(git rev-parse HEAD)"
 
+if [ "${#ignore_globs[@]}" -eq 0 ]; then
+  ignore_globs_json='[]'
+else
+  ignore_globs_json=$(printf '%s\n' "${ignore_globs[@]}" | jq -R . | jq -s .)
+fi
+legacy_unmapped=$((contextless + uncovered))
+
 jq \
   --arg ga "$generated_at" \
   --arg sc "$source_commit" \
-  --argjson m "$mapped" \
-  --argjson u "$unmapped" \
+  --arg ignoreSource "$ignore_source" \
+  --argjson ignoreGlobs "$ignore_globs_json" \
+  --argjson cm "$context_mapped" \
+  --argjson cl "$contextless" \
+  --argjson u "$uncovered" \
   --argjson a "$ambiguous" \
+  --argjson i "$ignored" \
+  --argjson legacyUnmapped "$legacy_unmapped" \
   '.generatedAt = $ga
    | .sourceCommit = $sc
-   | .coverage.mappedFileCount   = $m
-   | .coverage.unmappedFileCount = $u
-   | .coverage.ambiguousPathCount = $a' "$input"
+   | .coverage.contextMappedFileCount = $cm
+   | .coverage.contextlessFileCount = $cl
+   | .coverage.uncoveredFileCount = $u
+   | .coverage.ambiguousPathCount = $a
+   | .coverage.ignoredFileCount = $i
+   | .coverage.ignoreSource = $ignoreSource
+   | .coverage.ignoreGlobs = $ignoreGlobs
+   | .coverage.mappedFileCount = $cm
+   | .coverage.unmappedFileCount = $legacyUnmapped' "$input"

@@ -38,7 +38,7 @@ by `scripts/edc-review.sh` and contains everything needed for a self-contained r
    - **Files to review** — bullet list under `## Files to review`
 3. Derive `{module}` from the task file basename (e.g. `edc-context/review-tasks/foo.md` → `foo`)
 4. Load context in this order (skip silently if a file does not exist):
-   - `edc-context/index.md`
+   - `edc-context/index.md` for routing/coupling/blast-radius guidance
    - `edc-context/reports/issues.md`
    - `edc-context/modules/{module}.md`
 5. Scope the review **strictly to the listed files**. Do not expand to siblings or
@@ -162,11 +162,12 @@ Before delivering:
 - If it does not exist, ask the user to run `/edc-build` for full context or build a lightweight manual baseline from changed files and git history
 
 **EDC context files (`edc-context/`):**
-- If `edc-context/index.md` exists, load it for architecture overview and module map
-- Map changed files to modules, load relevant `edc-context/modules/{module}.md`
+- If `edc-context/index.md` exists, load it for routing/coupling/blast-radius guidance, critical invariants, and compact architecture context
+- Use `edc-context/manifest.json` as the authoritative machine routing contract; do not duplicate or improvise path-routing rules
+- Load relevant `edc-context/modules/{module}.md` for changed modules
 - Load `edc-context/reports/issues.md` to check if changes touch known issues
 - Use documented invariants for compliance checking
-- Use coupling map for cross-module impact analysis
+- Use coupling/blast-radius notes for cross-module impact analysis
 
 ---
 

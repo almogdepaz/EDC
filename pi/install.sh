@@ -78,7 +78,12 @@ else
   SOURCE="$REPO_SOURCE"
 fi
 
-echo "Installing EDC as pi extension (source: $SOURCE${LOCAL:+, project-local})..."
+local_suffix=""
+if [ "$LOCAL" -eq 1 ]; then
+  local_suffix=", project-local"
+fi
+
+echo "Installing EDC as pi extension (source: $SOURCE$local_suffix)..."
 pi install "$SOURCE" "${ARGS[@]}"
 
 cat <<EOF

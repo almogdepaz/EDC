@@ -64,7 +64,7 @@ else
   exit 1
 fi
 
-for bundle in edc-build-impl edc-update-impl edc-module-context-impl; do
+for bundle in edc-build-impl edc-update-impl edc-module-context-impl edc-context-curator-impl edc-context-curator-edit-impl; do
   if [ ! -f "plugins/edc/prompt-bundles/$bundle/SKILL.md" ]; then
     echo "FAIL: missing hidden prompt bundle: $bundle"
     exit 1
@@ -73,10 +73,10 @@ done
 echo "PASS: hidden prompt bundles live outside public skills"
 
 # ── 5e: plugin script bundle exists ──────────────────────────────���───────────
-if [ -f "$PLUGIN_SCRIPT" ]; then
-  echo "PASS: plugins/edc/scripts/edc-review.sh exists in plugin bundle"
+if [ -f "$PLUGIN_SCRIPT" ] && [ -f "plugins/edc/scripts/edc-classify-path.sh" ]; then
+  echo "PASS: plugin script bundle includes review + classifier helpers"
 else
-  echo "FAIL: plugins/edc/scripts/edc-review.sh missing — install hook cannot copy"
+  echo "FAIL: plugin script bundle missing review/classifier helper — install hook cannot copy"
   exit 1
 fi
 
@@ -90,10 +90,13 @@ fi
 
 # ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
 pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
-if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"'; then
-  echo "PASS: pi installer copies ~/.edc/skills for spawned review subprocesses"
+if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
+  && grep -q 'edc-context-curator-impl/SKILL.md' install.sh \
+  && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
+  && grep -q 'edc-classify-path.sh' install.sh; then
+  echo "PASS: pi installer copies private skills and classifier for spawned subprocesses"
 else
-  echo "FAIL: pi installer does not copy ~/.edc/skills"
+  echo "FAIL: pi installer does not copy private skills/classifier"
   exit 1
 fi
 
@@ -102,6 +105,14 @@ if echo "$pi_branch" | grep -q 'bash "\$SCRIPT_DIR/pi/install.sh" --from-source'
   echo "PASS: root installer uses current pi/install.sh source path"
 else
   echo "FAIL: root installer does not use current pi/install.sh source path"
+  exit 1
+fi
+
+if grep -q 'local_suffix=' pi/install.sh \
+  && ! grep -q '\${LOCAL:+, project-local}' pi/install.sh; then
+  echo "PASS: pi installer labels project-local only when --local is set"
+else
+  echo "FAIL: pi installer may label global installs as project-local"
   exit 1
 fi
 

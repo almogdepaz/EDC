@@ -42,7 +42,7 @@ if [[ "$prompt" == *"name: edc-update-impl"* ]] || [[ "$prompt" == *"# Update Co
   exit 0
 fi
 
-if [[ "$prompt" == *"edc-build"* ]]; then
+if [[ "$prompt" == *"name: edc-build-impl"* ]] || [[ "$prompt" == *"# Build Context"* ]]; then
   echo "build" >> "$LOG"
   agents_target="AGENTS.md"
   if grep -qx 'EDC_AGENTS_TARGET: EDC_AGENTS.md' <<< "$prompt"; then
@@ -62,6 +62,18 @@ EOF
   exit 0
 fi
 
+if [[ "$prompt" == *"name: edc-context-curator-edit-impl"* ]]; then
+  echo "curator-edit" >> "$LOG"
+  exit 0
+fi
+
+if [[ "$prompt" == *"edc-context-curator-impl"* ]] || [[ "$prompt" == *"Context Curator"* ]]; then
+  echo "curator" >> "$LOG"
+  mkdir -p edc-context/reports
+  printf '# Context Curation Report\n\n## Summary\n- t12 curator\n' > edc-context/reports/context-curation.md
+  exit 0
+fi
+
 echo "MOCK ERROR: unrecognized prompt: $prompt" >&2
 exit 1
 MOCK
@@ -78,6 +90,9 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
+  mkdir -p .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl
+  printf '%s\n' '---' 'name: edc-context-curator-impl' '---' '# Context Curator' > .edc/skills/edc-context-curator-impl/SKILL.md
+  printf '%s\n' '---' 'name: edc-context-curator-edit-impl' '---' '# Context Curator Edit' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T12/log"

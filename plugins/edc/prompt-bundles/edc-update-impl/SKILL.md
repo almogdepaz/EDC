@@ -43,17 +43,19 @@ git diff --name-only "$BASE"..HEAD
 
 Read `edc-context/manifest.json` to get `sourceCommit` (last analyzed commit) and `modules[]` with their `name`, `doc`, and `match` rules.
 
-### Step 2 — Identify affected modules
+### Step 2 — Identify affected modules and contextless paths
 
-Map each changed file to its module by invoking the shared router:
+Classify each changed file by invoking the shared classifier:
 
 ```bash
-bash plugins/edc/scripts/edc-route.sh edc-context/manifest.json <file-path>
+bash plugins/edc/scripts/edc-classify-path.sh edc-context/manifest.json <file-path>
 ```
 
-`edc-route.sh` exits 0 with the module name on stdout when one module wins, exit 1 when no module matches (file is unmapped — check `unmapped.allowedGlobs` in the manifest before treating as an error), or exit 2 when multiple modules tie. Do not reimplement routing here.
+`edc-classify-path.sh` returns exactly one state: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`. Do not reimplement classification.
 
-Collect the set of affected modules. Also include any modules that `edc-context/modules/<name>.md` documents as coupled to an affected module (read the cross-module coupling sections).
+Collect affected real modules from `context-module:*`. For changed `contextless:*` paths, inspect the diff and either keep them contextless, promote them to a real context module, or report a promotion candidate; do not silently skip them. `reviewPolicy` controls review behavior only — update owns actual context promotion/status changes. `uncovered` and `ambiguous` paths must be fixed by manifest/context changes before the update is considered healthy.
+
+Also include any modules that `edc-context/modules/<name>.md` documents as coupled to an affected module (read the cross-module coupling sections).
 
 ### Step 3 — Re-analyze affected modules
 
@@ -106,24 +108,37 @@ If any changed module's deep-context analysis surfaced new overengineering / blo
 
 ### Step 8 — Update `edc-context/index.md` if needed
 
-Re-read all `edc-context/modules/*.md` files. Check if any of these changed:
+Re-read all `edc-context/modules/*.md` files and preserve this section order whenever the index is rewritten:
 
-- module list (modules added or removed)
-- global invariants
+1. `## How to use`
+2. `## Route by path/task`
+3. `## Critical global invariants`
+4. `## Cross-module coupling / blast radius`
+
+Optional compact sections may follow only when they materially improve first-read decisions: `## Architecture overview` and `## Module table`. Keep them tiny; do not include generated file counts, LOC estimates, manifest priority values, report links, or broad architecture essays.
+
+Do not add a Reports section to the ordinary index read path; reports remain discoverable through `manifest.json` and explicit review/audit workflows.
+
+Check if any of these changed:
+
+- routing rows needed for changed paths/tasks
+- module list (modules added, removed, renamed, or rerouted)
+- critical global invariants
 - trust boundaries
-- cross-module coupling
-- key flows
+- cross-module coupling / blast radius
+- key flows or actors that affect daily task routing or review scope
 
-If any changed, rewrite `edc-context/index.md` (preserving the `##` heading requirement). If not, leave it alone.
+If any changed, rewrite `edc-context/index.md` as the same routing-first operational index described by the build contract (preserving the `##` heading requirement). If only a purely local implementation detail changed and the routing, invariants, coupling, trust boundaries, module relationships, and key flows are unchanged, leave the index alone to avoid noisy rewrites.
 
 ### Step 9 — Refresh `edc-context/manifest.json`
 
-Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `unmapped.allowedGlobs` if coverage shifted). **Preserve `policy.defaultMode` from the existing `edc-context/manifest.json`** — it may have been set by `edc mode advisory|inject` and rebuilds must not revert that choice. Likewise preserve any other operator-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
+Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `contextless.entries[]` if coverage shifted, and legacy `unmapped.allowedGlobs` only for migration compatibility). **Preserve `policy.defaultMode` from the existing `edc-context/manifest.json`** — it may have been set by `edc mode advisory|inject` and rebuilds must not revert that choice. Likewise preserve any other operator-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
 
 Pipe the partial manifest through the deterministic generator to refresh `coverage.*` and `sourceCommit`:
 
 ```sh
 cat /tmp/partial-manifest.json | bash plugins/edc/scripts/edc-manifest.sh > edc-context/manifest.json
+# if this update was invoked with --ignore flags, pass the same flags to edc-manifest.sh
 ```
 
 A non-zero exit from `edc-manifest.sh` is an update failure — surface it instead of writing a hand-edited manifest.
@@ -138,3 +153,5 @@ After the update, verify the v2 layout still holds:
 - `edc-context/reports/issues.md` and `edc-context/reports/complexity.md` exist
 
 If any check fails, surface the failure; do not silently continue. `edc doctor` is the canonical end-to-end validator.
+
+The shell orchestrator runs `edc-context-curator-impl` as a separate runtime report-only step after this skill returns and doctor validates the generated context. Do not invoke the curator from inside this update skill.

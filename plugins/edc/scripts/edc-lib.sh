@@ -1165,13 +1165,105 @@ resolve_prompt() {
   esac
 
   case "$action" in
-    build)  _emit_skill_prompt "edc-build-impl"  "$prompt_arg_string" ;;
-    update) _emit_skill_prompt "edc-update-impl" "$prompt_arg_string" ;;
-    audit)  _emit_skill_prompt "edc-audit" ;;
-    review) _emit_review_prompt "$1" ;;
+    build)   _emit_skill_prompt "edc-build-impl"  "$prompt_arg_string" ;;
+    update)  _emit_skill_prompt "edc-update-impl" "$prompt_arg_string" ;;
+    curator)      _emit_skill_prompt "edc-context-curator-impl" ;;
+    curator-edit) _emit_skill_prompt "edc-context-curator-edit-impl" ;;
+    audit)        _emit_skill_prompt "edc-audit" ;;
+    review)  _emit_review_prompt "$1" ;;
     *)
       echo "ERROR: unknown action: $action" >&2
       return 1
       ;;
   esac
+}
+
+edc_run_context_curator() {
+  mkdir -p "$EDC_REPORTS_DIR"
+  rm -f "$EDC_REPORTS_DIR/context-curation.md"
+
+  echo "→ spawning $EDC_AGENT_CLI for edc-context-curator..."
+  local prompt
+  prompt=$(resolve_prompt curator) || return 1
+  edc_spawn "edc-context-curator" "${EDC_CURATOR_TIMEOUT:-900}" "$prompt" \
+    || { echo "ERROR: edc-context-curator invocation failed" >&2; return 1; }
+
+  local report="$EDC_REPORTS_DIR/context-curation.md"
+  if [ ! -f "$report" ]; then
+    echo "ERROR: context curator report missing: $report" >&2
+    return 1
+  fi
+  if ! grep -q '^##' "$report"; then
+    echo "ERROR: context curator report has no '## ' headings: $report" >&2
+    return 1
+  fi
+}
+
+edc_curator_edit_allowed_path() {
+  case "$1" in
+    "$EDC_INDEX") return 0 ;;
+    "$EDC_MODULES_DIR"/*.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+edc_snapshot_curator_forbidden_paths() {
+  local output="$1"
+  : > "$output"
+  {
+    git ls-files
+    git ls-files --others --exclude-standard "$EDC_CONTEXT_DIR" 2>/dev/null || true
+  } | sort -u | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+      "$EDC_BUILD_DIR/spawn-log.jsonl") continue ;;
+    esac
+    edc_curator_edit_allowed_path "$path" && continue
+    if [ -f "$path" ]; then
+      shasum -a 256 "$path"
+    else
+      printf 'MISSING  %s\n' "$path"
+    fi
+  done | sort > "$output"
+}
+
+edc_diff_curator_forbidden_paths() {
+  local before="$1" after="$2"
+  local diff_file
+  diff_file=$(mktemp)
+  if diff -u "$before" "$after" > "$diff_file"; then
+    rm -f "$diff_file"
+    return 0
+  fi
+  sed -n -E \
+    -e 's/^[+-][0-9a-f]{64}  //p' \
+    -e 's/^[+-]MISSING  //p' \
+    "$diff_file" | sort -u
+  rm -f "$diff_file"
+  return 1
+}
+
+edc_run_context_curator_edit() {
+  local before after changed prompt
+  before=$(mktemp)
+  after=$(mktemp)
+  edc_snapshot_curator_forbidden_paths "$before"
+
+  echo "→ spawning $EDC_AGENT_CLI for edc-context-curator-edit..."
+  prompt=$(resolve_prompt curator-edit) || { rm -f "$before" "$after"; return 1; }
+  edc_spawn "edc-context-curator-edit" "${EDC_CURATOR_EDIT_TIMEOUT:-900}" "$prompt" \
+    || { rm -f "$before" "$after"; echo "ERROR: edc-context-curator-edit invocation failed" >&2; return 1; }
+
+  edc_snapshot_curator_forbidden_paths "$after"
+  changed=$(edc_diff_curator_forbidden_paths "$before" "$after" || true)
+  rm -f "$before" "$after"
+  if [ -n "$changed" ]; then
+    echo "ERROR: context curator edit touched forbidden paths:" >&2
+    echo "$changed" | sed 's/^/  /' >&2
+    return 1
+  fi
+}
+
+edc_remove_context_curator_report() {
+  rm -f "$EDC_REPORTS_DIR/context-curation.md"
 }

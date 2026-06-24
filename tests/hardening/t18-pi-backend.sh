@@ -39,7 +39,7 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review .edc/skills/edc-audit
+  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-review .edc/skills/edc-audit
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
   printf '## Complexity\n' > edc-context/reports/complexity.md
@@ -56,6 +56,8 @@ setup_repo() {
 EOF
   printf 'BUILD_SKILL_MARKER\n' > .edc/skills/edc-build-impl/SKILL.md
   printf 'UPDATE_SKILL_MARKER\n' > .edc/skills/edc-update-impl/SKILL.md
+  printf 'CURATOR_SKILL_MARKER\n' > .edc/skills/edc-context-curator-impl/SKILL.md
+  printf 'CURATOR_EDIT_SKILL_MARKER\n' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
   printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
   printf 'AUDIT_SKILL_MARKER\n' > .edc/skills/edc-audit/SKILL.md
   printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
@@ -112,6 +114,16 @@ fi
 if printf '%s' "$prompt" | grep -q 'UPDATE_SKILL_MARKER'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'CURATOR_EDIT_SKILL_MARKER'; then
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curator edit"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'CURATOR_SKILL_MARKER'; then
+  mkdir -p edc-context/reports
+  printf '# Context Curation Report\n\n## Summary\n- mock pi curator\n' > edc-context/reports/context-curation.md
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curated"}}\n'
   finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then

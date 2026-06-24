@@ -106,7 +106,7 @@ jq -r \
           "Files in scope: `" + (.paths | join(", ")) + "`. " +
           "Invoke the `edc-module-context-impl` skill on these files. " +
           "You may read sibling-module source if it materially improves this module'\''s context. " +
-          "Write the deep doc directly to `" + $modules_dir + "/" + (.name | kebab) + ".md`. " +
+          "Write distilled high-signal context directly to `" + $modules_dir + "/" + (.name | kebab) + ".md`; include decision-useful read boundaries and source-truth pointers for exact details, but do not dump scratch analysis, empty template sections, or obvious code inventory. " +
           "Return a ≤500-token summary for the orchestrator."
         )
       })

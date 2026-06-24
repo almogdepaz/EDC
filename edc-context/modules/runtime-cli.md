@@ -22,6 +22,7 @@ The current runtime supports Claude, Cursor, Codex, and Pi, standardizes nested 
 - `plugins/edc/scripts/edc`: public CLI parser. It accepts `--agent pi`, reads manifest default mode for review/audit/update, allows non-Claude backends in `advisory`, recognizes `EDC_PI_MODEL` as configured-model evidence for Pi, and dispatches via `"$EDC_BASH"`.
 - `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. Pi support includes `edc_require_agent_cli`, generated Pi JSON supervisor, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
 - `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It uses shared backend validation and `EDC_BASH` for child scripts.
+- `plugins/edc/scripts/edc-build-plan.sh`: deterministic fanout planner. Its task prompts now require distilled high-signal module docs, so the shell contract and prompt contract agree on not persisting scratch analysis.
 - `plugins/edc/scripts/edc-update.sh`: healthy-v2-only incremental update gate; accepts Pi backend and uses `EDC_BASH` for preflight and doctor.
 - `plugins/edc/scripts/edc-review.sh`: self-driving review pipeline. It accepts Pi backend, routes review-task generation through `EDC_BASH`, exposes `-h/--help`, supports PR shorthand plus `--no-context-refresh`/`--ignore-context` direct-review modes, separates expected `unmapped.allowedGlobs` paths into a deterministic `allowed-unmapped` report, and keeps deterministic task/consolidation/verification/report-validation phases.
 - `plugins/edc/scripts/edc-audit.sh`: freshness recovery plus one audit subprocess; shares backend validation with build/review/update.
@@ -52,6 +53,7 @@ Review/audit source `edc-recover-context.sh`. Missing/stale context triggers bui
 - `manifest.policy.defaultMode` is preserved across builds/updates and only `edc mode` should mutate it directly.
 - `edc_spawn` is the sole backend-specific subprocess boundary.
 - Prompt path substitution must tell spawned agents to replace `plugins/edc/scripts/` with `$EDC_SCRIPTS_DIR` and run helpers with `$EDC_BASH`.
+- Deterministic planners should shape task prompts, not semantic conclusions; subagents still own module analysis output.
 - User-facing install and command docs must point at the current Pi package layout (`pi/`, not legacy `agents/pi/`).
 
 ## Trust boundaries
@@ -72,3 +74,4 @@ Review/audit source `edc-recover-context.sh`. Missing/stale context triggers bui
 - Pi subprocess supervision depends on Pi JSON event names (`agent_end`, `message_update`, `tool_execution_*`). Event-shape drift can make subprocess output silent or prematurely terminated.
 - `edc-manifest.sh` still walks raw `git ls-files`; build/update ignore rules must be reflected in `unmapped.allowedGlobs` for coverage to stay clean.
 - Direct review modes intentionally bypass parts of the context-recovery contract; callers must make the tradeoff explicit with `--no-context-refresh` or `--ignore-context`.
+- Small prompt-string changes in deterministic planners can cascade into generated context quality even though they look like shell-only edits.

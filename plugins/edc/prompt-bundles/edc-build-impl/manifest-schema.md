@@ -14,20 +14,21 @@ This document is the canonical schema spec. `edc build`, `edc update`, and `edc 
 | `edcVersion` | string (semver) | yes | LLM | EDC release that produced the manifest, e.g. `"2.0.0"`. |
 | `generatedAt` | string (ISO-8601 UTC) | yes | post-step | Timestamp filled deterministically after the build LLM step. |
 | `sourceCommit` | string (full git SHA) | yes | post-step | `git rev-parse HEAD` at build time, filled deterministically after the LLM step. |
-| `repoContextFile` | string (path) | yes | LLM | Path to the startup overview, normally `edc-context/index.md`. |
+| `repoContextFile` | string (path) | yes | LLM | Path to the operational context index, normally `edc-context/index.md`. |
 | `reports` | object | yes | LLM | Map of report name → path under `edc-context/reports/`. |
 | `build` | object | yes | LLM | Provenance and intermediate artifact paths under `edc-context/build/`. |
 | `policy` | object | yes | LLM | Enforcement and gating configuration (see [Policy](#policy)). |
-| `modules` | array | yes | LLM | Ordered list of module routing entries (see [Modules](#modules)). |
-| `unmapped` | object | yes | LLM | Globs of repo paths that are intentionally not owned by any module. |
-| `coverage` | object | yes | post-step | Deterministic counts emitted after routing analysis (see [Coverage](#coverage)). |
+| `modules` | array | yes | LLM | Ordered list of real human context module routing entries (see [Modules](#modules)). |
+| `contextless` | object | optional | LLM | Structured coverage entries for paths intentionally absent from generated human docs (see [Contextless coverage](#contextless-coverage)). |
+| `unmapped` | object | yes | LLM | Legacy migration globs for repo paths intentionally not owned by any module. Prefer `contextless.entries`. |
+| `coverage` | object | yes | post-step | Deterministic counts emitted after path classification (see [Coverage](#coverage)). |
 
 ### Field Ownership
 
 The build pipeline has two phases. The LLM authors the structural and semantic content. A deterministic post-step fills computed/derivative values so they cannot drift.
 
-- **LLM-authored fields:** `schemaVersion`, `edcVersion`, `repoContextFile`, `reports`, `build`, `policy`, `modules[]`, `unmapped.allowedGlobs`.
-- **Post-step deterministic fill:** `generatedAt`, `sourceCommit`, `coverage.mappedFileCount`, `coverage.unmappedFileCount`, `coverage.ambiguousPathCount`.
+- **LLM-authored fields:** `schemaVersion`, `edcVersion`, `repoContextFile`, `reports`, `build`, `policy`, `modules[]`, `contextless.entries[]`, legacy `unmapped.allowedGlobs`.
+- **Post-step deterministic fill:** `generatedAt`, `sourceCommit`, `coverage.contextMappedFileCount`, `coverage.contextlessFileCount`, `coverage.uncoveredFileCount`, `coverage.ambiguousPathCount`, `coverage.ignoredFileCount`, `coverage.ignoreSource`, `coverage.ignoreGlobs`, and deprecated aliases `coverage.mappedFileCount` / `coverage.unmappedFileCount`.
 
 The LLM SHOULD emit the post-step fields as placeholders (e.g. empty string, `0`); the post-step overwrites them. `edc doctor` flags any manifest where the LLM-authored placeholder leaked into the final file.
 
@@ -90,9 +91,11 @@ At least one of `exactFiles`, `prefixes`, `globs` MUST be non-empty.
 
 ---
 
-## Path → Module Routing Algorithm
+## Path classification algorithm
 
-Given a repo-relative path `P`, resolve the owning module by walking three precedence tiers in order and stopping at the first tier that produces a winner:
+`edc-classify-path.sh` is the deterministic classifier used by manifest, doctor, review, and JS adapters. Given a repo-relative path `P`, it returns exactly one state: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`.
+
+First apply resolved ignore rules. Ignored paths return `ignored`. Otherwise, resolve the owning module by walking three precedence tiers in order and stopping at the first tier that produces a winner:
 
 1. **Tier 1 — `match.exactFiles`:** if any module lists `P` literally in its `exactFiles`, that module wins.
 2. **Tier 2 — `match.prefixes` (longest-prefix wins):** of all modules whose `prefixes` contain a string that is a prefix of `P`, the module with the **longest matching prefix** wins. Length is measured in characters of the prefix string after normalizing trailing slashes.
@@ -109,7 +112,28 @@ Notes:
 - A literal `exactFiles` hit always beats any prefix/glob match — even a longer prefix or a higher-priority glob.
 - Within Tier 2, a longer prefix beats a shorter one regardless of `priority`. `priority` only resolves ties between equal-length prefixes.
 - Within Tier 3, all matching globs are at the same tier; only `priority` orders them.
-- Paths matching no tier are unmapped. They are checked against `unmapped.allowedGlobs`. Unmapped paths NOT in `allowedGlobs` are counted in `coverage.unmappedFileCount` and flagged by `edc doctor`.
+- Paths matching no module tier are checked against `contextless.entries[].globs` and then legacy `unmapped.allowedGlobs` (as generated `contextless:legacy-unmapped:account-only`).
+- A path matching both a context module and a contextless entry, or multiple distinct contextless entries, is `ambiguous`.
+- A path matching neither a context module nor contextless coverage is `uncovered`; `edc doctor` fails uncovered tracked paths.
+
+---
+
+## Contextless coverage
+
+`contextless.entries` accounts for paths that are tracked and covered but should not receive generated human module docs.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | kebab-case string | yes | Stable accounting identifier; not a module name. |
+| `globs` | string[] | yes | Repo-relative globs covered by this entry. |
+| `reason` | string | yes | Short rationale for why durable human context is not useful here. |
+| `reviewPolicy` | enum | yes | One of `account-only`, `promotion-check`, or `no-context-review`. |
+
+Review policies:
+
+- `account-only`: include in accounting/final metadata; no spawned review task.
+- `promotion-check`: group into one bounded no-context task that only asks whether update should promote durable context.
+- `no-context-review`: create direct no-context review tasks without module docs.
 
 ---
 
@@ -117,7 +141,7 @@ Notes:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `allowedGlobs` | string[] | yes | Globs of repo paths that are intentionally not owned by any module (e.g. `README.md`, `docs/**`, `benchmarks/**`). Paths matched by these globs do not count as missing coverage. |
+| `allowedGlobs` | string[] | yes | Legacy compatibility globs. They are treated as generated `contextless:legacy-unmapped:account-only` entries for one release; new manifests should prefer `contextless.entries`. |
 
 ---
 
@@ -127,9 +151,15 @@ Filled by the post-step. All counts cover the set of repo files included in `git
 
 | Field | Type | Description |
 |---|---|---|
-| `mappedFileCount` | integer | Files routed to exactly one module. |
-| `unmappedFileCount` | integer | Files matching no module and not covered by `unmapped.allowedGlobs`. |
-| `ambiguousPathCount` | integer | Files where two or more modules tied at the same tier with equal `priority`. |
+| `contextMappedFileCount` | integer | Files routed to exactly one real context module. |
+| `contextlessFileCount` | integer | Files covered by `contextless.entries` or legacy `unmapped.allowedGlobs`. |
+| `uncoveredFileCount` | integer | Files matching neither a module nor contextless coverage. Doctor fails these. |
+| `ambiguousPathCount` | integer | Files with ambiguous module/contextless classification. |
+| `ignoredFileCount` | integer | Files excluded by resolved ignore rules. |
+| `ignoreSource` | string | `flags`, `file`, or `none`. |
+| `ignoreGlobs` | string[] | Effective ignore globs used for counters. |
+| `mappedFileCount` | integer | Deprecated alias for `contextMappedFileCount` for one release. |
+| `unmappedFileCount` | integer | Deprecated alias for `contextlessFileCount + uncoveredFileCount` for one release. |
 
 ---
 
@@ -146,11 +176,12 @@ Filled by the post-step. All counts cover the set of repo files included in `git
 7. A module's `doc` path does not exist on disk.
 8. A module declares an empty `match` (no `exactFiles`, `prefixes`, or `globs`).
 9. The same path appears in `exactFiles` of two different modules (always-ambiguous; cannot be resolved by `priority`).
-10. `coverage.ambiguousPathCount > 0`.
-11. `coverage.unmappedFileCount > 0` for paths not covered by `unmapped.allowedGlobs`.
-12. `generatedAt` is not a valid ISO-8601 UTC timestamp.
-13. `sourceCommit` is empty or not a 40-char hex SHA.
-14. The post-step left `generatedAt`, `sourceCommit`, or any `coverage.*` field at the LLM placeholder value.
+10. `contextless.entries[]` has an invalid id, empty globs/reason, or reviewPolicy outside `account-only`, `promotion-check`, `no-context-review`.
+11. `coverage.ambiguousPathCount > 0`.
+12. `coverage.uncoveredFileCount > 0`.
+13. `generatedAt` is not a valid ISO-8601 UTC timestamp.
+14. `sourceCommit` is empty or not a 40-char hex SHA.
+15. The post-step left `generatedAt`, `sourceCommit`, or any `coverage.*` field at the LLM placeholder value.
 
 ---
 
@@ -166,7 +197,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
   "generatedAt": "2026-04-30T12:34:56Z",
   "sourceCommit": "18b6a1b6803c4fbb3b1d6fa05b4d2c0c5f3e9a11",
 
-  // startup overview agents load first
+  // operational context index agents load first
   "repoContextFile": "edc-context/index.md",
 
   // canonical reports under edc-context/reports/
@@ -238,20 +269,40 @@ Filled by the post-step. All counts cover the set of repo files included in `git
     }
   ],
 
-  // paths intentionally outside any module
-  "unmapped": {
-    "allowedGlobs": [
-      "README.md",
-      "docs/**",
-      "benchmarks/**"
+  // machine-only coverage for paths intentionally absent from human docs
+  "contextless": {
+    "entries": [
+      {
+        "id": "supporting-docs",
+        "globs": ["README.md", "docs/**"],
+        "reason": "public/supporting docs; no durable agent-only ownership contract",
+        "reviewPolicy": "account-only"
+      },
+      {
+        "id": "generated-assets",
+        "globs": ["assets/**"],
+        "reason": "generated assets without durable source-edit guidance",
+        "reviewPolicy": "promotion-check"
+      }
     ]
+  },
+
+  // legacy migration compatibility; prefer contextless.entries
+  "unmapped": {
+    "allowedGlobs": ["benchmarks/**"]
   },
 
   // post-step deterministic fill; counts cover git ls-files after ignore rules
   "coverage": {
+    "contextMappedFileCount": 0,
+    "contextlessFileCount": 0,
+    "uncoveredFileCount": 0,
+    "ambiguousPathCount": 0,
+    "ignoredFileCount": 0,
+    "ignoreSource": "none",
+    "ignoreGlobs": [],
     "mappedFileCount": 0,
-    "unmappedFileCount": 0,
-    "ambiguousPathCount": 0
+    "unmappedFileCount": 0
   }
 }
 ```
@@ -275,11 +326,11 @@ A file like `chia/consensus/blockchain.py` resolves at Tier 1 directly to `conse
    This repo ships deep architectural context generated by EDC. Read this file at session start before touching code.
    ```
 
-2. **Link to `edc-context/index.md` overview.** A pointer to the startup overview, with a single sentence about what it contains:
+2. **Link to `edc-context/index.md` operational index.** A pointer to the routing-first index, with a single sentence about what it contains:
    ```md
    ## Overview
 
-   See [`edc-context/index.md`](edc-context/index.md) for the architecture overview, actor map, key flows, global invariants, and module table.
+   See [`edc-context/index.md`](edc-context/index.md) for the routing index, critical invariants, and coupling/blast-radius guidance.
    ```
 
 3. **Link to `edc-context/manifest.json` routing contract.** A pointer to the manifest as the authoritative routing and policy contract:

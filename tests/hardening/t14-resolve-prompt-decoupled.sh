@@ -27,10 +27,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 SKILLS_DIR="$TMP/skills"
 mkdir -p "$SKILLS_DIR/edc-build-impl" "$SKILLS_DIR/edc-update-impl" \
+         "$SKILLS_DIR/edc-context-curator-impl" "$SKILLS_DIR/edc-context-curator-edit-impl" \
          "$SKILLS_DIR/edc-audit" "$SKILLS_DIR/edc-review"
 
 echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"
 echo "UPDATE_SKILL_MARKER" > "$SKILLS_DIR/edc-update-impl/SKILL.md"
+echo "CURATOR_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-impl/SKILL.md"
+echo "CURATOR_EDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-edit-impl/SKILL.md"
 echo "AUDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-audit/SKILL.md"
 echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"
 echo "METHODOLOGY_MARKER" > "$SKILLS_DIR/edc-review/methodology.md"
@@ -60,7 +63,7 @@ run_resolve() {
 }
 
 # ── 14.1: claude branch never emits slash commands ──────────────────────────
-for action in build update audit; do
+for action in build update curator curator-edit audit; do
   out=$(run_resolve claude "$action")
   if echo "$out" | grep -q '^/edc:'; then
     check "claude $action: no slash command in output" 0
@@ -78,9 +81,11 @@ else
   check "claude review: no slash command in output" 1
 fi
 
-# ── 14.2: claude branch emits skill content for build/update/audit ──────────
+# ── 14.2: claude branch emits skill content for build/update/curator/audit ──
 for action_skill in "build:BUILD_SKILL_MARKER" \
                     "update:UPDATE_SKILL_MARKER" \
+                    "curator:CURATOR_SKILL_MARKER" \
+                    "curator-edit:CURATOR_EDIT_SKILL_MARKER" \
                     "audit:AUDIT_SKILL_MARKER"; do
   action="${action_skill%%:*}"
   marker="${action_skill##*:}"
@@ -133,6 +138,8 @@ fi
 for agent in cursor codex; do
   for action_skill in "build:BUILD_SKILL_MARKER" \
                       "update:UPDATE_SKILL_MARKER" \
+                      "curator:CURATOR_SKILL_MARKER" \
+                      "curator-edit:CURATOR_EDIT_SKILL_MARKER" \
                       "audit:AUDIT_SKILL_MARKER"; do
     action="${action_skill%%:*}"
     marker="${action_skill##*:}"

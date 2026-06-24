@@ -206,20 +206,39 @@ function globToRegex(glob) {
   return new RegExp(re);
 }
 
-/**
- * Route a file path to a module, in-process. Mirrors the 3-tier algorithm in
- * plugins/edc/scripts/edc-route.sh:
- *   T1. exactFiles equality
- *   T2. longest prefix in match.prefixes
- *   T3. any glob in match.globs
- * Within each tier, the highest .priority wins; multi-way ties → null.
- *
- * @param {object} manifest  Parsed edc-context/manifest.json.
- * @param {string} filePath  Project-relative POSIX path.
- * @returns {string|null}    Module name, or null on no-match / ambiguous.
- */
-export function routeFileSync(manifest, filePath) {
-  if (!manifest || !Array.isArray(manifest.modules)) return null;
+function bashPatternToRegex(pattern) {
+  let re = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") {
+      if (pattern[i + 1] === "*") i++;
+      re += ".*";
+    } else if (c === "?") {
+      re += ".";
+    } else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end === -1) {
+        re += "\\[";
+      } else {
+        re += pattern.slice(i, end + 1);
+        i = end;
+      }
+    } else if (/[.+^$(){}|\\]/.test(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp(`${re}$`);
+}
+
+function pathMatchesPattern(filePath, pattern) {
+  if (pattern.endsWith("/")) return filePath.startsWith(pattern);
+  return filePath === pattern || filePath.startsWith(`${pattern}/`) || bashPatternToRegex(pattern).test(filePath);
+}
+
+function routeFileStateSync(manifest, filePath) {
+  if (!manifest || !Array.isArray(manifest.modules)) return { state: "uncovered" };
 
   const exact = [];
   const prefix = [];
@@ -237,46 +256,104 @@ export function routeFileSync(manifest, filePath) {
   const pickWinner = (candidates) => {
     if (candidates.length === 0) return undefined;
     let maxP = -Infinity;
-    for (const c of candidates) if (c.prio > maxP) maxP = c.prio;
-    const tops = candidates.filter((c) => c.prio === maxP);
-    const names = new Set(tops.map((c) => c.name));
+    for (const candidate of candidates) if (candidate.prio > maxP) maxP = candidate.prio;
+    const tops = candidates.filter((candidate) => candidate.prio === maxP);
+    const names = new Set(tops.map((candidate) => candidate.name));
     if (names.size === 1) return tops[0].name;
-    return null; // ambiguous — mirror shell exit 2 (surfaced as null)
+    return null;
   };
 
-  // T1: exact
-  const t1 = exact.filter((r) => r.pattern === filePath);
+  const t1 = exact.filter((rule) => rule.pattern === filePath);
   if (t1.length > 0) {
-    const w = pickWinner(t1);
-    return w === undefined ? null : w;
+    const winner = pickWinner(t1);
+    return winner ? { state: "context-module", module: winner } : { state: "ambiguous" };
   }
 
-  // T2: longest prefix
-  const t2Hits = prefix.filter((r) => filePath.startsWith(r.pattern));
+  const t2Hits = prefix.filter((rule) => filePath.startsWith(rule.pattern));
   if (t2Hits.length > 0) {
     let maxLen = 0;
-    for (const r of t2Hits) if (r.pattern.length > maxLen) maxLen = r.pattern.length;
-    const longest = t2Hits.filter((r) => r.pattern.length === maxLen);
-    const w = pickWinner(longest);
-    return w === undefined ? null : w;
+    for (const rule of t2Hits) if (rule.pattern.length > maxLen) maxLen = rule.pattern.length;
+    const longest = t2Hits.filter((rule) => rule.pattern.length === maxLen);
+    const winner = pickWinner(longest);
+    return winner ? { state: "context-module", module: winner } : { state: "ambiguous" };
   }
 
-  // T3: globs (dedup by module name within tier, matching shell behavior)
   const seenModules = new Set();
   const t3 = [];
-  for (const r of globs) {
-    if (seenModules.has(r.name)) continue;
-    if (globToRegex(r.pattern).test(filePath)) {
-      seenModules.add(r.name);
-      t3.push(r);
+  for (const rule of globs) {
+    if (seenModules.has(rule.name)) continue;
+    if (globToRegex(rule.pattern).test(filePath)) {
+      seenModules.add(rule.name);
+      t3.push(rule);
     }
   }
   if (t3.length > 0) {
-    const w = pickWinner(t3);
-    return w === undefined ? null : w;
+    const winner = pickWinner(t3);
+    return winner ? { state: "context-module", module: winner } : { state: "ambiguous" };
   }
 
-  return null;
+  return { state: "uncovered" };
+}
+
+function contextlessMatches(manifest, filePath, source) {
+  const matches = [];
+  if (source === "explicit") {
+    for (const entry of manifest?.contextless?.entries || []) {
+      const id = entry.id;
+      if (!id) continue;
+      const policy = entry.reviewPolicy || "account-only";
+      for (const pattern of entry.globs || []) {
+        if (pathMatchesPattern(filePath, pattern)) matches.push(`${id}:${policy}`);
+      }
+    }
+  } else {
+    for (const pattern of manifest?.unmapped?.allowedGlobs || []) {
+      if (pathMatchesPattern(filePath, pattern)) matches.push("legacy-unmapped:account-only");
+    }
+  }
+  return [...new Set(matches)];
+}
+
+/**
+ * Classify a path into exactly one context coverage state. Mirrors
+ * plugins/edc/scripts/edc-classify-path.sh.
+ */
+export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
+  for (const pattern of ignorePatterns) {
+    if (pathMatchesPattern(filePath, pattern)) return "ignored";
+  }
+
+  const routeState = routeFileStateSync(manifest, filePath);
+  if (routeState.state === "ambiguous") return "ambiguous";
+
+  const explicitContextless = contextlessMatches(manifest, filePath, "explicit");
+  const legacyContextless = contextlessMatches(manifest, filePath, "legacy");
+  const explicitState =
+    explicitContextless.length === 0
+      ? null
+      : explicitContextless.length === 1
+        ? `contextless:${explicitContextless[0]}`
+        : "ambiguous";
+  const legacyState =
+    legacyContextless.length === 0
+      ? null
+      : legacyContextless.length === 1
+        ? `contextless:${legacyContextless[0]}`
+        : "ambiguous";
+
+  if (routeState.state === "context-module") {
+    return explicitState ? "ambiguous" : `context-module:${routeState.module}`;
+  }
+  return explicitState || legacyState || "uncovered";
+}
+
+/**
+ * Route a file path to a module, in-process. Mirrors the 3-tier algorithm in
+ * plugins/edc/scripts/edc-route.sh. Returns null on no-match or ambiguity.
+ */
+export function routeFileSync(manifest, filePath) {
+  const state = routeFileStateSync(manifest, filePath);
+  return state.state === "context-module" ? state.module : null;
 }
 
 /**

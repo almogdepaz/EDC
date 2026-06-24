@@ -1,6 +1,6 @@
 {
-  "buildTimestamp": "2026-05-26T09:38:10Z",
-  "edcVersion": "1.1.0",
+  "buildTimestamp": "2026-06-15T11:12:38Z",
+  "edcVersion": "1.1.1",
   "layoutVersion": 2,
   "modules": [
     "runtime-cli",
@@ -20,6 +20,65 @@
   "sourceCommit": "<filled by manifest post-step>",
   "moduleDiscovery": {
     "strategy": "git ls-files with .edcignore applied; logical grouping by package/runtime/test/benchmark boundaries",
-    "sourceBodiesReadDuringOrientation": false
+    "sourceBodiesReadDuringOrientation": false,
+    "modules": [
+      {
+        "name": "runtime-cli",
+        "paths": [
+          "install.sh",
+          "plugins/edc/scripts/",
+          "plugins/edc/commands/"
+        ],
+        "fileCount": 19,
+        "approxLoc": 5025
+      },
+      {
+        "name": "plugin-surface",
+        "paths": [
+          "package.json",
+          ".claude-plugin/marketplace.json",
+          "plugins/edc/README.md",
+          "plugins/edc/.claude-plugin/",
+          "plugins/edc/hooks/"
+        ],
+        "fileCount": 10,
+        "approxLoc": 993
+      },
+      {
+        "name": "canonical-skills",
+        "paths": [
+          "plugins/edc/prompt-bundles/",
+          "plugins/edc/skills/"
+        ],
+        "fileCount": 14,
+        "approxLoc": 2965
+      },
+      {
+        "name": "agent-wrappers",
+        "paths": [
+          "pi/",
+          "media/edc-pi-screenshot.png"
+        ],
+        "fileCount": 4,
+        "approxLoc": 1528
+      },
+      {
+        "name": "hardening-tests",
+        "paths": [
+          ".github/workflows/ci.yml",
+          "tests/hardening/"
+        ],
+        "fileCount": 32,
+        "approxLoc": 5122
+      },
+      {
+        "name": "benchmarking",
+        "paths": [
+          "benchmark/"
+        ],
+        "fileCount": 20,
+        "approxLoc": 4214
+      }
+    ]
   }
 }

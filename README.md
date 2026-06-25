@@ -1,8 +1,30 @@
 # EDC — Every Day Carry Skills
 
-Deep codebase understanding and context-aware review for AI coding agents. EDC builds a persistent `edc-context/` map of a repository, then uses that map for focused reviews, audits, and context loading.
+Repo maps for coding agents.
+
+EDC gives coding agents a repo map before they touch code. It builds a persistent `edc-context/` map of a repository, then uses that map for focused reviews, audits, and context loading.
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
+
+## 30-second start
+
+```bash
+pi install npm:@sgtbeatdown/edc
+cd your-repo
+pi
+# run /edc, choose Build context, then Review current branch vs main
+```
+
+First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
+
+## Why EDC?
+
+| Tool style | Strength | Gap | EDC angle |
+|---|---|---|---|
+| Cursor rules / Claude memory / `AGENTS.md` | Simple local guidance | Manual and drifts | Generated, updated, validated context tree |
+| Claude/Cursor/Codex agents | Good at code changes | Start each repo/session mostly blind | Shared repo map before work starts |
+| PR bots | Convenient diff review | Remote, black-box, PR-only | Local inspectable context-aware review |
+| Semantic search / code search | Finds relevant code | Does not encode authority or invariants | Authored module docs with routing and guardrails |
 
 ## What EDC Does
 

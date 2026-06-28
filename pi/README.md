@@ -47,7 +47,7 @@ Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool rep
 1. Start `pi` in a git repository.
 2. Run `/edc`.
 3. Choose **Build context** once.
-4. Choose **Review current branch vs main**.
+4. Choose **Review current branch vs default branch**.
 5. Check progress with **Job status**.
 
 ## Command
@@ -60,7 +60,7 @@ Pi exposes one interactive command:
 
 Menu actions:
 
-- Review current branch vs `main` — starts a background review with `HEAD --base main`
+- Review current branch vs default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background review with `HEAD --base <detected-base>`
 - Job status — shows the current background job status
 - Build context — starts a background context build
 - Update context from `main` — starts a background context update
@@ -70,9 +70,9 @@ Menu actions:
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
 
 ```bash
-edc review --agent pi HEAD --base main
+edc review --agent pi HEAD --base <default-branch>
 edc build --agent pi
-edc update --agent pi --base main
+edc update --agent pi --base <default-branch>
 ```
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
@@ -142,7 +142,7 @@ edc mode inject
 | `bash >=4` or array errors | macOS `/bin/bash` is 3.2. Install Homebrew Bash and ensure it is on `PATH`, or set `EDC_BASH=/opt/homebrew/bin/bash`. |
 | `jq: command not found` | Install `jq`; EDC orchestrators use it for manifest and report validation. |
 | `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash`, writes to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
-| Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from main** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
+| Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from default branch** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
 | Background review reports provider websocket/transport failure | The nested pi subprocess lost provider transport. Rerun the job; if it repeats, run `edc update --agent pi` separately or reduce context/update scope. |
 | Wrong model in nested pi subprocesses | EDC forwards the active pi model as `EDC_PI_MODEL` when `ctx.model.provider` and `ctx.model.id` are available. Check the job log for the propagated model and set explicit model env vars only if you need to override it. |
 

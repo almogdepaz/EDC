@@ -46,7 +46,7 @@ exit 1
   };
   await edcExtension(pi);
 
-  const selections = ["Review current branch vs main", "Job status"];
+  const selections = ["Review current branch vs default branch", "Job status"];
   const ctx = {
     cwd,
     hasUI: true,

@@ -93,6 +93,7 @@ EOF
   touch tracked.txt
   git add tracked.txt
   git -c commit.gpgsign=false commit -q -m init
+  git branch -M master
   head_commit=$(git rev-parse HEAD)
   tmp_manifest=$(mktemp)
   jq --arg head "$head_commit" '.sourceCommit = $head' edc-context/manifest.json > "$tmp_manifest"
@@ -164,9 +165,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     },
   });
 
-  // 3. /edc menu review starts background review against HEAD --base main with a compact colored command result.
+  // 3. /edc menu review starts background review against HEAD --base <detected default branch> with a compact colored command result.
   const messagesBeforeReviewStart = calls.messages.length;
-  await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
+  await edcCmd.opts.handler("", menuCtx("Review current branch vs default branch"));
   if (calls.userMessages.length !== 0) {
     console.log("DIRECT_COMMAND_USED_MODEL_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
@@ -202,8 +203,45 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
   const reviewArgs = (fs.readFileSync(statusFile, "utf-8").match(/^args=(.+)$/m) || [])[1] || "";
-  if (reviewArgs !== "HEAD --base main") {
+  if (reviewArgs !== "HEAD --base master") {
     console.log("MENU_REVIEW_ARGS_FAIL:" + reviewArgs);
+    process.exit(1);
+  }
+
+  // 3a2. Detected git refs are untrusted metadata and must not be shell-evaluated.
+  const maliciousDir = `${cwd}/malicious-default-ref`;
+  const maliciousPwned = `/tmp/edc-pwned-t10-${process.pid}`;
+  const maliciousShortRef = `origin/evil$(touch\${IFS}${maliciousPwned})`;
+  const maliciousFullRef = `refs/remotes/${maliciousShortRef}`;
+  try { fs.unlinkSync(maliciousPwned); } catch {}
+  fs.mkdirSync(`${maliciousDir}/.edc/scripts`, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: maliciousDir, stdio: "ignore" });
+  fs.writeFileSync(`${maliciousDir}/tracked.txt`, "x\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["update-ref", maliciousFullRef, "HEAD"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", maliciousFullRef], { cwd: maliciousDir, stdio: "ignore" });
+  fs.writeFileSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Verified: review-HEAD.md"\n`);
+  fs.chmodSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, 0o755);
+  const maliciousMessagesBefore = calls.messages.length;
+  await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs default branch"), cwd: maliciousDir });
+  const maliciousStartMessage = calls.messages.slice(maliciousMessagesBefore).at(-1);
+  if (calls.messages.length !== maliciousMessagesBefore + 1 || !maliciousStartMessage?.content?.includes("Background EDC review started.")) {
+    console.log("MALICIOUS_REF_START_FAIL:" + JSON.stringify(calls.messages.slice(maliciousMessagesBefore)));
+    process.exit(1);
+  }
+  const maliciousStatusFile = `${maliciousDir}/.git/edc/status`;
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(maliciousStatusFile) && fs.readFileSync(maliciousStatusFile, "utf-8").includes("status=success")) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const maliciousStatus = fs.existsSync(maliciousStatusFile) ? fs.readFileSync(maliciousStatusFile, "utf-8") : "";
+  if (!maliciousStatus.includes(`args=HEAD --base ${maliciousShortRef}`)) {
+    console.log("MALICIOUS_REF_ARGS_FAIL:" + JSON.stringify(maliciousStatus));
+    process.exit(1);
+  }
+  if (fs.existsSync(maliciousPwned)) {
+    console.log("MALICIOUS_REF_EXECUTED_FAIL:" + maliciousPwned);
     process.exit(1);
   }
 
@@ -233,7 +271,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8")
     .replace("status=success", "status=running")
     .replace(/^pid=.*$/m, `pid=${process.pid}`));
-  await edcCmd.opts.handler("", menuCtx("Review current branch vs main"));
+  await edcCmd.opts.handler("", menuCtx("Review current branch vs default branch"));
   const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
   if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Job status.")) {
     console.log("ALREADY_RUNNING_FAIL:" + JSON.stringify(alreadyRunningMessage));
@@ -271,8 +309,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   process.env.PATH = `${raceDir}/fake-bin:${previousPath || ""}`;
   const raceStartIndex = calls.messages.length;
   await Promise.all([
-    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: raceDir }),
-    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: raceDir }),
+    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs default branch"), cwd: raceDir }),
+    edcCmd.opts.handler("", { ...menuCtx("Review current branch vs default branch"), cwd: raceDir }),
   ]);
   process.env.PATH = previousPath;
   const raceMessages = calls.messages.slice(raceStartIndex).map((message) => message.content || "");
@@ -318,7 +356,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.mkdirSync(`${stalePidDir}/.git/edc`, { recursive: true });
   fs.writeFileSync(`${stalePidDir}/.git/edc/status`, "status=running\nrun_id=dead\npid=999999\nstarted_at=2000-01-01T00:00:00Z\n");
   const stalePidMessagesBefore = calls.messages.length;
-  await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs main"), cwd: stalePidDir });
+  await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs default branch"), cwd: stalePidDir });
   const stalePidStartMessage = calls.messages.slice(stalePidMessagesBefore).at(-1);
   if (calls.messages.length !== stalePidMessagesBefore + 1 || !stalePidStartMessage?.content?.includes("Background EDC review started.")) {
     console.log("STALE_PID_RECOVERY_START_MESSAGE_FAIL:" + JSON.stringify(calls.messages.slice(stalePidMessagesBefore)));
@@ -334,7 +372,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
   const backgroundCases = [
     { selection: "Build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
-    { selection: "Update context from main", kind: "update", log: ".git/edc/update.log", expect: "update args: --base main agent=pi" },
+    { selection: "Update context from default branch", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
     { selection: "Audit complexity", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
   ];
   for (const testCase of backgroundCases) {
@@ -385,7 +423,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3h. /edc is interactive-only; non-interactive contexts are told to use the CLI.
   await edcCmd.opts.handler("", { cwd, hasUI: false });
   const nonInteractiveMessage = calls.messages.at(-1)?.content || "";
-  if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review --agent pi HEAD --base main")) {
+  if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review --agent pi HEAD --base <default-branch>")) {
     console.log("NON_INTERACTIVE_FAIL:" + JSON.stringify(nonInteractiveMessage));
     process.exit(1);
   }
@@ -403,7 +441,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     cwd: missingDir,
     hasUI: true,
     ui: {
-      select: async () => "Review current branch vs main",
+      select: async () => "Review current branch vs default branch",
       confirm: async (title, message) => {
         calls.confirmations.push({ title, message });
         return true;
@@ -429,6 +467,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   childProcess.execFileSync("git", ["init"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["branch", "-M", "master"], { cwd: staleDir, stdio: "ignore" });
   const sourceCommit = childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: staleDir, encoding: "utf-8" }).trim();
   fs.writeFileSync(`${staleDir}/file.txt`, "y\n");
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
@@ -444,7 +483,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     cwd: staleDir,
     hasUI: true,
     ui: {
-      select: async () => "Review current branch vs main",
+      select: async () => "Review current branch vs default branch",
       confirm: async (title, message) => {
         calls.confirmations.push({ title, message });
         return false;
@@ -457,7 +496,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
   const declineMessage = calls.messages.at(-1)?.content || "";
-  if (!declineMessage.includes("edc review --agent pi HEAD --base main --no-context-refresh") || !declineMessage.includes("--ignore-context")) {
+  if (!declineMessage.includes("edc review --agent pi HEAD --base master --no-context-refresh") || !declineMessage.includes("--ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }

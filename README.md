@@ -2,7 +2,7 @@
 
 Repo maps for coding agents.
 
-EDC gives coding agents a repo map before they touch code. It builds a persistent `edc-context/` map of a repository, then uses that map for focused reviews, audits, and context loading.
+EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, audits, debugging, and context loading.
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
@@ -34,7 +34,7 @@ EDC separates deterministic orchestration from LLM analysis:
 - Subagents write per-module architecture context and review reports.
 - Agent integrations expose the same workflows through native commands, skills, hooks, or pi's interactive menu.
 
-The generated context lives in the target repository under `edc-context/`. Build it once per repo, then update it when the code moves.
+The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Reviews use Trail of Bits-style differential review methodology, routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
 
 ### Commands
 

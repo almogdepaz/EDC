@@ -36,11 +36,11 @@ const EDC_COMMAND = {
 };
 
 const EDC_MENU = {
-  REVIEW_MAIN: "Review current branch vs main",
+  REVIEW_DEFAULT: "Review current branch vs default branch",
   JOB_STATUS: "Job status",
   KILL_JOB: "Kill running EDC job",
   BUILD: "Build context",
-  UPDATE_MAIN: "Update context from main",
+  UPDATE_DEFAULT: "Update context from default branch",
   AUDIT: "Audit complexity",
   DOCTOR: "Doctor / validate context",
   CANCEL: "Cancel",
@@ -71,6 +71,19 @@ function tokenizeArgs(args) {
   return String(args || "").trim().split(/\s+/).filter(Boolean);
 }
 
+function argTokens(args) {
+  if (Array.isArray(args)) return args.map(String).filter((arg) => arg.length > 0);
+  return tokenizeArgs(args);
+}
+
+function renderArgs(args) {
+  return argTokens(args).join(" ");
+}
+
+function renderShellArgs(args) {
+  return argTokens(args).map(shellQuote).join(" ");
+}
+
 function isHelpRequest(args) {
   return tokenizeArgs(args).some((arg) => arg === "-h" || arg === "--help");
 }
@@ -87,11 +100,11 @@ function renderEdcHelp() {
     "Opens the interactive EDC menu.",
     "",
     "Menu actions:",
-    "- Review current branch vs main",
+    "- Review current branch vs default branch",
     "- Job status",
     "- Kill running EDC job",
     "- Build context",
-    "- Update context from main",
+    "- Update context from default branch",
     "- Audit complexity",
     "- Doctor / validate context",
     "",
@@ -99,9 +112,9 @@ function renderEdcHelp() {
     "  /edc kill",
     "",
     "Non-interactive use is intentionally CLI-only:",
-    "  edc review --agent pi HEAD --base main",
+    "  edc review --agent pi HEAD --base <default-branch>",
     "  edc build --agent pi",
-    "  edc update --agent pi --base main",
+    "  edc update --agent pi --base <default-branch>",
   ].join("\n");
 }
 
@@ -110,12 +123,11 @@ function sendInfo(pi, customType, content) {
 }
 
 function reviewArgsWithDefaultTarget(args) {
-  const trimmed = String(args || "").trim();
-  return trimmed || "HEAD";
+  return renderArgs(args) || "HEAD";
 }
 
 function reviewSkipsContextPrompt(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = argTokens(args);
   return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
 }
 
@@ -134,6 +146,47 @@ function extendEdcBashTimeout(event) {
   if (!Number.isFinite(currentTimeout) || currentTimeout < EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS) {
     event.input.timeout = EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS;
   }
+}
+
+function gitRefExists(cwd, ref) {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+      cwd,
+      timeout: 3000,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function detectDefaultBaseRef(cwd) {
+  try {
+    const remoteHead = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
+      cwd,
+      timeout: 3000,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (remoteHead && gitRefExists(cwd, remoteHead)) return remoteHead;
+  } catch {
+    // origin/HEAD is optional in local/test repos.
+  }
+
+  for (const ref of ["main", "master", "origin/main", "origin/master"]) {
+    if (gitRefExists(cwd, ref)) return ref;
+  }
+
+  return "main";
+}
+
+function defaultBaseReviewArgs(cwd) {
+  return ["HEAD", "--base", detectDefaultBaseRef(cwd)];
+}
+
+function defaultBaseUpdateArgs(cwd) {
+  return ["--base", detectDefaultBaseRef(cwd)];
 }
 
 function commitDistance(cwd, sourceCommit, headCommit) {
@@ -275,7 +328,7 @@ function runEdcScript(scriptName, args, ctx) {
     return Promise.resolve({ code: 2, stdout: "", stderr: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)\n" });
   }
 
-  const script = `set -- ${args || ""}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
+  const script = `set -- ${renderShellArgs(args)}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
   return new Promise((resolve) => {
     const child = spawn(bashPath, ["-lc", script], {
       cwd: ctx.cwd,
@@ -529,17 +582,18 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
   mkdirSync(dirname(logPath.path), { recursive: true });
   const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const startedHead = currentHead(ctx.cwd);
+  const renderedArgs = renderArgs(args);
   writeRunningBackgroundStatus(statusPath, logPath, {
     kind,
     startedAt,
     runId,
     pid: "starting",
-    args,
+    args: renderedArgs,
     startedHead,
   });
 
   const script = `
-set -- ${args || ""}
+set -- ${renderShellArgs(args)}
 status_file=${shellQuote(statusPath.path)}
 log_file=${shellQuote(logPath.path)}
 log_display=${shellQuote(logPath.display)}
@@ -815,9 +869,9 @@ function interactiveOnlyMessage() {
     "/edc is interactive-only.",
     "",
     "Use the EDC CLI for non-interactive runs:",
-    "  edc review --agent pi HEAD --base main",
+    "  edc review --agent pi HEAD --base <default-branch>",
     "  edc build --agent pi",
-    "  edc update --agent pi --base main",
+    "  edc update --agent pi --base <default-branch>",
   ].join("\n");
 }
 
@@ -828,8 +882,8 @@ function killRunningJobAction(pi, ctx) {
   sendInfo(pi, "edc-job-kill", message);
 }
 
-async function runReviewAgainstMain(pi, ctx) {
-  const renderedArgs = "HEAD --base main";
+async function runReviewAgainstDefault(pi, ctx) {
+  const renderedArgs = defaultBaseReviewArgs(ctx.cwd);
   const freshness = getContextFreshness(ctx.cwd);
   const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
   if (!proceed) {
@@ -885,19 +939,19 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   const choice = await ctx.ui.select("EDC", [
-    EDC_MENU.REVIEW_MAIN,
+    EDC_MENU.REVIEW_DEFAULT,
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
-    EDC_MENU.UPDATE_MAIN,
+    EDC_MENU.UPDATE_DEFAULT,
     EDC_MENU.AUDIT,
     EDC_MENU.DOCTOR,
     EDC_MENU.CANCEL,
   ]);
 
   switch (choice) {
-    case EDC_MENU.REVIEW_MAIN:
-      await runReviewAgainstMain(pi, ctx);
+    case EDC_MENU.REVIEW_DEFAULT:
+      await runReviewAgainstDefault(pi, ctx);
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);
@@ -909,8 +963,8 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.BUILD:
       runBackgroundAction(pi, ctx, "build", "edc-build.sh");
       break;
-    case EDC_MENU.UPDATE_MAIN:
-      runBackgroundAction(pi, ctx, "update", "edc-update.sh", "--base main");
+    case EDC_MENU.UPDATE_DEFAULT:
+      runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
       break;
     case EDC_MENU.AUDIT:
       runBackgroundAction(pi, ctx, "audit", "edc-audit.sh");

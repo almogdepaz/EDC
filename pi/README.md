@@ -63,7 +63,7 @@ Menu actions:
 - Review current branch vs default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background review with `HEAD --base <detected-base>`
 - Job status — shows the current background job status
 - Build context — starts a background context build
-- Update context from `main` — starts a background context update
+- Update context from default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
 - Audit complexity — starts a background audit
 - Doctor / validate context
 

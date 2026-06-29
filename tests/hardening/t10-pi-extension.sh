@@ -208,6 +208,43 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
+  // 3a2. Detected git refs are untrusted metadata and must not be shell-evaluated.
+  const maliciousDir = `${cwd}/malicious-default-ref`;
+  const maliciousPwned = `/tmp/edc-pwned-t10-${process.pid}`;
+  const maliciousShortRef = `origin/evil$(touch\${IFS}${maliciousPwned})`;
+  const maliciousFullRef = `refs/remotes/${maliciousShortRef}`;
+  try { fs.unlinkSync(maliciousPwned); } catch {}
+  fs.mkdirSync(`${maliciousDir}/.edc/scripts`, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: maliciousDir, stdio: "ignore" });
+  fs.writeFileSync(`${maliciousDir}/tracked.txt`, "x\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["update-ref", maliciousFullRef, "HEAD"], { cwd: maliciousDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", maliciousFullRef], { cwd: maliciousDir, stdio: "ignore" });
+  fs.writeFileSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Verified: review-HEAD.md"\n`);
+  fs.chmodSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, 0o755);
+  const maliciousMessagesBefore = calls.messages.length;
+  await edcCmd.opts.handler("", { ...menuCtx("Review current branch vs default branch"), cwd: maliciousDir });
+  const maliciousStartMessage = calls.messages.slice(maliciousMessagesBefore).at(-1);
+  if (calls.messages.length !== maliciousMessagesBefore + 1 || !maliciousStartMessage?.content?.includes("Background EDC review started.")) {
+    console.log("MALICIOUS_REF_START_FAIL:" + JSON.stringify(calls.messages.slice(maliciousMessagesBefore)));
+    process.exit(1);
+  }
+  const maliciousStatusFile = `${maliciousDir}/.git/edc/status`;
+  for (let i = 0; i < 20; i++) {
+    if (fs.existsSync(maliciousStatusFile) && fs.readFileSync(maliciousStatusFile, "utf-8").includes("status=success")) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const maliciousStatus = fs.existsSync(maliciousStatusFile) ? fs.readFileSync(maliciousStatusFile, "utf-8") : "";
+  if (!maliciousStatus.includes(`args=HEAD --base ${maliciousShortRef}`)) {
+    console.log("MALICIOUS_REF_ARGS_FAIL:" + JSON.stringify(maliciousStatus));
+    process.exit(1);
+  }
+  if (fs.existsSync(maliciousPwned)) {
+    console.log("MALICIOUS_REF_EXECUTED_FAIL:" + maliciousPwned);
+    process.exit(1);
+  }
+
   // 3b. /edc menu can show status for latest run without pinning completed status in the UI.
   const statusesBeforeStatusCommand = calls.statuses.length;
   const widgetsBeforeStatusCommand = calls.widgets.length;
@@ -430,6 +467,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   childProcess.execFileSync("git", ["init"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: staleDir, stdio: "ignore" });
+  childProcess.execFileSync("git", ["branch", "-M", "master"], { cwd: staleDir, stdio: "ignore" });
   const sourceCommit = childProcess.execFileSync("git", ["rev-parse", "HEAD"], { cwd: staleDir, encoding: "utf-8" }).trim();
   fs.writeFileSync(`${staleDir}/file.txt`, "y\n");
   childProcess.execFileSync("git", ["add", "file.txt"], { cwd: staleDir, stdio: "ignore" });

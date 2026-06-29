@@ -71,6 +71,19 @@ function tokenizeArgs(args) {
   return String(args || "").trim().split(/\s+/).filter(Boolean);
 }
 
+function argTokens(args) {
+  if (Array.isArray(args)) return args.map(String).filter((arg) => arg.length > 0);
+  return tokenizeArgs(args);
+}
+
+function renderArgs(args) {
+  return argTokens(args).join(" ");
+}
+
+function renderShellArgs(args) {
+  return argTokens(args).map(shellQuote).join(" ");
+}
+
 function isHelpRequest(args) {
   return tokenizeArgs(args).some((arg) => arg === "-h" || arg === "--help");
 }
@@ -110,12 +123,11 @@ function sendInfo(pi, customType, content) {
 }
 
 function reviewArgsWithDefaultTarget(args) {
-  const trimmed = String(args || "").trim();
-  return trimmed || "HEAD";
+  return renderArgs(args) || "HEAD";
 }
 
 function reviewSkipsContextPrompt(args) {
-  const tokens = tokenizeArgs(args);
+  const tokens = argTokens(args);
   return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
 }
 
@@ -170,11 +182,11 @@ function detectDefaultBaseRef(cwd) {
 }
 
 function defaultBaseReviewArgs(cwd) {
-  return `HEAD --base ${detectDefaultBaseRef(cwd)}`;
+  return ["HEAD", "--base", detectDefaultBaseRef(cwd)];
 }
 
 function defaultBaseUpdateArgs(cwd) {
-  return `--base ${detectDefaultBaseRef(cwd)}`;
+  return ["--base", detectDefaultBaseRef(cwd)];
 }
 
 function commitDistance(cwd, sourceCommit, headCommit) {
@@ -316,7 +328,7 @@ function runEdcScript(scriptName, args, ctx) {
     return Promise.resolve({ code: 2, stdout: "", stderr: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)\n" });
   }
 
-  const script = `set -- ${args || ""}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
+  const script = `set -- ${renderShellArgs(args)}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
   return new Promise((resolve) => {
     const child = spawn(bashPath, ["-lc", script], {
       cwd: ctx.cwd,
@@ -570,17 +582,18 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
   mkdirSync(dirname(logPath.path), { recursive: true });
   const startedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
   const startedHead = currentHead(ctx.cwd);
+  const renderedArgs = renderArgs(args);
   writeRunningBackgroundStatus(statusPath, logPath, {
     kind,
     startedAt,
     runId,
     pid: "starting",
-    args,
+    args: renderedArgs,
     startedHead,
   });
 
   const script = `
-set -- ${args || ""}
+set -- ${renderShellArgs(args)}
 status_file=${shellQuote(statusPath.path)}
 log_file=${shellQuote(logPath.path)}
 log_display=${shellQuote(logPath.display)}

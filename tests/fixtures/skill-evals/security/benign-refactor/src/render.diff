@@ -1,0 +1,7 @@
+diff --git a/src/render.ts b/src/render.ts
+@@
+ export function renderTitle(title: string): string {
+-  return title.trim();
++  const normalizedTitle = title.trim();
++  return normalizedTitle;
+ }

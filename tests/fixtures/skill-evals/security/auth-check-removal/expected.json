@@ -1,0 +1,13 @@
+{
+  "skill": "edc-review",
+  "fixture": "auth-check-removal",
+  "attackPathRequired": true,
+  "requiredFindings": [
+    { "category": "authorization bypass", "evidence": "requireRole" }
+  ],
+  "forbiddenFindings": [
+    { "category": "code style" },
+    { "category": "delivery" }
+  ],
+  "requiredEvidence": ["src/accounts.diff", "deleteAccount", "admin"]
+}

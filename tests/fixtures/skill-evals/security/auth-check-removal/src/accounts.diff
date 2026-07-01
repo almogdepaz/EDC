@@ -1,0 +1,6 @@
+diff --git a/src/accounts.ts b/src/accounts.ts
+@@
+ export async function deleteAccount(ctx: RequestContext, accountId: string) {
+-  requireRole(ctx.user, "admin");
+   await accounts.delete(accountId);
+ }

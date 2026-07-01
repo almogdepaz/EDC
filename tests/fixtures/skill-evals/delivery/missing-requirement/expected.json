@@ -1,0 +1,15 @@
+{
+  "skill": "edc-delivery-review",
+  "fixture": "missing-requirement",
+  "deliveryVerdict": "partially delivered",
+  "architectureFit": "fits",
+  "requiredFindings": [
+    { "category": "missing requirement", "evidence": "failed" },
+    { "category": "missing requirement", "evidence": "generatedAt" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "code quality" }
+  ],
+  "requiredEvidence": ["spec.md", "src/status.ts", "Requirement"]
+}

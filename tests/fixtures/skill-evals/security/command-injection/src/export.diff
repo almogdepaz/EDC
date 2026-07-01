@@ -1,0 +1,6 @@
+diff --git a/src/export.ts b/src/export.ts
+@@
+ export async function exportProject(projectName: string) {
+-  return spawnFile("tar", ["-czf", `${projectName}.tgz`, projectName]);
++  return exec(`tar -czf ${projectName}.tgz ${projectName}`);
+ }

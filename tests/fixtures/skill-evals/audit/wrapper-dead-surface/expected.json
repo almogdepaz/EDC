@@ -1,0 +1,14 @@
+{
+  "skill": "edc-audit",
+  "fixture": "wrapper-dead-surface",
+  "requiredFindings": [
+    { "category": "dead export", "evidence": "formatLegacyReport" },
+    { "category": "thin wrapper", "evidence": "formatReport" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "scope creep" },
+    { "evidence": "createReportAdapter" }
+  ],
+  "requiredEvidence": ["src/reporting.ts", "renderReport"]
+}

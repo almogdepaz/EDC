@@ -89,7 +89,7 @@ pi install "$SOURCE" "${ARGS[@]}"
 cat <<EOF
 
 Done. Available command in pi:
-  /edc             interactive EDC menu (review, status, build, update, audit, doctor)
+  /edc             interactive EDC menu (review, delivery-review, status, build, update, audit, doctor)
 
 Visible skills:
   edc-review       security/adversarial review methodology

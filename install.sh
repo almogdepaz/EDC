@@ -92,6 +92,14 @@ SKILLS=(
   "plugins/edc/prompt-bundles/edc-context-curator-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-context-curator-edit-impl/SKILL.md"
   "plugins/edc/skills/edc-audit/SKILL.md"
+  "plugins/edc/skills/edc-audit/references/scope-and-standards.md"
+  "plugins/edc/skills/edc-audit/references/smell-baseline.md"
+  "plugins/edc/skills/edc-audit/references/quality-checks.md"
+  "plugins/edc/skills/edc-audit/references/reporting.md"
+  "plugins/edc/skills/edc-delivery-review/SKILL.md"
+  "plugins/edc/skills/edc-delivery-review/references/spec-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
 
 PUBLIC_SKILLS=(
@@ -101,6 +109,14 @@ PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-review/reporting.md"
   "plugins/edc/skills/edc-review/patterns.md"
   "plugins/edc/skills/edc-audit/SKILL.md"
+  "plugins/edc/skills/edc-audit/references/scope-and-standards.md"
+  "plugins/edc/skills/edc-audit/references/smell-baseline.md"
+  "plugins/edc/skills/edc-audit/references/quality-checks.md"
+  "plugins/edc/skills/edc-audit/references/reporting.md"
+  "plugins/edc/skills/edc-delivery-review/SKILL.md"
+  "plugins/edc/skills/edc-delivery-review/references/spec-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
 
 download() {
@@ -320,8 +336,9 @@ print_cli_hint() {
     pi)
       echo "  edc build  --agent pi             # build or update edc-context/"
       echo "  edc update --agent pi --base main # force incremental update"
-      echo "  edc review --agent pi HEAD --base main # differential review of current branch"
-      echo "  edc audit  --agent pi             # complexity / bloat audit"
+      echo "  edc review --agent pi HEAD --base main # security review of current branch"
+      echo "  edc delivery-review --agent pi HEAD --base main # delivery/architecture review"
+      echo "  edc audit  --agent pi             # code quality audit"
       echo "  edc doctor                        # validate context"
       echo "  edc mode advisory|inject          # toggle runtime mode"
       echo
@@ -330,8 +347,9 @@ print_cli_hint() {
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
       echo "  edc update --agent $agent             # force incremental update"
-      echo "  edc review --agent $agent --base main # differential review of current branch"
-      echo "  edc audit  --agent $agent             # complexity / bloat audit"
+      echo "  edc review --agent $agent --base main # security review of current branch"
+      echo "  edc delivery-review --agent $agent HEAD --base main # delivery/architecture review"
+      echo "  edc audit  --agent $agent             # code quality audit"
       echo "  edc doctor                            # validate context"
       echo "  edc mode advisory|inject              # toggle runtime mode"
       ;;

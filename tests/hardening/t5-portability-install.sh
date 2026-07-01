@@ -93,6 +93,8 @@ pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
 if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
   && grep -q 'edc-context-curator-impl/SKILL.md' install.sh \
   && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
+  && grep -q 'edc-audit/references/quality-checks.md' install.sh \
+  && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
   && grep -q 'edc-classify-path.sh' install.sh; then
   echo "PASS: pi installer copies private skills and classifier for spawned subprocesses"
 else

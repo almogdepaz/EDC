@@ -12,10 +12,11 @@
 #   2. parse args (--ignore, --context-mode)
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
-#   4. spawn ONE audit subprocess via edc_spawn (claude/cursor/codex/pi)
-#   5. validate output: <reports-dir>/{complexity,issues}.md must exist
+#   4. spawn one scoped audit subprocess per manifest module
+#   5. spawn one synthesis subprocess to write canonical reports
+#   6. validate output: <reports-dir>/{complexity,issues}.md must exist
 #      and contain at least one ## heading
-#   6. exit 0 with paths printed, non-zero with reason
+#   7. exit 0 with paths printed, non-zero with reason
 #
 # Usage:
 #   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
@@ -60,25 +61,78 @@ CODEX_EXEC_HOME_OWNED=0
 # shellcheck source=edc-recover-context.sh
 . "$SCRIPT_DIR/edc-recover-context.sh"
 
-# ── validate audit output ────────────────────────────────────────────────────
+# ── audit task helpers ───────────────────────────────────────────────────────
+
+AUDIT_TASKS_DIR="$EDC_CONTEXT_DIR/audit-tasks"
+
+safe_audit_name() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_'
+}
+
+manifest_audit_modules() {
+  jq -r '.modules[]? | select((.type // "module") == "module") | [.name, .doc] | @tsv' "$MANIFEST"
+}
+
+assert_markdown_report_valid() {
+  local f="$1" label="$2"
+  if [ ! -f "$f" ]; then
+    echo "ERROR: audit report missing: $f ($label)" >&2
+    return 1
+  fi
+  if ! grep -q '^##' "$f"; then
+    echo "ERROR: $f has no '## ' headings — expected sections like ## Summary" >&2
+    echo "HINT: subprocess produced a stub. check the agent output above." >&2
+    return 1
+  fi
+}
 
 assert_audit_reports_valid() {
-  local complexity="$EDC_COMPLEXITY"
-  local issues="$EDC_ISSUES"
   local rc=0
-  for f in "$complexity" "$issues"; do
-    if [ ! -f "$f" ]; then
-      echo "ERROR: audit report missing: $f" >&2
-      rc=1
-      continue
-    fi
-    if ! grep -q '^##' "$f"; then
-      echo "ERROR: $f has no '## ' headings — expected sections like ## Summary, ## LOC Estimates" >&2
-      echo "HINT: subprocess produced a stub. check the agent output above." >&2
-      rc=1
-    fi
-  done
+  assert_markdown_report_valid "$EDC_COMPLEXITY" "complexity" || rc=1
+  assert_markdown_report_valid "$EDC_ISSUES" "issues" || rc=1
   return $rc
+}
+
+build_audit_worker_prompt() {
+  local module="$1" module_doc="$2" report_path="$3"
+  cat <<EOF
+AUDIT WORKER TASK
+AUDIT_MODULE: $module
+AUDIT_MODULE_DOC: $module_doc
+AUDIT_REPORT_PATH: $report_path
+
+Run a scoped code quality audit for this one module only.
+
+Rules:
+1. Read $EDC_INDEX, $MANIFEST, and $module_doc for this module's documented ownership, invariants, and file scope.
+2. Inspect only this module plus the smallest supporting references needed to verify a local code-quality finding.
+3. Write exactly one markdown report to $report_path.
+4. Do not write $EDC_COMPLEXITY or $EDC_ISSUES; synthesis owns canonical reports.
+5. Use the embedded edc-audit skill bundle below.
+
+$(_emit_audit_prompt)
+EOF
+}
+
+build_audit_synthesis_prompt() {
+  cat <<EOF
+AUDIT SYNTHESIS TASK
+AUDIT_WORKER_REPORTS_DIR: $AUDIT_TASKS_DIR
+CANONICAL_COMPLEXITY_REPORT: $EDC_COMPLEXITY
+CANONICAL_ISSUES_REPORT: $EDC_ISSUES
+
+Synthesize the scoped module audit reports into the canonical EDC audit reports.
+
+Rules:
+1. Read every markdown report under $AUDIT_TASKS_DIR.
+2. Do not re-audit source code unless a worker report is ambiguous and a small verification read is necessary.
+3. Write $EDC_COMPLEXITY for maintainability/code-quality findings.
+4. Write $EDC_ISSUES only for concrete correctness risks surfaced by worker reports.
+5. Preserve module names and evidence from worker reports so findings remain traceable.
+6. Use the embedded edc-audit reporting contract below.
+
+$(_emit_audit_prompt)
+EOF
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -117,15 +171,49 @@ audit_main() {
   recover_context_if_needed "${ignore_args[@]}" \
     || exit 1
 
-  # Spawn the audit subprocess.
-  echo "→ running audit via $EDC_AGENT_CLI..."
-  local audit_prompt
-  audit_prompt=$(resolve_prompt audit) || exit 1
-  edc_spawn "edc-audit" "${EDC_AUDIT_TIMEOUT:-1800}" "$audit_prompt" \
-    || { echo "ERROR: edc-audit invocation failed" >&2; exit 1; }
+  # Spawn one scoped audit subprocess per real module, then synthesize the
+  # worker outputs into the canonical reports.
+  echo "→ running per-module audit via $EDC_AGENT_CLI..."
+  rm -rf "$AUDIT_TASKS_DIR"
+  mkdir -p "$AUDIT_TASKS_DIR" "$EDC_REPORTS_DIR"
+
+  local module module_doc safe report_path worker_prompt module_count=0
+  while IFS=$'\t' read -r module module_doc; do
+    [ -n "${module:-}" ] || continue
+    module_count=$((module_count + 1))
+    if [ -z "${module_doc:-}" ] || [ ! -f "$module_doc" ]; then
+      echo "ERROR: manifest module '$module' has missing doc: ${module_doc:-<empty>}" >&2
+      exit 1
+    fi
+    safe=$(safe_audit_name "$module")
+    [ -n "$safe" ] || safe="module_$module_count"
+    report_path="$AUDIT_TASKS_DIR/$safe.md"
+    echo "→ auditing module: $module"
+    worker_prompt=$(build_audit_worker_prompt "$module" "$module_doc" "$report_path") || exit 1
+    edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt" \
+      || { echo "ERROR: edc-audit invocation failed for module $module" >&2; exit 1; }
+    assert_markdown_report_valid "$report_path" "module $module" \
+      || { echo "ERROR: module audit validation failed for $module" >&2; exit 1; }
+  done < <(manifest_audit_modules)
+
+  if [ "$module_count" -eq 0 ]; then
+    echo "ERROR: no real modules found in $MANIFEST; cannot run per-module audit" >&2
+    exit 1
+  fi
+
+  rm -f "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  echo "→ synthesizing audit reports..."
+  local synthesis_prompt
+  synthesis_prompt=$(build_audit_synthesis_prompt) || exit 1
+  edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt" \
+    || { echo "ERROR: edc-audit synthesis invocation failed" >&2; exit 1; }
 
   # Validate reports.
   assert_audit_reports_valid || exit 1
+
+  if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
+    rm -rf "$AUDIT_TASKS_DIR"
+  fi
 
   echo "Audit reports:"
   echo "  $EDC_COMPLEXITY"

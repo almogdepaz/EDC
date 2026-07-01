@@ -136,6 +136,20 @@ if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
   finish_ok
 fi
+if printf '%s' "$prompt" | grep -q 'AUDIT WORKER TASK'; then
+  report_path=$(printf '%s\n' "$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
+  mkdir -p "$(dirname "$report_path")"
+  printf '## Module Audit\n\nmock pi module audit\n' > "$report_path"
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited module"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
+  mkdir -p edc-context/reports
+  printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
+  printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
+  finish_ok
+fi
 if printf '%s' "$prompt" | grep -q 'AUDIT_SKILL_MARKER'; then
   mkdir -p edc-context/reports
   printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md

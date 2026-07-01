@@ -132,6 +132,7 @@ install_terminal_cli() {
   mkdir -p "$scripts_target"
   copy_or_download "plugins/edc/scripts/edc"                 "$scripts_target/edc"
   copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
+  copy_or_download "plugins/edc/scripts/edc-delivery-review.sh" "$scripts_target/edc-delivery-review.sh"
   copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
   copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
   copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
@@ -148,6 +149,7 @@ install_terminal_cli() {
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
+    "$scripts_target/edc-delivery-review.sh" \
     "$scripts_target/edc-build.sh" \
     "$scripts_target/edc-update.sh" \
     "$scripts_target/edc-audit.sh" \
@@ -214,7 +216,7 @@ EOF
 }
 
 # write_cursor_commands <cursor-target>
-# Generates four thin slash-command wrappers under <target>/commands/. Each
+# Generates thin slash-command wrappers under <target>/commands/. Each
 # wrapper is a Bash-only shim that exports EDC_AGENT_CLI=cursor and shells to
 # the matching ~/.edc/scripts/edc-*.sh orchestrator. No source-file checked
 # into the repo — the wrapper template lives here, the only place it can
@@ -323,7 +325,7 @@ print_cli_hint() {
       echo "  edc doctor                        # validate context"
       echo "  edc mode advisory|inject          # toggle runtime mode"
       echo
-      echo "Inside pi, use /edc for the interactive menu (review/status/build/update/audit/doctor)."
+      echo "Inside pi, use /edc for the interactive menu (review/delivery-review/status/build/update/audit/doctor)."
       ;;
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
@@ -430,7 +432,7 @@ case "$AGENT" in
     fi
     install_terminal_cli
     install_edc_skills "$HOME/.edc/skills"
-    echo "Done. Run /edc inside pi for review/status/build/update/audit/doctor. Toggle mode with 'edc mode advisory|inject'."
+    echo "Done. Run /edc inside pi for review/delivery-review/status/build/update/audit/doctor. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi
     print_path_hint
     ;;

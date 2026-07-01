@@ -9,6 +9,7 @@ Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
@@ -16,14 +17,15 @@ Usage:
 Commands:
   build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
   update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
-  review  Run the differential review pipeline (auto-builds/updates context if needed)
-  audit   Run the complexity-audit pipeline (auto-builds/updates context if needed)
+  review           Run the security review pipeline (auto-builds/updates context if needed)
+  delivery-review  Run the goal/spec delivery + architecture-fit review pipeline
+  audit            Run the code-quality audit pipeline (auto-builds/updates context if needed)
   mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build, update, review, and audit.
-  --model is optional and applies to both build and review phases. Per-phase
+  --agent is required for build, update, review, delivery-review, and audit.
+  --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
     'claude-haiku-4-5'; cursor: 'sonnet-4'; etc).
@@ -228,6 +230,62 @@ review_cmd() {
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
   EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$review_script" "${passthrough[@]}"
+}
+
+delivery_review_cmd() {
+  local agent=""
+  local context_mode=""
+  local -a passthrough=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --agent)
+        [ "$#" -ge 2 ] || die "--agent requires a value"
+        agent="$2"
+        shift 2
+        ;;
+      --base)
+        [ "$#" -ge 2 ] || die "--base requires a ref"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --ignore)
+        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        context_mode="$2"
+        passthrough+=("$1" "$2")
+        shift 2
+        ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        passthrough+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  [ -n "$agent" ] || die "--agent is required"
+  validate_context_mode "$context_mode"
+  if [ -z "$context_mode" ]; then
+    context_mode="$(read_manifest_default_mode)"
+    validate_context_mode "$context_mode"
+  fi
+  enforce_agent_context_mode "$agent" "$context_mode"
+  require_command "$agent"
+  _check_model_or_prompt "$agent"
+
+  local delivery_script
+  delivery_script="$(find_script edc-delivery-review.sh)" \
+    || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
+
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$delivery_script" "${passthrough[@]}"
 }
 
 audit_cmd() {
@@ -445,6 +503,9 @@ main() {
       ;;
     review)
       review_cmd "$@"
+      ;;
+    delivery-review)
+      delivery_review_cmd "$@"
       ;;
     audit)
       audit_cmd "$@"

@@ -16,9 +16,9 @@ the user-facing tour.
 | `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
-Audit, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
+Audit, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes those workflows through one interactive `/edc` menu (review/status/build/update/audit/doctor) registered by `pi/`.
+Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu (review/delivery-review/status/build/update/audit/doctor) registered by `pi/`.
 
 ## Internal structure
 
@@ -35,7 +35,8 @@ plugins/edc/
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
     edc-audit.sh                       # code quality / maintainability audit orchestrator
-    edc-review.sh                      # differential review orchestrator
+    edc-review.sh                      # security/adversarial review orchestrator
+    edc-delivery-review.sh             # goal/spec delivery + architecture-fit review orchestrator
     edc-doctor.sh                      # context-tree validator
 
     edc-lib.sh                         # sourced helpers: PATHS, RUNTIME, SPAWN, PROMPT sections
@@ -66,7 +67,7 @@ plugins/edc/
 
 ## Design: script-as-orchestrator
 
-The user's agent session uses thin command wrappers that call deterministic orchestrators (`edc-build.sh`, `edc-update.sh`, `edc-review.sh`, `edc-doctor.sh`; terminal CLI also exposes `edc-audit.sh`), which:
+The user's agent session uses thin command wrappers that call deterministic orchestrators (`edc-build.sh`, `edc-update.sh`, `edc-review.sh`, `edc-delivery-review.sh`, `edc-doctor.sh`; terminal CLI also exposes `edc-audit.sh`), which:
 
 1. Validates context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Auto-rebuilds or auto-updates context if stale (via `edc-recover-context.sh`)
@@ -124,11 +125,12 @@ resolution, pi JSON supervision, and codex-home isolation.
 ## Default invocation
 
 ```bash
-edc-review.sh --base main              # review current branch vs main
-edc-review.sh feat-branch --base main  # review branch vs main
-edc-review.sh --pr 42 --base main      # review PR by number (uses gh)
-edc-review.sh https://github.com/...   # review PR by URL (uses gh)
-edc-review.sh path/to/diff.patch       # review diff file
+edc-review.sh --base main              # security review current branch vs main
+edc-review.sh feat-branch --base main  # security review branch vs main
+edc-review.sh --pr 42 --base main      # security review PR by number (uses gh)
+edc-review.sh https://github.com/...   # security review PR by URL (uses gh)
+edc-review.sh path/to/diff.patch       # security review diff file
+edc-delivery-review.sh HEAD --base main # delivery/architecture review current branch vs main
 ```
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.

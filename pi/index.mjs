@@ -37,6 +37,7 @@ const EDC_COMMAND = {
 
 const EDC_MENU = {
   REVIEW_DEFAULT: "Review current branch vs default branch",
+  DELIVERY_REVIEW_DEFAULT: "Review delivery / architecture",
   JOB_STATUS: "Job status",
   KILL_JOB: "Kill running EDC job",
   BUILD: "Build context",
@@ -101,6 +102,7 @@ function renderEdcHelp() {
     "",
     "Menu actions:",
     "- Review current branch vs default branch",
+    "- Review delivery / architecture",
     "- Job status",
     "- Kill running EDC job",
     "- Build context",
@@ -113,6 +115,7 @@ function renderEdcHelp() {
     "",
     "Non-interactive use is intentionally CLI-only:",
     "  edc review --agent pi HEAD --base <default-branch>",
+    "  edc delivery-review --agent pi HEAD --base <default-branch>",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -132,7 +135,7 @@ function reviewSkipsContextPrompt(args) {
 }
 
 function isEdcOrchestratorCommand(command) {
-  const scriptName = "edc-(?:build|update|review|audit|doctor)\\.sh";
+  const scriptName = "edc-(?:build|update|review|delivery-review|audit|doctor)\\.sh";
   return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])\\$HOME/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])/[^\\s"']*/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command);
@@ -940,6 +943,7 @@ async function handleEdcMenu(pi, args, ctx) {
 
   const choice = await ctx.ui.select("EDC", [
     EDC_MENU.REVIEW_DEFAULT,
+    EDC_MENU.DELIVERY_REVIEW_DEFAULT,
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
@@ -952,6 +956,9 @@ async function handleEdcMenu(pi, args, ctx) {
   switch (choice) {
     case EDC_MENU.REVIEW_DEFAULT:
       await runReviewAgainstDefault(pi, ctx);
+      break;
+    case EDC_MENU.DELIVERY_REVIEW_DEFAULT:
+      runBackgroundAction(pi, ctx, "delivery-review", "edc-delivery-review.sh", defaultBaseReviewArgs(ctx.cwd));
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);

@@ -78,7 +78,7 @@ fi
 # ── 16.5: orchestrator scripts source edc-lib.sh (or edc-paths.sh for the
 #          few helpers that still load only the PATHS subset) ───────────────
 expected_sources=(
-  edc-review.sh edc-clean-slate.sh edc-audit.sh edc-build.sh edc-update.sh
+  edc-review.sh edc-delivery-review.sh edc-clean-slate.sh edc-audit.sh edc-build.sh edc-update.sh
   edc-assert-fresh.sh edc-recover-context.sh edc-doctor.sh edc-build-plan.sh
 )
 missing_source=()

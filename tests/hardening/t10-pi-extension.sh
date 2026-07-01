@@ -142,8 +142,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-delivery-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "delivery args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-doctor.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "doctor args: $* agent=$EDC_AGENT_CLI"\n`);
-  for (const script of ["edc-review.sh", "edc-build.sh", "edc-update.sh", "edc-audit.sh", "edc-doctor.sh"]) {
+  for (const script of ["edc-review.sh", "edc-build.sh", "edc-update.sh", "edc-audit.sh", "edc-delivery-review.sh", "edc-doctor.sh"]) {
     fs.chmodSync(`${cwd}/.edc/scripts/${script}`, 0o755);
   }
 
@@ -374,6 +375,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     { selection: "Build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
     { selection: "Update context from default branch", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
     { selection: "Audit code quality", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
+    { selection: "Review delivery / architecture", kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
   ];
   for (const testCase of backgroundCases) {
     const beforeMessages = calls.messages.length;
@@ -558,7 +560,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("SESSION_SHUTDOWN_CLEAR_FAIL:" + JSON.stringify({ statuses: calls.statuses.slice(shutdownStatusesBefore), widgets: calls.widgets.slice(shutdownWidgetsBefore) }));
     process.exit(1);
   }
-  for (const requiredScript of ["edc-review.sh", "edc-lib.sh", "edc-assert-fresh.sh", "edc-recover-context.sh"]) {
+  for (const requiredScript of ["edc-review.sh", "edc-delivery-review.sh", "edc-lib.sh", "edc-assert-fresh.sh", "edc-recover-context.sh"]) {
     if (!fs.existsSync(`${cwd}/.edc/scripts/${requiredScript}`)) {
       console.log("SCRIPT_INSTALL_FAIL:" + requiredScript);
       process.exit(1);

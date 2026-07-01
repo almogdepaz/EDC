@@ -41,8 +41,9 @@ The generated context lives in the target repository under `edc-context/`: an ov
 | Command | When to run it |
 |---------|----------------|
 | **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
-| **update** | Before review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
+| **update** | Before review/delivery-review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
 | **review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
+| **delivery-review** | On a branch or commit diff. Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
 | **audit** | Anytime. Compares context expectations against actual code to flag code-quality and maintainability risks. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
@@ -61,13 +62,17 @@ edc build  --agent codex --focus orchestrator
 edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
-# run the review pipeline in the current repo
+# run the security review pipeline in the current repo
 edc review --agent claude --base main
 edc review --agent cursor HEAD --base main
 edc review --agent codex --pr 42
 edc review --agent pi HEAD --base main
 edc review --agent codex https://github.com/owner/repo/pull/42
 edc review --agent codex HEAD --base main --ignore 'generated/**'
+
+# goal/spec delivery + architecture-fit review
+edc delivery-review --agent claude HEAD --base main
+edc delivery-review --agent pi HEAD --base main
 
 # code quality / maintainability audit
 edc audit  --agent claude
@@ -154,10 +159,10 @@ Claude, Cursor, and Codex expose thin wrappers for the same deterministic orches
 
 | Agent | User-facing actions |
 |-------|---------------------|
-| Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit` |
+| Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 | Cursor | `/edc-build`, `/edc-update`, `/edc-run-review`, `/edc-doctor`; public methodology skills |
 | Codex | `$edc-build`, `$edc-update`, `$edc-run-review`, `$edc-doctor`; public methodology skills |
-| pi | `/edc` interactive menu: review/status/build/update/audit/doctor; methodology skills `edc-review`, `edc-audit` |
+| pi | `/edc` interactive menu: review/delivery-review/status/build/update/audit/doctor; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 
 ### Review invocation examples
 

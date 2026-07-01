@@ -54,8 +54,9 @@ set -eu
 script_name=$(basename "$1")
 case "$script_name" in
   edc-build.sh)  bucket=build  ;;
-  edc-review.sh) bucket=review ;;
-  edc-audit.sh)  bucket=audit  ;;
+  edc-review.sh)          bucket=review ;;
+  edc-delivery-review.sh) bucket=delivery ;;
+  edc-audit.sh)           bucket=audit  ;;
   *)             bucket=other  ;;
 esac
 out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
@@ -123,6 +124,23 @@ if echo "$review_output" | grep -q -- '--agent is required'; then
 else
   echo "FAIL: review missing-agent error unclear"
   echo "$review_output"
+  exit 1
+fi
+
+# ── 7b2: --agent mandatory for delivery-review ───────────────────────────────
+set +e
+delivery_output=$(cd "$PROJECT" && run_cli delivery-review HEAD 2>&1)
+delivery_status=$?
+set -e
+if [ "$delivery_status" -eq 0 ]; then
+  echo "FAIL: delivery-review succeeded without --agent"
+  exit 1
+fi
+if echo "$delivery_output" | grep -q -- '--agent is required'; then
+  echo "PASS: delivery-review rejects missing --agent"
+else
+  echo "FAIL: delivery-review missing-agent error unclear"
+  echo "$delivery_output"
   exit 1
 fi
 
@@ -245,6 +263,21 @@ if grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
 else
   echo "FAIL: review args not forwarded correctly"
   cat "$CAPTURE/review/args"
+  exit 1
+fi
+
+# ── 7f2: delivery-review delegates to local orchestrator with args ───────────
+rm -rf "$CAPTURE/delivery"
+(cd "$PROJECT" && run_cli delivery-review --agent codex HEAD --base main)
+if [ "$(cat "$CAPTURE/delivery/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/delivery/script")" = "$SCRIPT_DIR/edc-delivery-review.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/delivery/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/delivery/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/delivery/args" >/dev/null; then
+  echo "PASS: delivery-review invokes repo edc-delivery-review.sh with args"
+else
+  echo "FAIL: delivery-review did not delegate correctly"
+  cat "$CAPTURE/delivery/agent" "$CAPTURE/delivery/script" "$CAPTURE/delivery/args" 2>/dev/null || true
   exit 1
 fi
 

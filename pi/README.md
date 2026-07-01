@@ -37,7 +37,7 @@ Orchestrated pi reviews require:
 
 - `pi`, `git`, `jq`, and `python3` on `PATH`
 - Bash >= 4; on macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2
-- shell access for background build/update/review/audit subprocesses
+- shell access for background build/update/review/delivery-review/audit subprocesses
 - write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`
 
 Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may intentionally block or redirect those operations. EDC does not try to bypass them.
@@ -60,7 +60,8 @@ Pi exposes one interactive command:
 
 Menu actions:
 
-- Review current branch vs default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background review with `HEAD --base <detected-base>`
+- Review current branch vs default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background security review with `HEAD --base <detected-base>`
+- Review delivery / architecture — detects the repo default branch and starts a background delivery/architecture review with `HEAD --base <detected-base>`
 - Job status — shows the current background job status
 - Build context — starts a background context build
 - Update context from default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
@@ -71,6 +72,7 @@ Menu actions:
 
 ```bash
 edc review --agent pi HEAD --base <default-branch>
+edc delivery-review --agent pi HEAD --base <default-branch>
 edc build --agent pi
 edc update --agent pi --base <default-branch>
 ```
@@ -86,7 +88,7 @@ Review, build, update, and audit run in the background so the TUI stays usable. 
 | File | Purpose |
 |---|---|
 | `.git/edc/status` | Machine-readable current job status (`kind`, `status`, `run_id`, `pid`, `args`, `started_head`, `finished_head`, `repo_changed`, `failure_reason`, `failure_hint`, `final_review`, etc.) |
-| `.git/edc/<kind>.log` | Raw stdout/stderr from the current `edc-<kind>.sh` run (`review.log`, `build.log`, `update.log`, or `audit.log`) |
+| `.git/edc/<kind>.log` | Raw stdout/stderr from the current `edc-<kind>.sh` run (`review.log`, `delivery-review.log`, `build.log`, `update.log`, or `audit.log`) |
 
 Both paths are resolved with `git rev-parse --git-path`, so they work with normal repos and worktrees. They are under git metadata, not the worktree, so they are never tracked and need no `.gitignore` entry. Starting a new background job overwrites the previous status and that job kind's log.
 
@@ -112,7 +114,7 @@ Known interactions:
 
 - Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
 - Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
-- Build/update/audit/review need the requirements and write permissions listed above.
+- Build/update/review/delivery-review/audit need the requirements and write permissions listed above.
 
 ## Modes
 

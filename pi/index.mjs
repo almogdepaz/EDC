@@ -7,7 +7,7 @@
  *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
- *   - exposes only human-facing skills (edc-review, edc-audit)
+ *   - exposes only human-facing skills (edc-review, edc-audit, edc-delivery-review)
  *
  * Mode is controlled by edc-context/manifest.json's `policy.defaultMode`
  * ("advisory" | "inject"), same as for Claude Code.
@@ -41,12 +41,12 @@ const EDC_MENU = {
   KILL_JOB: "Kill running EDC job",
   BUILD: "Build context",
   UPDATE_DEFAULT: "Update context from default branch",
-  AUDIT: "Audit complexity",
+  AUDIT: "Audit code quality",
   DOCTOR: "Doctor / validate context",
   CANCEL: "Cancel",
 };
 
-const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
+const VISIBLE_SKILLS = ["edc-review", "edc-audit", "edc-delivery-review"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
@@ -105,7 +105,7 @@ function renderEdcHelp() {
     "- Kill running EDC job",
     "- Build context",
     "- Update context from default branch",
-    "- Audit complexity",
+    "- Audit code quality",
     "- Doctor / validate context",
     "",
     "Direct commands:",

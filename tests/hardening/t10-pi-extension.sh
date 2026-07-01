@@ -7,7 +7,7 @@
 #   - shared lib (plugins/edc/hooks/lib/route.mjs) exports the expected names
 #   - the extension factory runs end-to-end against a fake ExtensionAPI
 #     (registers only the interactive /edc command, exposes only human-useful
-#     skills, subscribes to the expected events, and buildToolCallInjection
+#     review/audit/delivery skills, subscribes to the expected events, and buildToolCallInjection
 #     produces module docs through the same code path)
 set -uo pipefail
 
@@ -373,7 +373,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const backgroundCases = [
     { selection: "Build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
     { selection: "Update context from default branch", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
-    { selection: "Audit complexity", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
+    { selection: "Audit code quality", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
   ];
   for (const testCase of backgroundCases) {
     const beforeMessages = calls.messages.length;
@@ -501,15 +501,15 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 4. resources_discover returns only human-facing review/audit skills
+  // 4. resources_discover returns only human-facing review/audit/delivery skills
   const rd = calls.events.find(e => e.event === "resources_discover");
   const r = await rd.handler({ type: "resources_discover", cwd, reason: "startup" }, { cwd });
-  if (!r || !Array.isArray(r.skillPaths) || r.skillPaths.length !== 2) {
+  if (!r || !Array.isArray(r.skillPaths) || r.skillPaths.length !== 3) {
     console.log("RD_FAIL:" + JSON.stringify(r));
     process.exit(1);
   }
   const skillNames = r.skillPaths.map(p => p.split("/").pop()).sort();
-  const expectedSkills = ["edc-audit", "edc-review"];
+  const expectedSkills = ["edc-audit", "edc-delivery-review", "edc-review"];
   if (JSON.stringify(skillNames) !== JSON.stringify(expectedSkills)) {
     console.log("SKILLS_FAIL:" + skillNames.join(","));
     process.exit(1);
@@ -564,7 +564,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
-  for (const requiredSkill of ["edc-review", "edc-audit", "edc-build-impl", "edc-update-impl", "edc-module-context-impl"]) {
+  for (const requiredSkill of ["edc-review", "edc-audit", "edc-delivery-review", "edc-build-impl", "edc-update-impl", "edc-module-context-impl"]) {
     if (!fs.existsSync(`${cwd}/.edc/skills/${requiredSkill}/SKILL.md`)) {
       console.log("PRIVATE_SKILL_INSTALL_FAIL:" + requiredSkill);
       process.exit(1);

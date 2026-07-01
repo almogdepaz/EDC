@@ -104,7 +104,7 @@ Re-read all `edc-context/modules/*.md` files. Rebuild `edc-context/reports/issue
 
 ### Step 7 — Update `edc-context/reports/complexity.md` if affected
 
-If any changed module's deep-context analysis surfaced new overengineering / bloat / duplication signals (or invalidated existing ones), refresh `edc-context/reports/complexity.md` to reflect the current state. Otherwise leave it alone.
+If any changed module's deep-context analysis surfaced new code quality / maintainability signals (or invalidated existing ones), refresh `edc-context/reports/complexity.md` to reflect the current state. Otherwise leave it alone.
 
 ### Step 8 — Update `edc-context/index.md` if needed
 

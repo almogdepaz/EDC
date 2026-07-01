@@ -39,7 +39,7 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-review .edc/skills/edc-audit
+  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-review .edc/skills/edc-audit/references
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
   printf '## Complexity\n' > edc-context/reports/complexity.md
@@ -60,6 +60,10 @@ EOF
   printf 'CURATOR_EDIT_SKILL_MARKER\n' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
   printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
   printf 'AUDIT_SKILL_MARKER\n' > .edc/skills/edc-audit/SKILL.md
+  printf 'AUDIT_SCOPE_MARKER\n' > .edc/skills/edc-audit/references/scope-and-standards.md
+  printf 'AUDIT_SMELL_MARKER\n' > .edc/skills/edc-audit/references/smell-baseline.md
+  printf 'AUDIT_CHECKS_MARKER\n' > .edc/skills/edc-audit/references/quality-checks.md
+  printf 'AUDIT_REPORTING_MARKER\n' > .edc/skills/edc-audit/references/reporting.md
   printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
   printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
   printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md

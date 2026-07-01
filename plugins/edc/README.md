@@ -16,7 +16,7 @@ the user-facing tour.
 | `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
-Audit and review methodology are exposed as skills (`edc-audit`, `edc-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
+Audit, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
 
 Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes those workflows through one interactive `/edc` menu (review/status/build/update/audit/doctor) registered by `pi/`.
 
@@ -34,7 +34,7 @@ plugins/edc/
     edc                                # terminal CLI (build / update / review / audit / mode / doctor)
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
-    edc-audit.sh                       # complexity / bloat audit orchestrator
+    edc-audit.sh                       # code quality / maintainability audit orchestrator
     edc-review.sh                      # differential review orchestrator
     edc-doctor.sh                      # context-tree validator
 
@@ -48,8 +48,9 @@ plugins/edc/
     edc-build-plan.sh                  # deterministic per-module task planner (jq)
 
   skills/                              # user-facing methodology skills
-    edc-review/                        # differential review methodology + patterns
-    edc-audit/                         # bloat / duplication / overengineering methodology
+    edc-review/                        # security/adversarial review methodology + patterns
+    edc-audit/                         # code quality / maintainability audit methodology
+    edc-delivery-review/               # goal/spec delivery + architecture-fit review methodology
 
   prompt-bundles/                      # hidden prompt bundles for orchestrators
     edc-module-context-impl/           # per-module context methodology
@@ -81,19 +82,21 @@ their outputs.
 
 ## Skill files as prompt templates
 
-`skills/edc-review/` contains:
+`skills/edc-review/` contains the security/adversarial review bundle:
 
-- `SKILL.md` — main review workflow definition
-- `methodology.md` — phase-by-phase review process
+- `SKILL.md` — main security review workflow definition
+- `methodology.md` — security triage/history/blast-radius workflow
 - `patterns.md` — vulnerability pattern catalog (tunable via autoresearch / GEPA)
 - `adversarial.md` — attacker modeling methodology
-- `reporting.md` — output format contract
+- `reporting.md` — security report contract
 
-These are **prompt material**. The orchestrator concatenates them into the
-subprocess prompt; they exist as separate files so each one can be tuned
-independently.
+`skills/edc-audit/` contains the code quality audit bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting.
 
-`prompt-bundles/edc-build-impl/`, `prompt-bundles/edc-update-impl/`, and `prompt-bundles/edc-module-context-impl/` are hidden prompt bundles for orchestrator subprocesses. `skills/edc-audit/` is both a user-facing methodology skill and the audit prompt used by terminal/orchestrated audit flows.
+`skills/edc-delivery-review/` contains the delivery/architecture review bundle. It keeps goal/spec delivery and architecture fit as separate axes.
+
+These are **prompt material**. Runtime prompt resolution embeds the required bundle files for orchestrated subprocesses; they exist as separate files so each one can be tuned independently.
+
+`prompt-bundles/edc-build-impl/`, `prompt-bundles/edc-update-impl/`, and `prompt-bundles/edc-module-context-impl/` are hidden prompt bundles for orchestrator subprocesses.
 
 ## Multi-agent support
 

@@ -34,7 +34,7 @@ EDC separates deterministic orchestration from LLM analysis:
 - Subagents write per-module architecture context and review reports.
 - Agent integrations expose the same workflows through native commands, skills, hooks, or pi's interactive menu.
 
-The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Reviews use Trail of Bits-style differential review methodology, routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
+The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Security reviews are routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
 
 ### Commands
 
@@ -42,8 +42,8 @@ The generated context lives in the target repository under `edc-context/`: an ov
 |---------|----------------|
 | **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
 | **update** | Before review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
-| **review** | On a PR, branch, commit, or diff file. Runs context-aware differential review and writes a consolidated `review-*.md` report. |
-| **audit** | Anytime. Compares context expectations against actual code to flag overengineering, bloat, duplication, and dead exports. |
+| **review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
+| **audit** | Anytime. Compares context expectations against actual code to flag code-quality and maintainability risks. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
 
@@ -69,7 +69,7 @@ edc review --agent pi HEAD --base main
 edc review --agent codex https://github.com/owner/repo/pull/42
 edc review --agent codex HEAD --base main --ignore 'generated/**'
 
-# complexity / bloat / duplication audit
+# code quality / maintainability audit
 edc audit  --agent claude
 edc audit  --agent pi
 

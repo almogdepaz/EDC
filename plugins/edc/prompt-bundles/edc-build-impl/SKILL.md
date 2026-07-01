@@ -105,7 +105,7 @@ Build steps:
 
 5. **Reports.** Invoke the `edc-audit` skill to emit cross-cutting analytical output:
    - `edc-context/reports/issues.md` — known problems and risks
-   - `edc-context/reports/complexity.md` — overengineering / bloat / duplication signals
+   - `edc-context/reports/complexity.md` — code quality / maintainability signals
 
    Reports live under `edc-context/reports/`, never at the top level of `edc-context/`.
 

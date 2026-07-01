@@ -1062,7 +1062,7 @@ _emit_skill_prompt() {
   case "$skill_name" in
     edc-build-impl)  task_verb="Build the v2 architectural context" ;;
     edc-update-impl) task_verb="Update the existing v2 architectural context" ;;
-    edc-audit)       task_verb="Run the complexity / overengineering audit" ;;
+    edc-audit)       task_verb="Run the code quality audit" ;;
   esac
   printf 'TASK: %s for the repository at the current working directory, following the skill below verbatim. Start immediately. Do not ask for clarification — the skill specifies everything.\n\n' "$task_verb"
   if [ "$skill_name" = "edc-build-impl" ]; then
@@ -1081,6 +1081,58 @@ EOF
   fi
   _emit_scripts_dir_preamble
   cat "$skill"
+}
+
+# _emit_audit_prompt
+# Emit the audit prompt as a self-contained bundle (SKILL.md + references).
+# Splitting the audit skill keeps the main skill lean, but orchestrated
+# subprocesses still need the full methodology inline so they do not skip
+# moved reference material.
+_emit_audit_prompt() {
+  local skill_path skill_dir refs ref
+  skill_path=$(_find_skill_for_agent "edc-audit") || return 1
+  skill_dir=$(dirname "$skill_path")
+
+  refs="scope-and-standards.md smell-baseline.md quality-checks.md reporting.md"
+  for ref in $refs; do
+    if [ ! -f "$skill_dir/references/$ref" ]; then
+      echo "ERROR: audit skill bundle incomplete — missing $skill_dir/references/$ref" >&2
+      return 1
+    fi
+  done
+
+  cat <<EOF
+$(_emit_scripts_dir_preamble)
+Follow the instructions below EXACTLY. Do not improvise, do not substitute
+another audit methodology, and do not skip the referenced checks. The audit
+scope/standards, smell baseline, quality checks, and reporting contract are
+all embedded below — read them all before producing the report.
+
+================================================================================
+SKILL: edc-audit/SKILL.md
+================================================================================
+$(cat "$skill_path")
+
+================================================================================
+SKILL: edc-audit/references/scope-and-standards.md
+================================================================================
+$(cat "$skill_dir/references/scope-and-standards.md")
+
+================================================================================
+SKILL: edc-audit/references/smell-baseline.md
+================================================================================
+$(cat "$skill_dir/references/smell-baseline.md")
+
+================================================================================
+SKILL: edc-audit/references/quality-checks.md
+================================================================================
+$(cat "$skill_dir/references/quality-checks.md")
+
+================================================================================
+SKILL: edc-audit/references/reporting.md
+================================================================================
+$(cat "$skill_dir/references/reporting.md")
+EOF
 }
 
 # _emit_review_prompt <task-path>
@@ -1169,7 +1221,7 @@ resolve_prompt() {
     update)  _emit_skill_prompt "edc-update-impl" "$prompt_arg_string" ;;
     curator)      _emit_skill_prompt "edc-context-curator-impl" ;;
     curator-edit) _emit_skill_prompt "edc-context-curator-edit-impl" ;;
-    audit)        _emit_skill_prompt "edc-audit" ;;
+    audit)        _emit_audit_prompt ;;
     review)  _emit_review_prompt "$1" ;;
     *)
       echo "ERROR: unknown action: $action" >&2

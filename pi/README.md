@@ -64,7 +64,7 @@ Menu actions:
 - Job status — shows the current background job status
 - Build context — starts a background context build
 - Update context from default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
-- Audit complexity — starts a background audit
+- Audit code quality — starts a background audit
 - Doctor / validate context
 
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
@@ -98,14 +98,15 @@ Pi exposes only the human-facing EDC methodology skills:
 
 | Skill | Use |
 |---|---|
-| `edc-review` | Apply the EDC differential review methodology directly in chat, without running the full orchestrator. |
-| `edc-audit` | Apply the EDC bloat / duplication / overengineering audit methodology directly in chat. |
+| `edc-review` | Apply the EDC security/adversarial review methodology directly in chat, without running the full orchestrator. |
+| `edc-audit` | Apply the EDC code quality / maintainability audit methodology directly in chat. |
+| `edc-delivery-review` | Apply the EDC goal/spec delivery + architecture-fit review methodology directly in chat. |
 
 Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
 
 ## Compatibility with other pi packages
 
-EDC registers one `/edc` command, does not override built-in tools, and exposes only the two human-facing skills above. It should coexist with provider packages and command-only helper packages.
+EDC registers one `/edc` command, does not override built-in tools, and exposes only the human-facing skills above. It should coexist with provider packages and command-only helper packages.
 
 Known interactions:
 
@@ -153,7 +154,7 @@ edc mode inject
 | Interactive menu | `pi.registerCommand("edc", …)` + `ctx.ui.select` |
 | `SessionStart` hook | `pi.on("session_start", …)` |
 | `PreToolUse` hook | `pi.on("tool_call", …)` filtered to `bash|edit|write` |
-| Skills | `pi.on("resources_discover", …)` returning only `edc-review` and `edc-audit` |
+| Skills | `pi.on("resources_discover", …)` returning only `edc-review`, `edc-audit`, and `edc-delivery-review` |
 | Per-session dedup | `ctx.sessionManager.getSessionId()` + tmp file |
 
 The injection logic is shared with the Claude Code / Cursor hooks via `plugins/edc/hooks/lib/route.mjs` — single source of truth, no drift.

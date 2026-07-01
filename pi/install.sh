@@ -92,8 +92,10 @@ Done. Available command in pi:
   /edc             interactive EDC menu (review, status, build, update, audit, doctor)
 
 Visible skills:
-  edc-review       differential review methodology
-  edc-audit        overengineering / bloat audit methodology
+  edc-review       security/adversarial review methodology
+  edc-audit        code quality / maintainability audit methodology
+  edc-delivery-review
+                   goal/spec delivery + architecture-fit review methodology
 
 Mode toggle (per-project, after context has been built):
   bash pi/install.sh --context-mode advisory   # docs only (default)

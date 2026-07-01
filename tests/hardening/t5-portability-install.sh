@@ -57,8 +57,8 @@ else
 fi
 
 skills=$(find plugins/edc/skills -maxdepth 1 -type d -mindepth 1 -exec basename {} \; | sort | tr '\n' ' ')
-if [ "$skills" = "edc-audit edc-review " ]; then
-  echo "PASS: public skills expose only edc-audit and edc-review"
+if [ "$skills" = "edc-audit edc-delivery-review edc-review " ]; then
+  echo "PASS: public skills expose only edc-audit, edc-delivery-review, and edc-review"
 else
   echo "FAIL: unexpected public skill surface: $skills"
   exit 1

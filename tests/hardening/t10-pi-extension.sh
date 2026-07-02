@@ -316,7 +316,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   }
 
   const raceStatusFile = `${raceDir}/.git/edc/status`;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 100; i++) {
     if (fs.existsSync(raceStatusFile) && /^pid=\d+$/m.test(fs.readFileSync(raceStatusFile, "utf-8"))) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
@@ -559,7 +559,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
-  for (const requiredRuntime of ["classify-cli.mjs", "pi-supervisor.mjs", "route.mjs", "paths.mjs"]) {
+  for (const requiredRuntime of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
     if (!fs.existsSync(`${cwd}/.edc/hooks/lib/${requiredRuntime}`)) {
       console.log("CLASSIFIER_RUNTIME_INSTALL_FAIL:" + requiredRuntime);
       process.exit(1);

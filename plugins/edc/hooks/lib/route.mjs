@@ -459,14 +459,14 @@ function installScriptFiles(projectRoot, pluginRoot) {
 function installClassifierRuntime(projectRoot, pluginRoot) {
   const sourceDir = join(pluginRoot, "hooks", "lib");
   const destDir = join(projectRoot, ".edc", "hooks", "lib");
-  for (const fileName of ["classify-cli.mjs", "pi-supervisor.mjs", "route.mjs", "paths.mjs"]) {
+  for (const fileName of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
     const src = join(sourceDir, fileName);
     const dst = join(destDir, fileName);
     if (!existsSync(src) || !shouldCopyFile(src, dst)) continue;
     try {
       mkdirSync(destDir, { recursive: true });
       copyFileSync(src, dst);
-      if (fileName === "classify-cli.mjs" || fileName === "pi-supervisor.mjs") chmodSync(dst, 0o755);
+      if (["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs"].includes(fileName)) chmodSync(dst, 0o755);
     } catch (err) {
       process.stderr.write(
         `[edc] WARNING: could not install classifier runtime ${fileName}: ${err.message}\n`,

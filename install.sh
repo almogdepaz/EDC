@@ -156,7 +156,9 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
   local hooks_target="$HOME/.edc/hooks/lib"
   copy_or_download "plugins/edc/hooks/lib/classify-cli.mjs"   "$hooks_target/classify-cli.mjs"
+  copy_or_download "plugins/edc/hooks/lib/json-cli.mjs"       "$hooks_target/json-cli.mjs"
   copy_or_download "plugins/edc/hooks/lib/pi-supervisor.mjs"  "$hooks_target/pi-supervisor.mjs"
+  copy_or_download "plugins/edc/hooks/lib/stream-filter.mjs"  "$hooks_target/stream-filter.mjs"
   copy_or_download "plugins/edc/hooks/lib/route.mjs"          "$hooks_target/route.mjs"
   copy_or_download "plugins/edc/hooks/lib/paths.mjs"          "$hooks_target/paths.mjs"
   copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
@@ -178,7 +180,9 @@ install_terminal_cli() {
     "$scripts_target/edc-recover-context.sh" \
     "$scripts_target/edc-build-plan.sh" \
     "$hooks_target/classify-cli.mjs" \
-    "$hooks_target/pi-supervisor.mjs"
+    "$hooks_target/json-cli.mjs" \
+    "$hooks_target/pi-supervisor.mjs" \
+    "$hooks_target/stream-filter.mjs"
   # edc-lib.sh is sourced, not exec'd — no chmod needed
   install_shell_path
 }

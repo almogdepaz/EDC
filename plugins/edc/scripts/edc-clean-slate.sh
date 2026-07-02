@@ -81,16 +81,13 @@ has_partial_v2() {
     fi
     return 1
   fi
-  if command -v jq >/dev/null 2>&1; then
-    jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 0
-  fi
+  node "$EDC_JSON_CLI" schema-version-is-2 "$MANIFEST" >/dev/null 2>&1 || return 0
   return 1
 }
 
 is_healthy_v2() {
   [ -f "$MANIFEST" ] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 1
+  node "$EDC_JSON_CLI" schema-version-is-2 "$MANIFEST" >/dev/null 2>&1 || return 1
   # The EDC entrypoint is part of the v2 layout. It can be either a generated
   # AGENTS.md, or a generated EDC_AGENTS.md referenced from AGENTS.md/CLAUDE.md
   # when a repo already owns its AGENTS.md.

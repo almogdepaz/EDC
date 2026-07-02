@@ -29,11 +29,6 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
-
 # Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
 # edc-clean-slate.sh) are found relative to the real script location, not the
 # invocation path. Defensive - the installer copies (not symlinks) into
@@ -84,7 +79,7 @@ final_review_filename() {
 
 manifest_target() {
   local val
-  val=$(jq -r '.target // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
+  val=$(node "$EDC_JSON_CLI" review-target "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read target from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
@@ -95,7 +90,7 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(jq -r '.modules[]?.name // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
+  val=$(node "$EDC_JSON_CLI" review-modules "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read modules from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
@@ -104,7 +99,7 @@ manifest_modules() {
 }
 
 manifest_context_mode() {
-  jq -r '.contextMode // "context"' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
+  node "$EDC_JSON_CLI" review-context-mode "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
 }
 
 load_ignore_patterns() {
@@ -579,8 +574,7 @@ build_mode() {
     rm -rf "$EDC_REVIEW_TASKS_DIR"
     mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
-    local files_json file_list context_mode direct_module instruction_1 extra_instruction
-    files_json=$(printf '%s\n' "$files" | grep -v '^$' | jq -R . | jq -s -c .)
+    local file_list context_mode direct_module instruction_1 extra_instruction
     file_list=$(echo "$files" | grep -v '^$' | sed 's/^/- /')
 
     if [ "$ignore_context" -eq 1 ]; then
@@ -595,14 +589,7 @@ build_mode() {
       extra_instruction=""
     fi
 
-    jq -n \
-      --arg target "$target" \
-      --arg baseline "$baseline" \
-      --arg head "$head" \
-      --arg contextMode "$context_mode" \
-      --arg module "$direct_module" \
-      --argjson files "$files_json" \
-      '{target: $target, baseline: $baseline, head: $head, contextMode: $contextMode, modules: [{name: $module, doc: "", files: $files}]}' \
+    printf '%s\n' "$files" | grep -v '^$' | node "$EDC_JSON_CLI" review-direct-manifest "$target" "$baseline" "$head" "$context_mode" "$direct_module" \
       > "$EDC_REVIEW_TASKS_MANIFEST"
 
     cat > "$EDC_REVIEW_TASKS_DIR/${direct_module}.md" <<TASK
@@ -646,7 +633,7 @@ TASK
   fi
 
   local unmatched_policy
-  unmatched_policy=$(jq -r '.policy.unmatchedPathPolicy // "warn-allow"' "$MANIFEST")
+  unmatched_policy=$(node "$EDC_JSON_CLI" unmatched-policy "$MANIFEST")
   case "$unmatched_policy" in
     warn-allow|allow|fail) ;;
     *)
@@ -817,13 +804,19 @@ TASK
   sorted_modules=$(printf '%s\n' "${module_names[@]}" | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
-  local context_mode modules_json
+  local context_mode
   if [ "$no_context_refresh" -eq 1 ]; then
     context_mode="no-refresh"
   else
     context_mode="context"
   fi
-  modules_json="[]"
+
+  local manifest_meta_dir manifest_meta
+  manifest_meta_dir="$EDC_REVIEW_TASKS_DIR/.manifest-files"
+  manifest_meta="$manifest_meta_dir/modules.tsv"
+  mkdir -p "$manifest_meta_dir"
+  : > "$manifest_meta"
+
   while IFS= read -r module; do
     local module_doc="${EDC_MODULES_DIR}/${module}.md"
     local module_idx module_type module_policy module_contextless_id module_file_blob
@@ -836,40 +829,13 @@ TASK
     if [ "$module_type" != "module" ]; then
       module_doc=""
     fi
-    local files_json module_json
-    files_json=$(printf '%s' "$module_file_blob" | grep -v '^$' | jq -R . | jq -s -c .)
-    if [ "$module_type" = "contextless" ]; then
-      module_json=$(jq -n \
-        --arg name "$module" \
-        --arg doc "$module_doc" \
-        --argjson files "$files_json" \
-        --arg contextlessId "$module_contextless_id" \
-        --arg reviewPolicy "$module_policy" \
-        '{name: $name, doc: $doc, files: $files, type: "contextless", contextlessId: $contextlessId, reviewPolicy: $reviewPolicy}')
-    elif [ "$module_type" = "unmapped" ]; then
-      module_json=$(jq -n \
-        --arg name "$module" \
-        --arg doc "$module_doc" \
-        --argjson files "$files_json" \
-        '{name: $name, doc: $doc, files: $files, type: "uncovered"}')
-    else
-      module_json=$(jq -n \
-        --arg name "$module" \
-        --arg doc "$module_doc" \
-        --argjson files "$files_json" \
-        '{name: $name, doc: $doc, files: $files}')
-    fi
-    modules_json=$(jq -c --argjson item "$module_json" '. + [$item]' <<< "$modules_json")
+    printf '%s' "$module_file_blob" > "$manifest_meta_dir/$module_idx.files"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$module_idx" "$module" "$module_type" "$module_policy" "$module_contextless_id" "$module_doc" >> "$manifest_meta"
   done <<< "$sorted_modules"
 
-  jq -n \
-    --arg target "$target" \
-    --arg baseline "$baseline" \
-    --arg head "$head" \
-    --arg contextMode "$context_mode" \
-    --argjson modules "$modules_json" \
-    '{target: $target, baseline: $baseline, head: $head, contextMode: $contextMode, modules: $modules}' \
+  node "$EDC_JSON_CLI" review-routed-manifest "$target" "$baseline" "$head" "$context_mode" "$manifest_meta" "$manifest_meta_dir" \
     > "$EDC_REVIEW_TASKS_MANIFEST"
+  rm -rf "$manifest_meta_dir"
 
   # per-module task files
   while IFS= read -r module; do

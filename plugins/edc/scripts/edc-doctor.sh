@@ -11,10 +11,11 @@ ROOT_AGENTS="$EDC_ROOT_AGENTS"
 ALT_AGENTS="$EDC_ALT_AGENTS"
 CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"
 
-command -v jq >/dev/null 2>&1 || { echo "edc-doctor: jq required" >&2; exit 2; }
+JSON_CLI="$SCRIPT_DIR/../hooks/lib/json-cli.mjs"
 command -v git >/dev/null 2>&1 || { echo "edc-doctor: git required" >&2; exit 2; }
 command -v node >/dev/null 2>&1 || { echo "edc-doctor: node required" >&2; exit 2; }
 [ -f "$CLASSIFY_CLI" ] || { echo "edc-doctor: missing $CLASSIFY_CLI" >&2; exit 2; }
+[ -f "$JSON_CLI" ] || { echo "edc-doctor: missing $JSON_CLI" >&2; exit 2; }
 
 failures=0
 
@@ -32,28 +33,25 @@ if [ -f "$INDEX" ] && ! grep -q '^##' "$INDEX"; then
 fi
 
 if [ -f "$MANIFEST" ]; then
-  if ! jq -e . "$MANIFEST" >/dev/null 2>&1; then
+  if ! node "$JSON_CLI" valid-json "$MANIFEST" >/dev/null 2>&1; then
     fail "$MANIFEST is not valid JSON"
   else
-    jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "$MANIFEST schemaVersion must equal 2"
-    jq -e '.policy.defaultMode | IN("advisory","inject")' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "policy.defaultMode must be advisory or inject"
-    jq -e '.policy.unmatchedPathPolicy | IN("warn-allow","allow","fail")' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "policy.unmatchedPathPolicy must be warn-allow, allow, or fail"
-    while IFS= read -r doc; do
-      [ -n "$doc" ] || continue
-      [ -f "$doc" ] || fail "missing module doc: $doc"
-    done < <(jq -r '.modules[].doc // empty' "$MANIFEST")
+    while IFS=$'\t' read -r kind value; do
+      case "$kind" in
+        FAIL) fail "$value" ;;
+        DOC) [ -f "$value" ] || fail "missing module doc: $value" ;;
+      esac
+    done < <(node "$JSON_CLI" doctor "$MANIFEST")
   fi
 fi
 
 if [ "$failures" -eq 0 ]; then
   ignore_args=()
-  while IFS= read -r glob; do
-    [ -n "$glob" ] || continue
-    ignore_args+=(--ignore "$glob")
-  done < <(jq -r '.coverage.ignoreGlobs[]? // empty' "$MANIFEST")
+  while IFS=$'\t' read -r kind value; do
+    [ "$kind" = "IGNORE" ] || continue
+    [ -n "$value" ] || continue
+    ignore_args+=(--ignore "$value")
+  done < <(node "$JSON_CLI" doctor "$MANIFEST")
 
   tmp_dir=$(mktemp -d)
   paths_file="$tmp_dir/paths.txt"

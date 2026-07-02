@@ -12,7 +12,7 @@
 #   - EDC_AGENT_CLI must be set before calling edc_spawn / resolve_prompt.
 #   - CODEX_EXEC_HOME / CODEX_EXEC_HOME_OWNED must be initialized
 #     ("" and 0 respectively) before sourcing if the caller uses codex.
-#   - jq is recommended (most edc orchestrators hard-fail without it).
+#   - node is required for JSON/NDJSON helper CLIs.
 
 # ════════════════════════════════════════════════════════════════════════════
 # 1. PATHS — single source of truth for the context directory layout.
@@ -41,6 +41,8 @@ _edc_lib_resolve_scripts_dir() {
 }
 EDC_SCRIPTS_DIR="$(_edc_lib_resolve_scripts_dir)"
 export EDC_SCRIPTS_DIR
+EDC_JSON_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/json-cli.mjs"
+EDC_STREAM_FILTER_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/stream-filter.mjs"
 EDC_INDEX="$EDC_CONTEXT_DIR/index.md"
 EDC_MODULES_DIR="$EDC_CONTEXT_DIR/modules"
 EDC_REPORTS_DIR="$EDC_CONTEXT_DIR/reports"
@@ -105,11 +107,6 @@ EDC generated repository context lives in [$EDC_ALT_AGENTS]($EDC_ALT_AGENTS). Re
 $EDC_AGENTS_REF_END
 EOF
 }
-
-# Single bash contract for all nested EDC script invocations. Orchestrators
-# require bash >= 4, so once an entrypoint is running in a valid bash, child
-# script calls must reuse that interpreter instead of resolving bare `bash`
-# from ambient PATH (macOS login shells can make that `/bin/bash` 3.2).
 
 # ════════════════════════════════════════════════════════════════════════════
 # 2. RUNTIME — subprocess runtime helpers.
@@ -300,125 +297,13 @@ edc_print_model_rejection() {
 }
 
 # stream_filter: read NDJSON from agent CLI output and print human-readable
-# progress lines. Handles Claude, Cursor, and Codex formats.
+# progress lines. Handles Claude, Cursor, Pi, and Codex formats.
 stream_filter() {
-  while IFS= read -r line; do
-    [ -z "$line" ] && continue
-    if [ -n "${STREAM_FILTER_CAPTURE:-}" ]; then
-      printf '%s\n' "$line" >> "$STREAM_FILTER_CAPTURE" 2>/dev/null || true
-    fi
-    if edc_is_codex_auth_failure_text "$line"; then
-      edc_print_codex_auth_failure
-      return 86
-    fi
-    case "$line" in
-      \{*) ;;
-      *)
-        if edc_is_model_rejection_text "$line"; then
-          edc_print_model_rejection "$line"
-          return 87
-        fi
-        ;;
-    esac
-    # type=assistant with text content
-    text=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "text") | .text) | join("") else empty end' 2>/dev/null)
-    if [ -n "$text" ]; then
-      printf '%s\n' "$text"
-      continue
-    fi
-    # type=tool_use — show tool name + first arg truncated
-    tool_info=$(printf '%s' "$line" | jq -r 'if .type == "assistant" then (.message.content // []) | map(select(.type == "tool_use") | "→ \(.name)(\((.input | to_entries | first | .value // "") | tostring | .[0:80]))") | .[] else empty end' 2>/dev/null)
-    if [ -n "$tool_info" ]; then
-      printf '%s\n' "$tool_info"
-      continue
-    fi
-    # type=tool_call (Cursor stream format) — show tool name on start
-    tool_call_info=$(printf '%s' "$line" | jq -r '
-      if .type == "tool_call" and .subtype == "started" then
-        (.tool_call | to_entries[0] |
-         "→ \(.key)(\(.value.args // {} | to_entries[0] | .value // "" | tostring | .[0:80]))")
-      else empty end' 2>/dev/null)
-    if [ -n "$tool_call_info" ]; then
-      printf '%s\n' "$tool_call_info"
-      continue
-    fi
-    # type=result with is_error=true
-    err_msg=$(printf '%s' "$line" | jq -r '
-      def readable_error($v):
-        if ($v | type) == "string" then
-          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
-        else
-          ($v.error.message // $v.message // ($v | tostring))
-        end;
-      if .type == "result" and .is_error == true then readable_error(.result // "unknown error") else empty end' 2>/dev/null)
-    if [ -n "$err_msg" ]; then
-      if edc_is_model_rejection_text "$err_msg"; then
-        edc_print_model_rejection "$err_msg"
-        return 87
-      fi
-      printf '%s\n' "ERROR (subprocess): $err_msg" >&2
-      continue
-    fi
-    # Pi JSON mode: stream text deltas and tool starts from AgentSession events.
-    pi_msg=$(printf '%s' "$line" | jq -r '
-      if .type == "message_update" and (.assistantMessageEvent.type // "") == "text_delta" then (.assistantMessageEvent.delta // "")
-      elif .type == "tool_execution_start" then "→ \(.toolName)(\((.args // {}) | to_entries[0] | .value // "" | tostring | .[0:80]))"
-      else empty end' 2>/dev/null)
-    if [ -n "$pi_msg" ]; then
-      printf '%s\n' "$pi_msg"
-      continue
-    fi
-    pi_err=$(printf '%s' "$line" | jq -r '
-      if .type == "tool_execution_end" and .isError == true then "ERROR (subprocess): \(.result.content // .result.error // .result // "tool execution failed" | tostring)"
-      elif .type == "auto_retry_end" and .success == false then "ERROR (subprocess): \(.finalError // "provider request failed")"
-      else empty end' 2>/dev/null)
-    if [ -n "$pi_err" ]; then
-      if edc_is_model_rejection_text "$pi_err"; then
-        edc_print_model_rejection "$pi_err"
-        return 87
-      fi
-      printf '%s\n' "$pi_err" >&2
-      continue
-    fi
-    # Codex JSON stream: events are wrapped as {"msg": {"type": ..., ...}}.
-    # agent_message carries the assistant text the user needs to see; without
-    # this handler the pipeline runs silent under real `codex exec`.
-    codex_msg=$(printf '%s' "$line" | jq -r '
-      if (.msg.type // "") == "agent_message" then (.msg.message // "")
-      elif (.msg.type // "") == "agent_reasoning" then "… \(.msg.text // "")"
-      elif (.msg.type // "") == "exec_command_begin" then "→ \(((.msg.command // []) | join(" "))[0:120])"
-      else empty end' 2>/dev/null)
-    if [ -n "$codex_msg" ]; then
-      printf '%s\n' "$codex_msg"
-      continue
-    fi
-    # Codex errors: both flat {"type":"error"} and nested {"msg":{"type":"error"}}.
-    codex_err_msg=$(printf '%s' "$line" | jq -r '
-      def readable_error($v):
-        if ($v | type) == "string" then
-          (try (($v | fromjson).error.message // ($v | fromjson).message // $v) catch $v)
-        else
-          ($v.error.message // $v.message // ($v | tostring))
-        end;
-      if .type == "error" then readable_error(.message // .error // "unknown error")
-      elif (.msg.type // "") == "error" then readable_error(.msg.message // "unknown error")
-      else empty end' 2>/dev/null)
-    if [ -n "$codex_err_msg" ]; then
-      case "$codex_err_msg" in
-        *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
-          edc_print_codex_auth_failure
-          return 86
-          ;;
-        *)
-          if edc_is_model_rejection_text "$codex_err_msg"; then
-            edc_print_model_rejection "$codex_err_msg"
-            return 87
-          fi
-          printf '%s\n' "ERROR (subprocess): $codex_err_msg" >&2
-          ;;
-      esac
-    fi
-  done
+  if [ ! -f "$EDC_STREAM_FILTER_CLI" ]; then
+    echo "ERROR: stream-filter.mjs not found at $EDC_STREAM_FILTER_CLI" >&2
+    return 2
+  fi
+  node "$EDC_STREAM_FILTER_CLI"
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -503,57 +388,14 @@ _edc_spawn_log_path() {
 # or unparseable — observability is best-effort.
 _edc_log_spawn_metrics() {
   local phase="$1" model_req="$2" duration="$3" capture="$4"
-  command -v jq >/dev/null 2>&1 || return 0
   [ -s "$capture" ] || return 0
-  local result_line
-  result_line=$(grep '"type":"result"' "$capture" 2>/dev/null | tail -1)
-  [ -n "$result_line" ] || return 0
-
-  # Pull observed model from the first system/init block too (some CLIs only
-  # put the slug there, not on the result line).
-  local init_line
-  init_line=$(grep -m1 '"type":"system"' "$capture" 2>/dev/null)
-
-  local rec
-  rec=$(jq -cn \
-    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg phase "$phase" \
-    --arg backend "$EDC_AGENT_CLI" \
-    --arg model_req "$model_req" \
-    --argjson duration "$duration" \
-    --argjson result "$result_line" \
-    --argjson init "${init_line:-null}" \
-    '{
-      ts: $ts,
-      phase: $phase,
-      backend: $backend,
-      session_id: ($result.session_id // null),
-      model_requested: ($model_req | if . == "" then null else . end),
-      model_observed: ($init.model // $result.model // null),
-      duration_s: $duration,
-      num_turns: ($result.num_turns // null),
-      input_tokens: ($result.usage.input_tokens // 0),
-      output_tokens: ($result.usage.output_tokens // 0),
-      cache_read_tokens: ($result.usage.cache_read_input_tokens // 0),
-      cache_write_tokens: ($result.usage.cache_creation_input_tokens // 0),
-      total_cost_usd: ($result.total_cost_usd // null)
-    }' 2>/dev/null) || return 0
-
+  [ -f "$EDC_JSON_CLI" ] || return 0
   local log_path; log_path=$(_edc_spawn_log_path)
-  printf '%s\n' "$rec" >> "$log_path" 2>/dev/null || true
-
-  # Warn loudly on silent model fallback.
-  local req obs
-  req=$(printf '%s' "$rec" | jq -r '.model_requested // ""')
-  obs=$(printf '%s' "$rec" | jq -r '.model_observed // ""')
-  if [ -n "$req" ] && [ -n "$obs" ]; then
-    case "$obs" in
-      *"$req"*) ;;
-      *)
-        echo "WARNING: model_observed='$obs' does not match model_requested='$req' (phase=$phase)" >&2
-        ;;
-    esac
+  node "$EDC_JSON_CLI" spawn-metrics "$phase" "$EDC_AGENT_CLI" "$model_req" "$duration" "$capture" "$log_path" 2>/tmp/edc-spawn-metrics-warn.$$ || true
+  if [ -s /tmp/edc-spawn-metrics-warn.$$ ]; then
+    cat /tmp/edc-spawn-metrics-warn.$$ >&2
   fi
+  rm -f /tmp/edc-spawn-metrics-warn.$$ 2>/dev/null || true
 }
 
 edc_kill_process_tree() {
@@ -577,49 +419,33 @@ edc_run_codex_stream() {
   local timeout_secs="$1" phase="$2" capture="$3" effective_prompt="$4"
   shift 4
 
-  local fifo timeout_flag
-  fifo=$(mktemp "${TMPDIR:-/tmp}/edc-codex-stream-$$.XXXXXX") || return 1
-  timeout_flag=$(mktemp "${TMPDIR:-/tmp}/edc-codex-timeout-$$.XXXXXX") || { rm -f "$fifo"; return 1; }
-  : > "$timeout_flag"
-  rm -f "$fifo"
-  mkfifo "$fifo" || { rm -f "$fifo" "$timeout_flag"; return 1; }
+  if [ ! -f "$EDC_STREAM_FILTER_CLI" ]; then
+    echo "ERROR: stream-filter.mjs not found at $EDC_STREAM_FILTER_CLI" >&2
+    return 2
+  fi
 
-  "$@" <<< "$effective_prompt" > "$fifo" 2>&1 &
-  local cmd_pid=$!
-  (sleep "$timeout_secs" && {
-    printf '1' > "$timeout_flag"
-    edc_kill_process_tree "$cmd_pid"
-  }) >/dev/null 2>&1 &
-  local watchdog_pid=$!
-  local filter_rc=0
+  local prompt_file
+  prompt_file=$(mktemp "${TMPDIR:-/tmp}/edc-codex-prompt-$$.XXXXXX.md") || return 1
+  printf '%s' "$effective_prompt" > "$prompt_file"
 
+  local rc=0
   if [ -n "$capture" ]; then
-    STREAM_FILTER_CAPTURE="$capture" stream_filter < "$fifo"
-    filter_rc=$?
+    if STREAM_FILTER_CAPTURE="$capture" EDC_STREAM_STDIN_FILE="$prompt_file" node "$EDC_STREAM_FILTER_CLI" --run "$timeout_secs" "$phase" -- "$@"; then
+      rc=0
+    else
+      rc=$?
+    fi
   else
-    stream_filter < "$fifo"
-    filter_rc=$?
+    if EDC_STREAM_STDIN_FILE="$prompt_file" node "$EDC_STREAM_FILTER_CLI" --run "$timeout_secs" "$phase" -- "$@"; then
+      rc=0
+    else
+      rc=$?
+    fi
   fi
 
-  if [ "$filter_rc" -eq 86 ] || [ "$filter_rc" -eq 87 ]; then
-    edc_kill_process_tree "$cmd_pid"
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$cmd_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
-    rm -f "$fifo" "$timeout_flag"
-    return 1
-  fi
-
-  wait "$cmd_pid"
-  local runner_rc=$?
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
-  if [ -s "$timeout_flag" ]; then
-    echo "ERROR: phase '$phase' timed out after ${timeout_secs}s" >&2
-    runner_rc=1
-  fi
-  rm -f "$fifo" "$timeout_flag"
-  return "$runner_rc"
+  rm -f "$prompt_file"
+  edc_stream_pipeline_rc "$rc" "$rc"
+  return $?
 }
 
 # ════════════════════════════════════════════════════════════════════════════

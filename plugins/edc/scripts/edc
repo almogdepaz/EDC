@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JSON_CLI="$SCRIPT_DIR/../hooks/lib/json-cli.mjs"
 
 usage() {
   cat <<'EOF'
@@ -84,8 +85,9 @@ find_script() {
 read_manifest_default_mode() {
   local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || return 0
-  command -v jq > /dev/null 2>&1 || die "jq is required to read $manifest"
-  jq -r '.policy.defaultMode // empty' "$manifest"
+  command -v node > /dev/null 2>&1 || die "node is required to read $manifest"
+  [ -f "$JSON_CLI" ] || die "json-cli.mjs not found at $JSON_CLI"
+  node "$JSON_CLI" mode-get "$manifest"
 }
 
 validate_context_mode() {
@@ -416,11 +418,12 @@ mode_cmd() {
 
   local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || die "$manifest not found (run 'edc build' first)"
-  command -v jq > /dev/null 2>&1 || die "jq is required to update $manifest"
+  command -v node > /dev/null 2>&1 || die "node is required to update $manifest"
+  [ -f "$JSON_CLI" ] || die "json-cli.mjs not found at $JSON_CLI"
 
   local tmp
   tmp="$(mktemp)"
-  jq --arg mode "$mode" '.policy.defaultMode = $mode' "$manifest" > "$tmp"
+  node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"
   mv "$tmp" "$manifest"
   echo "policy.defaultMode set to $mode in $manifest"
 }

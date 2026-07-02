@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Task 2 smoke test: verify stream_filter and jq fail-fast
+# Task 2 smoke test: verify stream_filter visibility without jq
 # Run from repo root: bash tests/hardening/t2-stream-filter.sh
 set -euo pipefail
 
@@ -10,21 +10,11 @@ SPAWN="plugins/edc/scripts/edc-lib.sh"
 
 echo "=== T2: Stream-json visibility ==="
 
-# 1. jq fail-fast: verify the guard block exists in the script
-# (runtime test requires hiding jq which is at /usr/bin/jq on this system;
-# static check confirms the guard is present and wired correctly)
-if grep -q 'command -v jq' "$SCRIPT" && grep -q 'jq is required' "$SCRIPT"; then
-  echo "PASS: jq fail-fast guard present in script"
+# 1. runtime has no jq fail-fast dependency; stream_filter delegates to node.
+if ! grep -q 'command -v jq\|jq is required' "$SCRIPT" && grep -q 'stream-filter.mjs' "$SPAWN"; then
+  echo "PASS: stream filtering no longer requires jq"
 else
-  echo "FAIL: jq fail-fast guard missing from script"
-  exit 1
-fi
-
-# Also verify the guard exits with code 2 (grep for exit 2 after jq error message)
-if grep -A3 'command -v jq' "$SCRIPT" | grep -q 'exit 2'; then
-  echo "PASS: jq fail-fast exits with code 2"
-else
-  echo "FAIL: jq fail-fast does not exit 2"
+  echo "FAIL: stream filtering still references jq dependency"
   exit 1
 fi
 
@@ -33,6 +23,7 @@ RUNTIME="plugins/edc/scripts/edc-lib.sh"
 source_and_test() {
   # Source only the stream_filter function from the runtime helper.
   eval "$(awk '/^stream_filter\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$RUNTIME")"
+  EDC_STREAM_FILTER_CLI="plugins/edc/hooks/lib/stream-filter.mjs"
 
   local output errors
 

@@ -28,7 +28,20 @@ else
   exit 1
 fi
 
-# ── 5c: $ARGUMENTS quoting fix in command ──────────────────────────���─────────
+# ── 5c: installed runtime no longer requires jq ─────────────────────────────
+jq_runtime_scan_paths=$(find plugins/edc/scripts -type f ! -name 'edc-spawn-analyze.sh' -print)
+if ! grep 'command -v jq\|jq is required\|jq required\|brew install jq\|apt install jq' \
+  $jq_runtime_scan_paths \
+  pi/README.md \
+  pi/install.sh >/tmp/edc-t5-jq.txt; then
+  echo "PASS: installed runtime no longer requires jq"
+else
+  echo "FAIL: installed runtime still requires jq"
+  cat /tmp/edc-t5-jq.txt
+  exit 1
+fi
+
+# ── 5d: $ARGUMENTS quoting fix in command ──────────────────────────���─────────
 if grep -q 'set -- \$ARGUMENTS' "$COMMAND" && grep -q '"$@"' "$COMMAND"; then
   echo "PASS: \$ARGUMENTS safely word-split via set -- and passed as \"\$@\""
 else
@@ -72,10 +85,13 @@ done
 echo "PASS: hidden prompt bundles live outside public skills"
 
 # ── 5e: plugin script bundle exists ─────────────────────────────────────────
-if [ -f "$PLUGIN_SCRIPT" ] && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ]; then
-  echo "PASS: plugin runtime includes review + batch classifier helpers"
+if [ -f "$PLUGIN_SCRIPT" ] \
+  && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/json-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/stream-filter.mjs" ]; then
+  echo "PASS: plugin runtime includes review + node helper CLIs"
 else
-  echo "FAIL: plugin runtime missing review/classifier helper — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/node helper CLI — install hook cannot copy"
   exit 1
 fi
 
@@ -95,10 +111,12 @@ if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
   && grep -q 'edc-audit/references/quality-checks.md' install.sh \
   && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
   && grep -q 'classify-cli.mjs' install.sh \
-  && grep -q 'pi-supervisor.mjs' install.sh; then
-  echo "PASS: pi installer copies private skills and classifier for spawned subprocesses"
+  && grep -q 'json-cli.mjs' install.sh \
+  && grep -q 'pi-supervisor.mjs' install.sh \
+  && grep -q 'stream-filter.mjs' install.sh; then
+  echo "PASS: pi installer copies private skills and node runtime helpers for spawned subprocesses"
 else
-  echo "FAIL: pi installer does not copy private skills/classifier"
+  echo "FAIL: pi installer does not copy private skills/node runtime helpers"
   exit 1
 fi
 

@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT="plugins/edc/scripts/edc"
 SCRIPT_ABS="$(pwd)/plugins/edc/scripts/edc"
 BASH_BIN="$(command -v bash)"
+NODE_BIN="$(command -v node)"
+NODE_DIR="$(dirname "$NODE_BIN")"
 ROOT_INSTALL="install.sh"
 
 echo "=== T7: CLI entrypoint ==="
@@ -72,7 +74,7 @@ EOF
 chmod +x "$FAKE_BIN/bash"
 
 run_cli() {
-  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  PATH="$FAKE_BIN:$NODE_DIR:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_BUILD_MODEL="t7-model" \
   EDC_REVIEW_MODEL="t7-model" \
@@ -81,7 +83,7 @@ run_cli() {
 }
 
 run_cli_pi_model_only() {
-  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  PATH="$FAKE_BIN:$NODE_DIR:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_PI_MODEL="t7-pi-model" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \

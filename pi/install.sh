@@ -39,8 +39,11 @@ while [ "$#" -gt 0 ]; do
             echo "edc: no edc-context/manifest.json in $REPO_ROOT — build first" >&2
             exit 2
           fi
+          json_cli="$REPO_ROOT/plugins/edc/hooks/lib/json-cli.mjs"
+          command -v node >/dev/null 2>&1 || { echo "edc: node required to update $manifest" >&2; exit 2; }
+          [ -f "$json_cli" ] || { echo "edc: json-cli.mjs not found at $json_cli" >&2; exit 2; }
           tmp="$(mktemp)"
-          jq --arg m "$mode" '.policy.defaultMode = $m' "$manifest" > "$tmp"
+          node "$json_cli" mode-set "$manifest" "$mode" > "$tmp"
           mv "$tmp" "$manifest"
           echo "edc: set policy.defaultMode = $mode"
           exit 0

@@ -3,7 +3,7 @@
 # Deterministic control plane for terminal/orchestrated edc audit runs.
 #
 # Flow:
-#   1. dependency check (jq, git)
+#   1. dependency check (git/node via helpers)
 #   2. parse args (--ignore, --context-mode)
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
@@ -19,11 +19,6 @@
 set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
-
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
 
 # Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
 # real script location, not the invocation path.
@@ -65,7 +60,7 @@ safe_audit_name() {
 }
 
 manifest_audit_modules() {
-  jq -r '.modules[]? | select((.type // "module") == "module") | [.name, .doc] | @tsv' "$MANIFEST"
+  node "$EDC_JSON_CLI" audit-modules "$MANIFEST"
 }
 
 assert_markdown_report_valid() {

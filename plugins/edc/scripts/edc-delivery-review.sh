@@ -4,11 +4,6 @@
 
 set -euo pipefail
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
-
 _edc_resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do

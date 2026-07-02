@@ -35,7 +35,7 @@ Use a pinned git ref when you need reproducible installs, e.g. `pi install git:g
 
 Orchestrated pi reviews require:
 
-- `pi`, `git`, `jq`, and `node` on `PATH`
+- `pi`, `git`, and `node` on `PATH`
 - Bash >= 4; on macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2
 - shell access for background build/update/review/delivery-review/audit subprocesses
 - write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`
@@ -143,7 +143,7 @@ edc mode inject
 | Symptom | What to check |
 |---|---|
 | `bash` not found | Install or restore the system Bash executable on `PATH`. macOS `/bin/bash` 3.2 is supported. |
-| `jq: command not found` | Install `jq`; EDC orchestrators use it for manifest and report validation. |
+| `node: command not found` | Install Node; EDC orchestrators use it for manifest, routing, and stream handling. |
 | `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash`, writes to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
 | Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from default branch** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
 | Background review reports provider websocket/transport failure | The nested pi subprocess lost provider transport. Rerun the job; if it repeats, run `edc update --agent pi` separately or reduce context/update scope. |

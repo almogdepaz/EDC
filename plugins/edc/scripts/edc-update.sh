@@ -3,7 +3,7 @@
 # Deterministic control plane for /edc:edc-update.
 #
 # Flow:
-#   1. dep check (jq, git)
+#   1. dep check (git/node via helpers)
 #   2. parse args (--base, --ignore, --context-mode)
 #   3. preflight gate via edc-clean-slate.sh --check:
 #        11 (healthy v2)            → proceed
@@ -23,10 +23,6 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
 if ! command -v git > /dev/null 2>&1; then
   echo "ERROR: git is required" >&2
   exit 2

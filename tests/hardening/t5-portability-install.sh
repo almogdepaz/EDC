@@ -112,6 +112,16 @@ else
   exit 1
 fi
 
+# ── 5f2: terminal runtime install derives copy/chmod from one table ────────
+if grep -q 'runtime_install_entries=(' install.sh \
+  && grep -q "IFS='|' read -r src dst executable" install.sh \
+  && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
+  echo "PASS: terminal runtime install derives copy/chmod from one table"
+else
+  echo "FAIL: terminal runtime install still duplicates copy/chmod lists"
+  exit 1
+fi
+
 # ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
 pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
 if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \

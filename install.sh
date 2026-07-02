@@ -145,45 +145,38 @@ skill_rel() {
 
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
-  mkdir -p "$scripts_target"
-  copy_or_download "plugins/edc/scripts/edc"                 "$scripts_target/edc"
-  copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-delivery-review.sh" "$scripts_target/edc-delivery-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
-  copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
-  copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
-  copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
   local hooks_target="$HOME/.edc/hooks/lib"
-  copy_or_download "plugins/edc/hooks/lib/classify-cli.mjs"   "$hooks_target/classify-cli.mjs"
-  copy_or_download "plugins/edc/hooks/lib/json-cli.mjs"       "$hooks_target/json-cli.mjs"
-  copy_or_download "plugins/edc/hooks/lib/pi-supervisor.mjs"  "$hooks_target/pi-supervisor.mjs"
-  copy_or_download "plugins/edc/hooks/lib/stream-filter.mjs"  "$hooks_target/stream-filter.mjs"
-  copy_or_download "plugins/edc/hooks/lib/route.mjs"          "$hooks_target/route.mjs"
-  copy_or_download "plugins/edc/hooks/lib/paths.mjs"          "$hooks_target/paths.mjs"
-  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
-  copy_or_download "plugins/edc/scripts/edc-lib.sh"           "$scripts_target/edc-lib.sh"
-  copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
-  copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
-  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"    "$scripts_target/edc-build-plan.sh"
-  chmod +x \
-    "$scripts_target/edc" \
-    "$scripts_target/edc-review.sh" \
-    "$scripts_target/edc-delivery-review.sh" \
-    "$scripts_target/edc-build.sh" \
-    "$scripts_target/edc-update.sh" \
-    "$scripts_target/edc-audit.sh" \
-    "$scripts_target/edc-doctor.sh" \
-    "$scripts_target/edc-manifest.sh" \
-    "$scripts_target/edc-clean-slate.sh" \
-    "$scripts_target/edc-assert-fresh.sh" \
-    "$scripts_target/edc-recover-context.sh" \
-    "$scripts_target/edc-build-plan.sh" \
-    "$hooks_target/classify-cli.mjs" \
-    "$hooks_target/json-cli.mjs" \
-    "$hooks_target/pi-supervisor.mjs" \
-    "$hooks_target/stream-filter.mjs"
-  # edc-lib.sh is sourced, not exec'd — no chmod needed
+  mkdir -p "$scripts_target" "$hooks_target"
+
+  local runtime_install_entries=(
+    "plugins/edc/scripts/edc|$scripts_target/edc|x"
+    "plugins/edc/scripts/edc-review.sh|$scripts_target/edc-review.sh|x"
+    "plugins/edc/scripts/edc-delivery-review.sh|$scripts_target/edc-delivery-review.sh|x"
+    "plugins/edc/scripts/edc-build.sh|$scripts_target/edc-build.sh|x"
+    "plugins/edc/scripts/edc-update.sh|$scripts_target/edc-update.sh|x"
+    "plugins/edc/scripts/edc-audit.sh|$scripts_target/edc-audit.sh|x"
+    "plugins/edc/scripts/edc-doctor.sh|$scripts_target/edc-doctor.sh|x"
+    "plugins/edc/scripts/edc-manifest.sh|$scripts_target/edc-manifest.sh|x"
+    "plugins/edc/hooks/lib/classify-cli.mjs|$hooks_target/classify-cli.mjs|x"
+    "plugins/edc/hooks/lib/json-cli.mjs|$hooks_target/json-cli.mjs|x"
+    "plugins/edc/hooks/lib/pi-supervisor.mjs|$hooks_target/pi-supervisor.mjs|x"
+    "plugins/edc/hooks/lib/stream-filter.mjs|$hooks_target/stream-filter.mjs|x"
+    "plugins/edc/hooks/lib/route.mjs|$hooks_target/route.mjs|"
+    "plugins/edc/hooks/lib/paths.mjs|$hooks_target/paths.mjs|"
+    "plugins/edc/scripts/edc-clean-slate.sh|$scripts_target/edc-clean-slate.sh|x"
+    "plugins/edc/scripts/edc-lib.sh|$scripts_target/edc-lib.sh|"
+    "plugins/edc/scripts/edc-assert-fresh.sh|$scripts_target/edc-assert-fresh.sh|x"
+    "plugins/edc/scripts/edc-recover-context.sh|$scripts_target/edc-recover-context.sh|x"
+    "plugins/edc/scripts/edc-build-plan.sh|$scripts_target/edc-build-plan.sh|x"
+  )
+
+  local entry src dst executable
+  for entry in "${runtime_install_entries[@]}"; do
+    IFS='|' read -r src dst executable <<< "$entry"
+    copy_or_download "$src" "$dst"
+    [ "$executable" = "x" ] && chmod +x "$dst"
+  done
+
   install_shell_path
 }
 

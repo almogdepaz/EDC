@@ -622,7 +622,16 @@ TMPDIR_T15O=$(mktemp -d)
   rm -rf "$TMPDIR_T15O"
 )
 
-# ── 15.17: gh PR diff failures surface stderr ──────────────────────────────
+# ── 15.17: review auto-mode does not use build output as IPC ──────────────
+if ! grep -q 'bash "$0" --build' "$SCRIPT" \
+   && ! grep -q 'grep -q "\^Review tasks ready"' "$SCRIPT" \
+   && grep -q 'find "$EDC_REVIEW_TASKS_DIR"' "$SCRIPT"; then
+  check "15.17: review auto-mode derives task files without shell/log IPC" 1
+else
+  check "15.17: review auto-mode derives task files without shell/log IPC" 0
+fi
+
+# ── 15.18: gh PR diff failures surface stderr ──────────────────────────────
 TMPDIR_T15P=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15P"
@@ -638,9 +647,9 @@ EOF
   rc=$?
   set -e
   if [ "$rc" -eq 2 ] && echo "$out" | grep -q "gh pr diff failed" && echo "$out" | grep -q "gh auth failed"; then
-    check "15.17: gh PR diff failure reports gh stderr" 1
+    check "15.18: gh PR diff failure reports gh stderr" 1
   else
-    check "15.17: gh PR diff failure reports gh stderr" 0
+    check "15.18: gh PR diff failure reports gh stderr" 0
     echo "$out"
   fi
   rm -rf "$TMPDIR_T15P"

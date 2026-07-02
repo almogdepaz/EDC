@@ -417,21 +417,24 @@ auto_mode() {
       || exit 1
   fi
 
-  # Build review tasks now that context is fresh.
-  local out
-  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
+  # Build review tasks now that context is fresh. Run the function in-process
+  # instead of shelling out to `$0 --build`; build_mode still exits, but command
+  # substitution confines that exit to the subshell while preserving filesystem
+  # outputs under $EDC_REVIEW_TASKS_DIR.
+  local out build_rc=0
+  out=$(build_mode "$target" "${extra_args[@]}" 2>&1) || build_rc=$?
 
-  if ! echo "$out" | grep -q "^Review tasks ready"; then
+  if [ "$build_rc" -ne 0 ] || [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
     echo "$out" >&2
     edc_write_review_result 1 "review-task-build-failed" "review task generation failed" "inspect the log for task-generation output and rerun after fixing it" "" ""
     exit 1
   fi
 
-  # Parse TASK lines. allowed-unmapped is satisfied by a deterministic
-  # prewritten report and intentionally emits no subprocess task.
+  # allowed-unmapped/account-only paths are satisfied by deterministic
+  # prewritten reports and intentionally have no subprocess task file.
   local tasks
-  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //' || true)
+  tasks=$(find "$EDC_REVIEW_TASKS_DIR" -maxdepth 1 -type f -name '*.md' ! -name 'report-*.md' -print | sort)
   if [ -z "$tasks" ]; then
     local module prewritten_missing=0
     while IFS= read -r module; do

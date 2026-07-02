@@ -48,10 +48,10 @@ Read `edc-context/manifest.json` to get `sourceCommit` (last analyzed commit) an
 Classify each changed file by invoking the shared classifier:
 
 ```bash
-bash plugins/edc/scripts/edc-classify-path.sh edc-context/manifest.json <file-path>
+printf '%s\n' <file-path> | node plugins/edc/hooks/lib/classify-cli.mjs edc-context/manifest.json
 ```
 
-`edc-classify-path.sh` returns exactly one state: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`. Do not reimplement classification.
+`classify-cli.mjs` returns `<path>\t<state>` lines where state is exactly one of: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`. Do not reimplement classification.
 
 Collect affected real modules from `context-module:*`. For changed `contextless:*` paths, inspect the diff and either keep them contextless, promote them to a real context module, or report a promotion candidate; do not silently skip them. `reviewPolicy` controls review behavior only — update owns actual context promotion/status changes. `uncovered` and `ambiguous` paths must be fixed by manifest/context changes before the update is considered healthy.
 

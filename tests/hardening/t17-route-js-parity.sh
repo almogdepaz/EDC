@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# t17-route-js-parity: verify the in-process JS router (routeFileSync) matches
-# the shell router (plugins/edc/scripts/edc-route.sh) for representative cases,
-# AND that it works without edc-route.sh on disk (no shell exec on the hot path).
-#
-# Motivated by the audit finding that buildToolCallInjection used to spawn
-# edc-route.sh on every Edit/Write/Bash tool call. Routing is now pure JS;
-# this test pins that contract.
+# t17-route-js-parity: verify the batch classifier CLI uses the same in-process
+# JS classifier as direct route.mjs callers and works without shell router files.
 set -uo pipefail
 
 PASS=0
@@ -19,7 +14,6 @@ cd "$ROOT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Build a manifest that exercises all 3 tiers + priority + ambiguity.
 cat > "$TMP/manifest.json" <<'EOF'
 {
   "schemaVersion": 2,
@@ -30,76 +24,69 @@ cat > "$TMP/manifest.json" <<'EOF'
     { "name": "glob-mod",   "priority": 10, "match": { "globs": ["docs/**/*.md"] } },
     { "name": "amb-a",      "priority": 100,"match": { "prefixes": ["amb/"] } },
     { "name": "amb-b",      "priority": 100,"match": { "prefixes": ["amb/"] } }
-  ]
+  ],
+  "contextless": {"entries": [
+    {"id":"docs","globs":["notes/**"],"reason":"docs","reviewPolicy":"account-only"}
+  ]},
+  "unmapped": {"allowedGlobs": ["package.json"]}
 }
 EOF
 
-# Each line: "<file>|<expected-module-or-empty>"
 cases=(
-  "src/exact.ts|exact-mod"          # T1 exact beats T2 prefix regardless of priority
-  "src/sub/foo.ts|long-pfx"         # T2 longest prefix wins (even with lower prio)
-  "src/other.ts|short-pfx"          # T2 only short prefix matches
-  "docs/a/b.md|glob-mod"            # T3 glob
-  "amb/x.ts|"                       # T2 tied top-priority -> ambiguous -> null
-  "no/match.zz|"                    # nothing matches
+  "src/exact.ts|context-module:exact-mod"
+  "src/sub/foo.ts|context-module:long-pfx"
+  "src/other.ts|context-module:short-pfx"
+  "docs/a/b.md|context-module:glob-mod"
+  "notes/todo.md|contextless:docs:account-only"
+  "package.json|contextless:legacy-unmapped:account-only"
+  "amb/x.ts|ambiguous"
+  "no/match.zz|uncovered"
 )
 
-# 17.1: parity with edc-route.sh on every case
-parity_ok=1
+paths_file="$TMP/paths.txt"
+: > "$paths_file"
+for case in "${cases[@]}"; do
+  printf '%s\n' "${case%%|*}" >> "$paths_file"
+done
+
+cli_output=$(node plugins/edc/hooks/lib/classify-cli.mjs "$TMP/manifest.json" < "$paths_file" 2>&1)
+cli_ok=1
 for case in "${cases[@]}"; do
   file="${case%%|*}"
   want="${case##*|}"
-
-  set +e
-  got_shell=$(bash plugins/edc/scripts/edc-route.sh "$TMP/manifest.json" "$file" 2>/dev/null)
-  set -e
-
+  got_cli=$(printf '%s\n' "$cli_output" | awk -F '\t' -v f="$file" '$1 == f {print $2; found=1} END {if (!found) exit 1}') || got_cli=""
   got_js=$(MANIFEST="$TMP/manifest.json" FILE="$file" node --input-type=module -e '
-    const { routeFileSync } = await import("./plugins/edc/hooks/lib/route.mjs");
+    const { classifyPathSync } = await import("./plugins/edc/hooks/lib/route.mjs");
     const fs = await import("node:fs");
     const m = JSON.parse(fs.readFileSync(process.env.MANIFEST, "utf-8"));
-    const r = routeFileSync(m, process.env.FILE);
-    process.stdout.write(r || "");
+    process.stdout.write(classifyPathSync(m, process.env.FILE));
   ' 2>&1)
 
-  if [ "$got_shell" != "$got_js" ]; then
-    parity_ok=0
-    echo "  divergence on $file: shell=\"$got_shell\" js=\"$got_js\""
-    continue
-  fi
-  if [ "$got_js" != "$want" ]; then
-    parity_ok=0
-    echo "  wrong answer on $file: got=\"$got_js\" want=\"$want\""
+  if [ "$got_cli" != "$got_js" ] || [ "$got_cli" != "$want" ]; then
+    cli_ok=0
+    echo "  $file: cli='$got_cli' js='$got_js' want='$want'"
   fi
 done
 
-if [ "$parity_ok" -eq 1 ]; then
-  say_pass "routeFileSync matches edc-route.sh on all parity cases"
+if [ "$cli_ok" -eq 1 ]; then
+  say_pass "classify-cli.mjs matches classifyPathSync on all cases"
 else
-  say_fail "routeFileSync vs edc-route.sh parity"
+  say_fail "classify-cli.mjs parity with classifyPathSync"
 fi
 
-# 17.2: routing works without edc-route.sh on disk (no shell exec).
-# Stage a copy of the plugin tree without plugins/edc/scripts/edc-route.sh, then route.
 STAGE="$TMP/stage"
 mkdir -p "$STAGE/plugins/edc/hooks/lib"
-cp plugins/edc/hooks/lib/route.mjs   "$STAGE/plugins/edc/hooks/lib/"
-cp plugins/edc/hooks/lib/paths.mjs   "$STAGE/plugins/edc/hooks/lib/"
+cp plugins/edc/hooks/lib/classify-cli.mjs "$STAGE/plugins/edc/hooks/lib/"
+cp plugins/edc/hooks/lib/route.mjs        "$STAGE/plugins/edc/hooks/lib/"
+cp plugins/edc/hooks/lib/paths.mjs        "$STAGE/plugins/edc/hooks/lib/"
 cp "$TMP/manifest.json" "$STAGE/manifest.json"
-# Deliberately do NOT copy plugins/edc/scripts/edc-route.sh.
 
-no_shell=$(node --input-type=module -e '
-  const { routeFileSync } = await import("'"$STAGE"'/plugins/edc/hooks/lib/route.mjs");
-  const fs = await import("node:fs");
-  const m = JSON.parse(fs.readFileSync("'"$STAGE"'/manifest.json", "utf-8"));
-  const r = routeFileSync(m, "src/sub/foo.ts");
-  process.stdout.write(r || "MISS");
-' 2>&1)
+no_shell=$(printf '%s\n' "src/sub/foo.ts" | node "$STAGE/plugins/edc/hooks/lib/classify-cli.mjs" "$STAGE/manifest.json" 2>&1 | awk -F '\t' 'NR == 1 {print $2}')
 
-if [ "$no_shell" = "long-pfx" ]; then
-  say_pass "routeFileSync works without edc-route.sh on disk"
+if [ "$no_shell" = "context-module:long-pfx" ]; then
+  say_pass "classify-cli.mjs works without shell router files"
 else
-  say_fail "routeFileSync without edc-route.sh" "got: $no_shell"
+  say_fail "classify-cli.mjs without shell router files" "got: $no_shell"
 fi
 
 echo

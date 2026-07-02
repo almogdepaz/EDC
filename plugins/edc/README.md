@@ -44,8 +44,8 @@ plugins/edc/
     edc-clean-slate.sh                 # v1 leftover detection + wipe
     edc-recover-context.sh             # auto-rebuild/update when context is stale
 
-    edc-route.sh                       # path -> module router (exec'd, stable CLI contract)
     edc-manifest.sh                    # manifest stdin/stdout filter
+    ../hooks/lib/classify-cli.mjs      # batch path classifier used by shell orchestrators
     edc-build-plan.sh                  # deterministic per-module task planner (jq)
 
   skills/                              # user-facing methodology skills

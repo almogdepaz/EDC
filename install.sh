@@ -153,9 +153,11 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
   copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
   copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
-  copy_or_download "plugins/edc/scripts/edc-classify-path.sh" "$scripts_target/edc-classify-path.sh"
   copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
+  local hooks_target="$HOME/.edc/hooks/lib"
+  copy_or_download "plugins/edc/hooks/lib/classify-cli.mjs"   "$hooks_target/classify-cli.mjs"
+  copy_or_download "plugins/edc/hooks/lib/route.mjs"          "$hooks_target/route.mjs"
+  copy_or_download "plugins/edc/hooks/lib/paths.mjs"          "$hooks_target/paths.mjs"
   copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
   copy_or_download "plugins/edc/scripts/edc-lib.sh"           "$scripts_target/edc-lib.sh"
   copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
@@ -170,14 +172,13 @@ install_terminal_cli() {
     "$scripts_target/edc-update.sh" \
     "$scripts_target/edc-audit.sh" \
     "$scripts_target/edc-doctor.sh" \
-    "$scripts_target/edc-route.sh" \
-    "$scripts_target/edc-classify-path.sh" \
     "$scripts_target/edc-manifest.sh" \
     "$scripts_target/edc-clean-slate.sh" \
     "$scripts_target/edc-assert-fresh.sh" \
     "$scripts_target/edc-recover-context.sh" \
     "$scripts_target/edc-build-plan.sh" \
-    "$scripts_target/edc-spawn-analyze.sh"
+    "$scripts_target/edc-spawn-analyze.sh" \
+    "$hooks_target/classify-cli.mjs"
   # edc-lib.sh is sourced, not exec'd — no chmod needed
   install_shell_path
 }

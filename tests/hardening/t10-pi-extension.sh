@@ -566,6 +566,12 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
+  for (const requiredRuntime of ["classify-cli.mjs", "route.mjs", "paths.mjs"]) {
+    if (!fs.existsSync(`${cwd}/.edc/hooks/lib/${requiredRuntime}`)) {
+      console.log("CLASSIFIER_RUNTIME_INSTALL_FAIL:" + requiredRuntime);
+      process.exit(1);
+    }
+  }
   for (const requiredSkill of ["edc-review", "edc-audit", "edc-delivery-review", "edc-build-impl", "edc-update-impl", "edc-module-context-impl"]) {
     if (!fs.existsSync(`${cwd}/.edc/skills/${requiredSkill}/SKILL.md`)) {
       console.log("PRIVATE_SKILL_INSTALL_FAIL:" + requiredSkill);

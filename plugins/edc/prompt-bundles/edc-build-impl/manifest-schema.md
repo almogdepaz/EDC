@@ -63,7 +63,7 @@ Build provenance only. Runtime adapters MUST NOT auto-load it.
 | `guardedTools` | string[] | optional | Tools that, in inject installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
 | `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `edc-context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
 | `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `EDC_AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
-| `unmatchedPathPolicy` | enum: `"warn-allow"` | yes | Behavior for code paths that match no module. v2 only defines `"warn-allow"`: edits/writes against unmatched paths are warned and allowed; `edc doctor` flags the gap. This keeps the manifest an honest contract instead of a precondition for adding new code. |
+| `unmatchedPathPolicy` | enum: `"warn-allow"` \| `"allow"` \| `"fail"` | yes | Behavior for code paths that match no module. Default authoring SHOULD use `"warn-allow"`: unmatched paths are warned and allowed so the manifest stays an honest contract instead of blocking new code. `"allow"` suppresses warnings; `"fail"` makes review task generation reject unmatched paths. |
 
 ---
 
@@ -85,7 +85,7 @@ Each entry routes a slice of the repo to a deep module doc.
 |---|---|---|---|
 | `exactFiles` | string[] (repo-relative paths) | optional | Literal file paths owned by this module. Highest-precedence routing tier. |
 | `prefixes` | string[] (repo-relative path prefixes) | optional | Directory prefixes. Longest-prefix wins within this tier. |
-| `globs` | string[] (repo-relative globs) | optional | Glob patterns. Any match counts; precedence among globs is broken only by `priority`. |
+| `globs` | string[] (repo-relative globs) | optional | Glob patterns using the EDC dialect: `*` matches within one path segment, `**` may cross `/`, `?` matches one non-`/` character, and character classes are supported. Any match counts; precedence among globs is broken only by `priority`. |
 
 At least one of `exactFiles`, `prefixes`, `globs` MUST be non-empty.
 
@@ -93,13 +93,13 @@ At least one of `exactFiles`, `prefixes`, `globs` MUST be non-empty.
 
 ## Path classification algorithm
 
-`edc-classify-path.sh` is the deterministic classifier used by manifest, doctor, review, and JS adapters. Given a repo-relative path `P`, it returns exactly one state: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`.
+`classify-cli.mjs` is the deterministic batch classifier used by manifest, doctor, review, and JS adapters. It reads repo-relative paths on stdin and emits `<path>\t<state>` for each path. Given a repo-relative path `P`, it returns exactly one state: `ignored`, `context-module:<module>`, `contextless:<entryId>:<reviewPolicy>`, `uncovered`, or `ambiguous`.
 
 First apply resolved ignore rules. Ignored paths return `ignored`. Otherwise, resolve the owning module by walking three precedence tiers in order and stopping at the first tier that produces a winner:
 
 1. **Tier 1 — `match.exactFiles`:** if any module lists `P` literally in its `exactFiles`, that module wins.
 2. **Tier 2 — `match.prefixes` (longest-prefix wins):** of all modules whose `prefixes` contain a string that is a prefix of `P`, the module with the **longest matching prefix** wins. Length is measured in characters of the prefix string after normalizing trailing slashes.
-3. **Tier 3 — `match.globs`:** any module whose `globs` match `P`.
+3. **Tier 3 — `match.globs`:** any module whose `globs` match `P`. In EDC globs, `*` does not cross `/`; use `**` when a match should span nested directories.
 
 Across all tiers, ties are broken by higher `priority` (numeric, larger wins). If two or more modules match `P` at the **same effective tier with equal `priority`**, the path is **ambiguous**:
 
@@ -170,7 +170,7 @@ Filled by the post-step. All counts cover the set of repo files included in `git
 1. `schemaVersion` is missing or not equal to `2`.
 2. `edcVersion`, `repoContextFile`, `reports.issues`, `reports.complexity`, `build.buildInfoFile`, `policy.defaultMode`, `policy.unmatchedPathPolicy`, or `unmapped.allowedGlobs` is missing.
 3. `policy.defaultMode` is not one of `"advisory"`, `"inject"`.
-4. `policy.unmatchedPathPolicy` is not `"warn-allow"`.
+4. `policy.unmatchedPathPolicy` is not one of `"warn-allow"`, `"allow"`, or `"fail"`.
 5. `modules` is empty.
 6. Two modules share the same `name`.
 7. A module's `doc` path does not exist on disk.

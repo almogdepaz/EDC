@@ -46,7 +46,7 @@ export function resolvePluginRoot(metaUrl) {
   let dir = dirname(fileURLToPath(metaUrl));
   for (let i = 0; i < 6; i++) {
     if (
-      existsSync(join(dir, "scripts", "edc-route.sh")) &&
+      existsSync(join(dir, "scripts", "edc-review.sh")) &&
       existsSync(join(dir, "skills"))
     ) {
       return dir;
@@ -171,8 +171,8 @@ export function normalizePath(p, projectRoot) {
 // --- routing ---
 
 /**
- * Convert a glob pattern (subset supported by edc-route.sh's `[[ $f == $pat ]]`)
- * into a RegExp. Supports `*` (no slash), `**` (any), `?` (single non-slash),
+ * Convert an EDC manifest glob pattern into a RegExp. Supports `*` (no slash),
+ * `**` (any), `?` (single non-slash),
  * and `[...]` character classes. Anchored.
  */
 function globToRegex(glob) {
@@ -206,35 +206,9 @@ function globToRegex(glob) {
   return new RegExp(re);
 }
 
-function bashPatternToRegex(pattern) {
-  let re = "^";
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === "*") {
-      if (pattern[i + 1] === "*") i++;
-      re += ".*";
-    } else if (c === "?") {
-      re += ".";
-    } else if (c === "[") {
-      const end = pattern.indexOf("]", i + 1);
-      if (end === -1) {
-        re += "\\[";
-      } else {
-        re += pattern.slice(i, end + 1);
-        i = end;
-      }
-    } else if (/[.+^$(){}|\\]/.test(c)) {
-      re += "\\" + c;
-    } else {
-      re += c;
-    }
-  }
-  return new RegExp(`${re}$`);
-}
-
 function pathMatchesPattern(filePath, pattern) {
   if (pattern.endsWith("/")) return filePath.startsWith(pattern);
-  return filePath === pattern || filePath.startsWith(`${pattern}/`) || bashPatternToRegex(pattern).test(filePath);
+  return filePath === pattern || filePath.startsWith(`${pattern}/`) || globToRegex(pattern).test(filePath);
 }
 
 function routeFileStateSync(manifest, filePath) {
@@ -315,8 +289,8 @@ function contextlessMatches(manifest, filePath, source) {
 }
 
 /**
- * Classify a path into exactly one context coverage state. Mirrors
- * plugins/edc/scripts/edc-classify-path.sh.
+ * Classify a path into exactly one context coverage state. This is the single
+ * classifier implementation used directly by JS callers and by classify-cli.mjs.
  */
 export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
   for (const pattern of ignorePatterns) {
@@ -348,8 +322,7 @@ export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
 }
 
 /**
- * Route a file path to a module, in-process. Mirrors the 3-tier algorithm in
- * plugins/edc/scripts/edc-route.sh. Returns null on no-match or ambiguity.
+ * Route a file path to a module, in-process. Returns null on no-match or ambiguity.
  */
 export function routeFileSync(manifest, filePath) {
   const state = routeFileStateSync(manifest, filePath);
@@ -361,8 +334,7 @@ export function routeFileSync(manifest, filePath) {
  * and dispatches to routeFileSync. New code should call routeFileSync directly
  * with an already-parsed manifest to avoid the file read.
  *
- * The third param (pluginRoot) is unused — historically pointed at
- * edc-route.sh; routing is now pure JS.
+ * The third param (pluginRoot) is unused — routing is pure JS.
  */
 function routeFile(manifestPathArg, filePath, _pluginRoot) {
   if (!existsSync(manifestPathArg)) return null;
@@ -439,6 +411,7 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
   if (!isEdcProject(projectRoot)) return;
 
   installScriptFiles(projectRoot, pluginRoot);
+  installClassifierRuntime(projectRoot, pluginRoot);
   installPrivatePromptBundles(projectRoot, pluginRoot);
 }
 
@@ -478,6 +451,25 @@ function installScriptFiles(projectRoot, pluginRoot) {
     } catch (err) {
       process.stderr.write(
         `[edc] WARNING: could not install ${scriptName}: ${err.message}\n`,
+      );
+    }
+  }
+}
+
+function installClassifierRuntime(projectRoot, pluginRoot) {
+  const sourceDir = join(pluginRoot, "hooks", "lib");
+  const destDir = join(projectRoot, ".edc", "hooks", "lib");
+  for (const fileName of ["classify-cli.mjs", "route.mjs", "paths.mjs"]) {
+    const src = join(sourceDir, fileName);
+    const dst = join(destDir, fileName);
+    if (!existsSync(src) || !shouldCopyFile(src, dst)) continue;
+    try {
+      mkdirSync(destDir, { recursive: true });
+      copyFileSync(src, dst);
+      if (fileName === "classify-cli.mjs") chmodSync(dst, 0o755);
+    } catch (err) {
+      process.stderr.write(
+        `[edc] WARNING: could not install classifier runtime ${fileName}: ${err.message}\n`,
       );
     }
   }

@@ -13,11 +13,12 @@ MANIFEST="$EDC_MANIFEST"
 INDEX="$EDC_INDEX"
 ROOT_AGENTS="$EDC_ROOT_AGENTS"
 ALT_AGENTS="$EDC_ALT_AGENTS"
-CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
+CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"
 
 command -v jq >/dev/null 2>&1 || { echo "edc-doctor: jq required" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { echo "edc-doctor: git required" >&2; exit 2; }
-[ -f "$CLASSIFY_SH" ] || { echo "edc-doctor: missing $CLASSIFY_SH" >&2; exit 2; }
+command -v node >/dev/null 2>&1 || { echo "edc-doctor: node required" >&2; exit 2; }
+[ -f "$CLASSIFY_CLI" ] || { echo "edc-doctor: missing $CLASSIFY_CLI" >&2; exit 2; }
 
 failures=0
 
@@ -58,30 +59,35 @@ if [ "$failures" -eq 0 ]; then
     ignore_args+=(--ignore "$glob")
   done < <(jq -r '.coverage.ignoreGlobs[]? // empty' "$MANIFEST")
 
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    set +e
-    state=$("$EDC_BASH" "$CLASSIFY_SH" "${ignore_args[@]}" "$MANIFEST" "$path" 2>&1)
-    rc=$?
-    set -e
-    if [ "$rc" -ne 0 ]; then
-      fail "classifier failed for $path (rc=$rc): $state"
-      continue
-    fi
-    case "$state" in
-      ignored|context-module:*|contextless:*)
-        ;;
-      uncovered)
-        fail "uncovered tracked path not covered by manifest modules or contextless.entries: $path"
-        ;;
-      ambiguous)
-        fail "ambiguous routing for $path"
-        ;;
-      *)
-        fail "classifier returned invalid state for $path: $state"
-        ;;
-    esac
-  done < <(git ls-files)
+  tmp_dir=$(mktemp -d)
+  paths_file="$tmp_dir/paths.txt"
+  states_file="$tmp_dir/states.tsv"
+  git ls-files > "$paths_file"
+  set +e
+  node "$CLASSIFY_CLI" "${ignore_args[@]}" "$MANIFEST" < "$paths_file" > "$states_file" 2> "$tmp_dir/classify.err"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    fail "classifier failed (rc=$rc): $(cat "$tmp_dir/classify.err")"
+  else
+    while IFS=$'\t' read -r path state; do
+      [ -n "$path" ] || continue
+      case "$state" in
+        ignored|context-module:*|contextless:*)
+          ;;
+        uncovered)
+          fail "uncovered tracked path not covered by manifest modules or contextless.entries: $path"
+          ;;
+        ambiguous)
+          fail "ambiguous routing for $path"
+          ;;
+        *)
+          fail "classifier returned invalid state for $path: $state"
+          ;;
+      esac
+    done < "$states_file"
+  fi
+  rm -rf "$tmp_dir"
 fi
 
 if [ "$failures" -gt 0 ]; then

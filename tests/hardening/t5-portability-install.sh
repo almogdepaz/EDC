@@ -72,11 +72,11 @@ for bundle in edc-build-impl edc-update-impl edc-module-context-impl edc-context
 done
 echo "PASS: hidden prompt bundles live outside public skills"
 
-# ── 5e: plugin script bundle exists ──────────────────────────────���───────────
-if [ -f "$PLUGIN_SCRIPT" ] && [ -f "plugins/edc/scripts/edc-classify-path.sh" ]; then
-  echo "PASS: plugin script bundle includes review + classifier helpers"
+# ── 5e: plugin script bundle exists ─────────────────────────────────────────
+if [ -f "$PLUGIN_SCRIPT" ] && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ]; then
+  echo "PASS: plugin runtime includes review + batch classifier helpers"
 else
-  echo "FAIL: plugin script bundle missing review/classifier helper — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/classifier helper — install hook cannot copy"
   exit 1
 fi
 
@@ -95,7 +95,7 @@ if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
   && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
   && grep -q 'edc-audit/references/quality-checks.md' install.sh \
   && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
-  && grep -q 'edc-classify-path.sh' install.sh; then
+  && grep -q 'classify-cli.mjs' install.sh; then
   echo "PASS: pi installer copies private skills and classifier for spawned subprocesses"
 else
   echo "FAIL: pi installer does not copy private skills/classifier"

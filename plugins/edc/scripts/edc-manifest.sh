@@ -21,7 +21,7 @@
 #   .coverage.ignoreGlobs
 #   legacy .coverage.mappedFileCount / .coverage.unmappedFileCount aliases
 #
-# Coverage walks `git ls-files` and classifies each path via edc-classify-path.sh.
+# Coverage walks `git ls-files` and classifies paths through the Node batch classifier.
 #
 # Exit codes:
 #   0   success
@@ -35,12 +35,11 @@ reject() { echo "edc-manifest: $1" >&2; exit 1; }
 
 command -v jq  >/dev/null 2>&1 || { echo "edc-manifest: jq required"  >&2; exit 64; }
 command -v git >/dev/null 2>&1 || { echo "edc-manifest: git required" >&2; exit 64; }
+command -v node >/dev/null 2>&1 || { echo "edc-manifest: node required" >&2; exit 64; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-classify_sh="$script_dir/edc-classify-path.sh"
-[ -f "$classify_sh" ] || { echo "edc-manifest: edc-classify-path.sh not found at $classify_sh" >&2; exit 64; }
-EDC_BASH="${EDC_BASH:-$BASH}"
-export EDC_BASH
+classify_cli="$script_dir/../hooks/lib/classify-cli.mjs"
+[ -f "$classify_cli" ] || { echo "edc-manifest: classify-cli.mjs not found at $classify_cli" >&2; exit 64; }
 
 ignore_source="none"
 ignore_globs=()
@@ -137,7 +136,7 @@ jq -e 'has("sourceCommit") | not' "$input" >/dev/null \
 jq -e '(has("coverage") | not) or (.coverage | length == 0)' "$input" >/dev/null \
   || reject "coverage.* must not be authored by the LLM; the post-step fills it"
 
-# Walk tracked files, classify each via edc-classify-path.sh, tally coverage.
+# Walk tracked files, classify each through one Node process, tally coverage.
 context_mapped=0
 contextless=0
 uncovered=0
@@ -148,14 +147,16 @@ for glob in "${ignore_globs[@]}"; do
   ignore_args+=(--ignore "$glob")
 done
 
-while IFS= read -r path; do
-  [ -z "$path" ] && continue
-  state=$("$EDC_BASH" "$classify_sh" "${ignore_args[@]}" "$input" "$path")
-  rc=$?
-  if [ "$rc" -ne 0 ]; then
-    echo "edc-manifest: edc-classify-path.sh failed (rc=$rc) for path: $path" >&2
-    exit 1
-  fi
+paths_file="$tmp_dir/paths.txt"
+states_file="$tmp_dir/states.tsv"
+git ls-files > "$paths_file"
+if ! node "$classify_cli" "${ignore_args[@]}" "$input" < "$paths_file" > "$states_file"; then
+  echo "edc-manifest: classify-cli.mjs failed" >&2
+  exit 1
+fi
+
+while IFS=$'\t' read -r path state; do
+  [ -n "$path" ] || continue
   case "$state" in
     ignored) ignored=$((ignored + 1)) ;;
     context-module:*) context_mapped=$((context_mapped + 1)) ;;
@@ -164,7 +165,7 @@ while IFS= read -r path; do
     ambiguous) ambiguous=$((ambiguous + 1)) ;;
     *) echo "edc-manifest: invalid classifier state for path $path: $state" >&2; exit 1 ;;
   esac
-done < <(git ls-files)
+done < "$states_file"
 
 generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 source_commit="$(git rev-parse HEAD)"

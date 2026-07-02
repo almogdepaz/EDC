@@ -17,7 +17,7 @@
 #        12 (v1 layout)             → already printed migration hint, exit
 #   4. auto-detect base if --base not given (git merge-base with main/master)
 #   5. spawn ONE update subprocess via edc_spawn (claude/cursor/codex/pi).
-#      Skill internally re-runs git diff + edc-route.sh against the same
+#      Skill internally re-runs git diff + classify-cli.mjs against the same
 #      base, refreshes affected modules + reports + manifest.
 #   6. validate via edc-doctor.sh — non-zero doctor → update failed
 #

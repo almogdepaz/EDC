@@ -58,8 +58,7 @@ SCRIPT_DIR="$(_edc_resolve_script_dir)"
 . "$SCRIPT_DIR/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
-ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
-CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
+CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -639,11 +638,15 @@ TASK
     return 0
   fi
 
-  # Step 3: classify changed files through the shared coverage classifier.
+  # Step 3: classify changed files through the shared batch coverage classifier.
   # Real modules get normal module-review tasks. Contextless paths follow their
   # deterministic reviewPolicy and never load fake module docs.
-  if [ ! -f "$CLASSIFY_SH" ]; then
-    echo "ERROR: edc-classify-path.sh not found at $CLASSIFY_SH" >&2
+  if [ ! -f "$CLASSIFY_CLI" ]; then
+    echo "ERROR: classify-cli.mjs not found at $CLASSIFY_CLI" >&2
+    exit 2
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "ERROR: node is required for review path classification" >&2
     exit 2
   fi
 
@@ -697,13 +700,14 @@ TASK
     MODULE_FILES["$module"]+="${file}"$'\n'
   }
 
-  while IFS= read -r file; do
+  local classifications
+  classifications=$(printf '%s\n' "$files" | node "$CLASSIFY_CLI" "$MANIFEST") || {
+    echo "ERROR: classify-cli.mjs failed" >&2
+    exit 2
+  }
+
+  while IFS=$'\t' read -r file state; do
     [ -z "$file" ] && continue
-    local state
-    state=$("$EDC_BASH" "$CLASSIFY_SH" "$MANIFEST" "$file") || {
-      echo "ERROR: edc-classify-path.sh failed for path: $file" >&2
-      exit 2
-    }
 
     case "$state" in
       context-module:*)
@@ -736,7 +740,7 @@ TASK
         exit 2
         ;;
     esac
-  done <<< "$files"
+  done <<< "$classifications"
 
   if [ "$ambiguous_count" -gt 0 ]; then
     echo "ERROR: $ambiguous_count file(s) match multiple modules or contextless entries:" >&2

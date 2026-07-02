@@ -2,8 +2,8 @@
 # t28-contextless-classification: pin the contextless coverage contract.
 #
 # Contextless paths are deterministic coverage/accounting, not fake human
-# modules. The shared classifier must return exactly one state for each path and
-# doctor must require docs only for real context modules.
+# modules. The shared batch classifier must return exactly one state for each
+# path and doctor must require docs only for real context modules.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -30,7 +30,7 @@ export EDC_BASH="$BASH_BIN"
 check_init --file
 trap 'check_cleanup' EXIT
 
-SCRIPT="$ROOT/plugins/edc/scripts/edc-classify-path.sh"
+CLASSIFY_CLI="$ROOT/plugins/edc/hooks/lib/classify-cli.mjs"
 DOCTOR="$ROOT/plugins/edc/scripts/edc-doctor.sh"
 
 TMP="$(mktemp -d)"
@@ -49,7 +49,8 @@ cat > "$MANIFEST" <<'JSON'
     {"name": "exact-mod", "doc": "edc-context/modules/exact-mod.md", "priority": 10, "match": {"exactFiles": ["src/exact.ts"]}},
     {"name": "core", "doc": "edc-context/modules/core.md", "priority": 10, "match": {"prefixes": ["src/"]}},
     {"name": "amb-a", "doc": "edc-context/modules/amb-a.md", "priority": 100, "match": {"prefixes": ["amb/"]}},
-    {"name": "amb-b", "doc": "edc-context/modules/amb-b.md", "priority": 100, "match": {"prefixes": ["amb/"]}}
+    {"name": "amb-b", "doc": "edc-context/modules/amb-b.md", "priority": 100, "match": {"prefixes": ["amb/"]}},
+    {"name": "scripts", "doc": "edc-context/modules/scripts.md", "priority": 10, "match": {"globs": ["scripts/*.py"]}}
   ],
   "contextless": {
     "entries": [
@@ -62,8 +63,8 @@ cat > "$MANIFEST" <<'JSON'
 }
 JSON
 
-classify_shell() {
-  "$BASH_BIN" "$SCRIPT" --ignore 'tmp/**' "$MANIFEST" "$1" 2>/dev/null
+classify_batch() {
+  printf '%s\n' "$1" | node "$CLASSIFY_CLI" --ignore 'tmp/**' "$MANIFEST" 2>/dev/null | awk -F '\t' 'NR == 1 {print $2}'
 }
 
 classify_js() {
@@ -83,6 +84,8 @@ cases=(
   "config/prod.yml|contextless:risky-config:promotion-check"
   "assets/logo.png|contextless:generated-assets:no-context-review"
   "package.json|contextless:legacy-unmapped:account-only"
+  "scripts/tool.py|context-module:scripts"
+  "scripts/nested/tool.py|uncovered"
   "orphan.ts|uncovered"
   "amb/file.ts|ambiguous"
 )
@@ -91,10 +94,10 @@ all_ok=1
 for case in "${cases[@]}"; do
   file="${case%%|*}"
   want="${case##*|}"
-  got="$(classify_shell "$file")" || got=""
+  got="$(classify_batch "$file")" || got=""
   if [ "$got" != "$want" ]; then
     all_ok=0
-    echo "  shell $file: got '$got', want '$want'"
+    echo "  batch $file: got '$got', want '$want'"
   fi
   got_js="$(classify_js "$file")" || got_js=""
   if [ "$got_js" != "$want" ]; then
@@ -103,11 +106,11 @@ for case in "${cases[@]}"; do
   fi
   if [ "$got" != "$got_js" ]; then
     all_ok=0
-    echo "  parity $file: shell '$got' vs js '$got_js'"
+    echo "  parity $file: batch '$got' vs js '$got_js'"
   fi
 done
 
-check "28.1: shell/js classifier returns exact context states" "$all_ok"
+check "28.1: batch/js classifier returns exact context states" "$all_ok"
 
 setup_doctor_repo() {
   local dir="$1"

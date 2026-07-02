@@ -1056,8 +1056,9 @@ Whenever the skill tells you to invoke or reference a script under
   you run:     "$EDC_BASH" $EDC_SCRIPTS_DIR/edc-manifest.sh
 
 The scripts to substitute include (at least):
-edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-route.sh,
-edc-clean-slate.sh, edc-assert-fresh.sh, edc-recover-context.sh.
+edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-clean-slate.sh,
+edc-assert-fresh.sh, edc-recover-context.sh. Path classification uses
+$EDC_SCRIPTS_DIR/../hooks/lib/classify-cli.mjs.
 
 Do not rewrite the skill text. Do not fail the build because
 \`plugins/edc/scripts/\` is empty — that is expected; use the absolute path

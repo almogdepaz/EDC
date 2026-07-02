@@ -164,6 +164,7 @@ path_matches_ignore() {
     return
   fi
 
+  # shellcheck disable=SC2053 # intentional glob match for .edcignore patterns
   [[ "$path" == "$pattern" ]] \
     || [[ "$path" == "$pattern/"* ]] \
     || [[ "$path" == $pattern ]]

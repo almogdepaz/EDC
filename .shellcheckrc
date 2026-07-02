@@ -1,0 +1,8 @@
+# EDC scripts source sibling files dynamically after install/runtime path resolution.
+disable=SC1091
+
+# Shared sourced libraries intentionally define variables/functions consumed by callers.
+disable=SC2034
+
+# Style-only suggestions that are noisy in bash-3.2-compatible array/sed code.
+disable=SC2001,SC2004

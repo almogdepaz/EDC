@@ -529,7 +529,8 @@ edc_spawn() {
   # capture is COPIED to a stable location after parsing; otherwise deleted.
   local capture
   capture=$(mktemp "${TMPDIR:-/tmp}/edc-spawn-$$.XXXXXX.jsonl") || capture=""
-  local t0=$(date +%s)
+  local t0
+  t0=$(date +%s)
   local rc=0
 
   case "$EDC_AGENT_CLI" in

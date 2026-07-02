@@ -61,6 +61,7 @@
     ]
   },
   "scripts": {
+    "lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/*.sh",
     "test": "bash tests/hardening/run-all.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check"

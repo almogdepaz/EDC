@@ -55,7 +55,7 @@ if [[ "$prompt" == *"TASK FILE: "* ]]; then
   module=$(basename "$task_path" .md)
   task_dir=$(dirname "$task_path")
   mkdir -p "$task_dir"
-  printf '## Summary\n\nMock review for module %s.\n' "$module" > "$task_dir/report-${module}.md"
+  printf '## Findings\n\nMock review for module %s.\n' "$module" > "$task_dir/report-${module}.md"
   exit 0
 fi
 

@@ -57,7 +57,7 @@ mkdir -p edc-context/review-tasks
 if [ "${EDC_T39_FORBIDDEN_WRITE:-0}" = "1" ]; then
   printf 'pwned\n' >> src/a.txt
 fi
-printf '## Summary\n\nmock review\n' > edc-context/review-tasks/report-core.md
+printf '## Findings\n\nmock review\n' > edc-context/review-tasks/report-core.md
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
 MOCK

@@ -66,8 +66,21 @@ else
   exit 1
 fi
 
-# ── 3c: valid report passes consolidate ───────────────────────────────────────
-printf '## Summary\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
+# ── 3c: consolidate rejects report with headings but no Findings ─────────────
+printf '## Summary\n\nstructured but no findings section\n' > edc-context/review-tasks/report-foo.md
+
+result=0
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?
+if [ "$result" -ne 0 ] && grep -q "missing required section: ## Findings" /tmp/t3-stderr.txt; then
+  echo "PASS: --consolidate rejects report without ## Findings"
+else
+  echo "FAIL: expected --consolidate to reject report without ## Findings, got exit $result"
+  cat /tmp/t3-stderr.txt
+  exit 1
+fi
+
+# ── 3d: valid report passes consolidate ───────────────────────────────────────
+printf '## Findings\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
 
 result=0
 bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?
@@ -79,7 +92,7 @@ else
   exit 1
 fi
 
-# ── 3d: manifest declares v2 schema ───────────────────────────────────────────
+# ── 3e: manifest declares v2 schema ───────────────────────────────────────────
 if jq -e '.schemaVersion == 2' edc-context/manifest.json > /dev/null; then
   echo "PASS: edc-context/manifest.json schemaVersion == 2"
 else

@@ -32,7 +32,7 @@ write_fake_pi() {
 #!/bin/sh
 set -eu
 mkdir -p edc-context/review-tasks
-printf '## Summary\n\nmock review via pi\n' > edc-context/review-tasks/report-ignore-context.md
+printf '## Findings\n\nmock review via pi\n' > edc-context/review-tasks/report-ignore-context.md
 printf '{"type":"result","is_error":false,"result":"ok"}\n'
 printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
 FAKE_PI

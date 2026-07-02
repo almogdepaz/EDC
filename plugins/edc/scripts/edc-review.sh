@@ -198,7 +198,7 @@ filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
-# assert_report_valid <module>: require report with at least one ## heading
+# assert_report_valid <module>: require the reporting contract's Findings section.
 # (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
   local module="$1"
@@ -210,6 +210,11 @@ assert_report_valid() {
   if ! grep -q '^##' "$report"; then
     echo "ERROR: $report has no '## ' headings (module: $module) - expected sections like ## What Changed, ## Findings" >&2
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
+    return 1
+  fi
+  if ! grep -q '^## Findings\b' "$report"; then
+    echo "ERROR: $report missing required section: ## Findings (module: $module)" >&2
+    echo "HINT: this usually means the edc-review skill wrote an incomplete report. check the subprocess output above." >&2
     return 1
   fi
 }

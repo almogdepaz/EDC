@@ -127,7 +127,7 @@ if printf '%s' "$prompt" | grep -q 'CURATOR_SKILL_MARKER'; then
 fi
 if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
   mkdir -p edc-context/review-tasks
-  printf '## Summary\n\nmock pi review\n' > edc-context/review-tasks/report-core.md
+  printf '## Findings\n\nmock pi review\n' > edc-context/review-tasks/report-core.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
   finish_ok
 fi

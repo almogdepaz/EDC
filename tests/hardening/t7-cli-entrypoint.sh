@@ -18,6 +18,15 @@ if [ ! -f "$SCRIPT" ]; then
 fi
 echo "PASS: $SCRIPT exists"
 
+if grep -q '^parse_agent_context_args()' "$SCRIPT" \
+  && grep -q '^finalize_agent_context()' "$SCRIPT" \
+  && [ "$(grep -c '^      --agent)' "$SCRIPT")" -le 1 ]; then
+  echo "PASS: CLI shares agent/context option parsing"
+else
+  echo "FAIL: CLI still duplicates agent/context option parsing"
+  exit 1
+fi
+
 if grep -q 'mktemp "${manifest}.tmp.XXXXXX"' "$SCRIPT"; then
   echo "PASS: edc mode temp file is created beside manifest for atomic rename"
 else

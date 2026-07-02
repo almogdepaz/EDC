@@ -115,31 +115,40 @@ enforce_agent_context_mode() {
   esac
 }
 
-build_cmd() {
-  local agent=""
-  local target="."
-  local positional_target=""
-  local -a passthrough=()
+option_in_list() {
+  local needle="$1" list="$2"
+  case " $list " in
+    *" $needle "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+parse_agent_context_args() {
+  local command_name="$1" allow_context_mode="$2" position_mode="$3" unknown_policy="$4" flag_opts="$5" value_opts="$6"
+  shift 6
+
+  PARSED_AGENT=""
+  PARSED_CONTEXT_MODE=""
+  PARSED_POSITIONAL_TARGET=""
+  PARSED_PASSTHROUGH=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --agent)
         [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --force)
-        passthrough+=("$1")
-        shift
-        ;;
-      --focus)
-        [ "$#" -ge 2 ] || die "--focus requires a module name"
-        passthrough+=("$1" "$2")
+        PARSED_AGENT="$2"
         shift 2
         ;;
       --ignore)
         [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
+        PARSED_PASSTHROUGH+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$allow_context_mode" -eq 1 ] || die "unknown $command_name option: $1"
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        PARSED_CONTEXT_MODE="$2"
+        PARSED_PASSTHROUGH+=("$1" "$2")
         shift 2
         ;;
       --help|-h)
@@ -147,25 +156,67 @@ build_cmd() {
         exit 0
         ;;
       --*)
-        die "unknown build option: $1"
+        if option_in_list "$1" "$flag_opts"; then
+          PARSED_PASSTHROUGH+=("$1")
+          shift
+        elif option_in_list "$1" "$value_opts"; then
+          [ "$#" -ge 2 ] || die "$1 requires a value"
+          PARSED_PASSTHROUGH+=("$1" "$2")
+          shift 2
+        elif [ "$unknown_policy" = "passthrough" ]; then
+          PARSED_PASSTHROUGH+=("$1")
+          shift
+        else
+          die "unknown $command_name option: $1"
+        fi
         ;;
       *)
-        if [ -n "$positional_target" ]; then
-          die "build accepts at most one path"
-        fi
-        positional_target="$1"
-        shift
+        case "$position_mode" in
+          build-target)
+            if [ -n "$PARSED_POSITIONAL_TARGET" ]; then
+              die "build accepts at most one path"
+            fi
+            PARSED_POSITIONAL_TARGET="$1"
+            shift
+            ;;
+          passthrough)
+            PARSED_PASSTHROUGH+=("$1")
+            shift
+            ;;
+          none)
+            die "unknown $command_name option: $1"
+            ;;
+          *)
+            die "internal parser error: unknown position mode '$position_mode'"
+            ;;
+        esac
         ;;
     esac
   done
+}
 
-  [ -n "$agent" ] || die "--agent is required"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
+finalize_agent_context() {
+  local use_context_mode="$1"
 
-  if [ -n "$positional_target" ]; then
-    target="$positional_target"
+  [ -n "$PARSED_AGENT" ] || die "--agent is required"
+  if [ "$use_context_mode" -eq 1 ]; then
+    validate_context_mode "$PARSED_CONTEXT_MODE"
+    if [ -z "$PARSED_CONTEXT_MODE" ]; then
+      PARSED_CONTEXT_MODE="$(read_manifest_default_mode)"
+      validate_context_mode "$PARSED_CONTEXT_MODE"
+    fi
+    enforce_agent_context_mode "$PARSED_AGENT" "$PARSED_CONTEXT_MODE"
   fi
+  require_command "$PARSED_AGENT"
+  _check_model_or_prompt "$PARSED_AGENT"
+}
+
+build_cmd() {
+  parse_agent_context_args build 0 build-target strict "--force" "--focus" "$@"
+  finalize_agent_context 0
+
+  local target="${PARSED_POSITIONAL_TARGET:-.}"
+  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   [ -d "$target" ] || die "build target directory not found: $target"
 
   local build_script
@@ -174,227 +225,57 @@ build_cmd() {
 
   (
     cd "$target"
-    EDC_AGENT_CLI="$agent" bash "$build_script" "${passthrough[@]}"
+    EDC_AGENT_CLI="$PARSED_AGENT" bash "$build_script" "${passthrough[@]}"
   )
 }
 
 review_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
+  parse_agent_context_args review 1 passthrough passthrough "" "--base" "$@"
+  finalize_agent_context 1
 
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --base)
-        [ "$#" -ge 2 ] || die "--base requires a ref (e.g. --base main)"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern (e.g. --ignore 'vendor/**')"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        passthrough+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
-
+  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local review_script
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" "${passthrough[@]}"
 }
 
 delivery_review_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
+  parse_agent_context_args delivery-review 1 passthrough passthrough "" "--base" "$@"
+  finalize_agent_context 1
 
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --base)
-        [ "$#" -ge 2 ] || die "--base requires a ref"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        passthrough+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
-
+  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local delivery_script
   delivery_script="$(find_script edc-delivery-review.sh)" \
     || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$delivery_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" "${passthrough[@]}"
 }
 
 audit_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
+  parse_agent_context_args audit 1 none strict "" "" "$@"
+  finalize_agent_context 1
 
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        die "unknown audit option: $1"
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
-
+  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$audit_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" "${passthrough[@]}"
 }
 
 update_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
+  parse_agent_context_args update 1 none strict "" "--base" "$@"
+  finalize_agent_context 1
 
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --base)
-        [ "$#" -ge 2 ] || die "--base requires a ref"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        die "unknown update option: $1"
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
-
+  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local update_script
   update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$update_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$update_script" "${passthrough[@]}"
 }
-
 doctor_cmd() {
   local doctor_script
   doctor_script="$(find_script edc-doctor.sh)" \

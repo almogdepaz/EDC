@@ -469,22 +469,46 @@ edc_run_codex_stream() {
   printf '%s' "$effective_prompt" > "$prompt_file"
 
   local rc=0
-  if [ -n "$capture" ]; then
-    if STREAM_FILTER_CAPTURE="$capture" EDC_STREAM_STDIN_FILE="$prompt_file" node "$EDC_STREAM_FILTER_CLI" --run "$timeout_secs" "$phase" -- "$@"; then
-      rc=0
-    else
-      rc=$?
-    fi
+  if STREAM_FILTER_CAPTURE="$capture" EDC_STREAM_STDIN_FILE="$prompt_file" node "$EDC_STREAM_FILTER_CLI" --run "$timeout_secs" "$phase" -- "$@"; then
+    rc=0
   else
-    if EDC_STREAM_STDIN_FILE="$prompt_file" node "$EDC_STREAM_FILTER_CLI" --run "$timeout_secs" "$phase" -- "$@"; then
-      rc=0
-    else
-      rc=$?
-    fi
+    rc=$?
   fi
 
   rm -f "$prompt_file"
   edc_stream_pipeline_rc "$rc" "$rc"
+  return $?
+}
+
+edc_run_filtered_stream() {
+  local timeout_secs="$1" phase="$2" capture="$3" model="$4" input_mode="$5" input_value="$6"
+  shift 6
+
+  local stdin_path="" cleanup_stdin=0
+  case "$input_mode" in
+    stdin-null)
+      stdin_path="/dev/null"
+      ;;
+    stdin-text)
+      stdin_path=$(mktemp "${TMPDIR:-/tmp}/edc-stdin-$$.XXXXXX.txt") || return 1
+      printf '%s' "$input_value" > "$stdin_path"
+      cleanup_stdin=1
+      ;;
+    stdin-file)
+      stdin_path="$input_value"
+      ;;
+    *)
+      echo "ERROR: edc_run_filtered_stream: unknown input mode '$input_mode'" >&2
+      return 2
+      ;;
+  esac
+
+  run_with_timeout "$timeout_secs" "$phase" "$@" < "$stdin_path" \
+    | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
+  local -a pipeline_status=("${PIPESTATUS[@]}")
+  [ "$cleanup_stdin" -eq 1 ] && rm -f "$stdin_path"
+
+  edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
   return $?
 }
 
@@ -527,8 +551,12 @@ edc_spawn() {
   # Capture stream to a tempfile so we can parse the result line for cost log.
   # When EDC_PRESERVE_TRANSCRIPTS=1 (or EDC_TRANSCRIPT_DIR is set), the
   # capture is COPIED to a stable location after parsing; otherwise deleted.
-  local capture
-  capture=$(mktemp "${TMPDIR:-/tmp}/edc-spawn-$$.XXXXXX.jsonl") || capture=""
+  local capture capture_is_temp=0
+  if capture=$(mktemp "${TMPDIR:-/tmp}/edc-spawn-$$.XXXXXX.jsonl"); then
+    capture_is_temp=1
+  else
+    capture="/dev/null"
+  fi
   local t0
   t0=$(date +%s)
   local rc=0
@@ -557,40 +585,14 @@ edc_spawn() {
         cmd+=(--system-prompt-file "$prompt_file" \
               --exclude-dynamic-system-prompt-sections \
               --allowed-tools "Read,Write,Bash,Grep,Glob")
-        if [ -n "$capture" ]; then
-          run_with_timeout "$timeout_secs" "$phase" \
-            "${cmd[@]}" "execute the task per the system prompt." \
-            < /dev/null \
-            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          local -a pipeline_status=("${PIPESTATUS[@]}")
-          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
-          rc=$?
-        else
-          run_with_timeout "$timeout_secs" "$phase" \
-            "${cmd[@]}" "execute the task per the system prompt." \
-            < /dev/null \
-            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          local -a pipeline_status=("${PIPESTATUS[@]}")
-          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
-          rc=$?
-        fi
+        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-null "" \
+          "${cmd[@]}" "execute the task per the system prompt."
+        rc=$?
       else
         cmd+=(--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob")
-        if [ -n "$capture" ]; then
-          run_with_timeout "$timeout_secs" "$phase" \
-            "${cmd[@]}" <<< "$prompt" \
-            | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          local -a pipeline_status=("${PIPESTATUS[@]}")
-          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
-          rc=$?
-        else
-          run_with_timeout "$timeout_secs" "$phase" \
-            "${cmd[@]}" <<< "$prompt" \
-            | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          local -a pipeline_status=("${PIPESTATUS[@]}")
-          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
-          rc=$?
-        fi
+        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-text "$prompt" \
+          "${cmd[@]}"
+        rc=$?
       fi
       ;;
     cursor)
@@ -604,21 +606,9 @@ edc_spawn() {
       else
         effective_prompt="$prompt"
       fi
-      if [ -n "$capture" ]; then
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        local -a pipeline_status=("${PIPESTATUS[@]}")
-        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
-        rc=$?
-      else
-        run_with_timeout "$timeout_secs" "$phase" \
-          "${cmd[@]}" <<< "$effective_prompt" \
-          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        local -a pipeline_status=("${PIPESTATUS[@]}")
-        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
-        rc=$?
-      fi
+      edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-text "$effective_prompt" \
+        "${cmd[@]}"
+      rc=$?
       ;;
     codex)
       local -a cmd=()
@@ -657,34 +647,22 @@ edc_spawn() {
         [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
         return 1
       fi
-      if [ -n "$capture" ]; then
-        run_with_timeout "$timeout_secs" "$phase" \
-          node "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        local -a pipeline_status=("${PIPESTATUS[@]}")
-        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
-        rc=$?
-      else
-        run_with_timeout "$timeout_secs" "$phase" \
-          node "$pi_supervisor" "${cmd[@]}" < /dev/null \
-          | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        local -a pipeline_status=("${PIPESTATUS[@]}")
-        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
-        rc=$?
-      fi
+      edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-null "" \
+        node "$pi_supervisor" "${cmd[@]}"
+      rc=$?
       [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
       ;;
     *)
       echo "ERROR: edc_spawn: unknown EDC_AGENT_CLI=$EDC_AGENT_CLI" >&2
-      [ -n "$capture" ] && rm -f "$capture"
+      [ "$capture_is_temp" -eq 1 ] && rm -f "$capture"
       return 2
       ;;
   esac
 
   local duration=$(( $(date +%s) - t0 ))
-  [ -n "$capture" ] && _edc_log_spawn_metrics "$phase" "$model" "$duration" "$capture"
-  _edc_preserve_transcript "$phase" "$capture"
-  [ -n "$capture" ] && rm -f "$capture"
+  [ "$capture_is_temp" -eq 1 ] && _edc_log_spawn_metrics "$phase" "$model" "$duration" "$capture"
+  [ "$capture_is_temp" -eq 1 ] && _edc_preserve_transcript "$phase" "$capture"
+  [ "$capture_is_temp" -eq 1 ] && rm -f "$capture"
   return $rc
 }
 

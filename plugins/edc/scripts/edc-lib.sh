@@ -170,19 +170,6 @@ elif command -v gtimeout > /dev/null 2>&1; then
   TIMEOUT_BIN="gtimeout"
 else
   TIMEOUT_BIN=""
-  # Print once per top-level invocation, but only when we'll actually spawn
-  # subprocesses (i.e. the default auto_mode path). Skip for phase-internal
-  # flags and usage errors. EDC_TIMEOUT_WARNED is exported so nested
-  # `bash "$0" --build ...` calls inherit it and stay silent.
-  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ]; then
-    case "${1:-}" in
-      --build|--check-context|--consolidate|--verify|"") ;;
-      *)
-        echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
-        export EDC_TIMEOUT_WARNED=1
-        ;;
-    esac
-  fi
 fi
 
 # run_with_timeout <secs> <phase-label> <cmd> [args...]
@@ -200,6 +187,11 @@ run_with_timeout() {
     fi
     return $rc
   fi
+  if [ "${EDC_TIMEOUT_WARNED:-}" != "1" ]; then
+    echo "WARNING: neither 'timeout' nor 'gtimeout' found; using background watchdog (brew install coreutils for native timeout)" >&2
+    export EDC_TIMEOUT_WARNED=1
+  fi
+
   # watchdog fallback: the watchdog subshell prints the timeout message itself
   # when it fires; we just forward the command's exit code.
   # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in

@@ -13,7 +13,9 @@ echo "=== T4: Timeouts + pipe guards ==="
 
 # ── 4a: TIMEOUT_BIN detection logic present ───────────────────────────────────
 # TIMEOUT_BIN + run_with_timeout live in edc-lib.sh now; orchestrators only call them.
-if grep -q 'TIMEOUT_BIN' "$SPAWN" && grep -q 'run_with_timeout' "$SPAWN"; then
+if grep -q 'TIMEOUT_BIN' "$SPAWN" && grep -q 'run_with_timeout' "$SPAWN" \
+  && ! grep -q 'case "${1:-}"' "$SPAWN" \
+  && grep -q 'EDC_TIMEOUT_WARNED' "$SPAWN"; then
   echo "PASS: TIMEOUT_BIN detection and run_with_timeout present"
 else
   echo "FAIL: timeout infrastructure missing from $SPAWN"

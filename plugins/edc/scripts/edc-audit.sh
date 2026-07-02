@@ -20,21 +20,10 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-# Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
-# real script location, not the invocation path.
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 

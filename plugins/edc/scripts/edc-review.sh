@@ -29,23 +29,10 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-# Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
-# edc-clean-slate.sh) are found relative to the real script location, not the
-# invocation path. Defensive - the installer copies (not symlinks) into
-# ~/.edc/scripts/, but users may symlink manually.
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"

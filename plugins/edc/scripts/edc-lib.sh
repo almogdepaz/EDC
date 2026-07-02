@@ -29,7 +29,7 @@ EDC_MANIFEST="$EDC_CONTEXT_DIR/manifest.json"
 # subprocess agents see it and can substitute it for the `plugins/edc/scripts/`
 # paths baked into the skill markdown (those paths only exist when running
 # inside the EDC dev repo).
-_edc_lib_resolve_scripts_dir() {
+edc_resolve_script_dir() {
   local src="${BASH_SOURCE[0]}"
   while [ -L "$src" ]; do
     local d
@@ -39,7 +39,7 @@ _edc_lib_resolve_scripts_dir() {
   done
   cd -P "$(dirname "$src")" && pwd
 }
-EDC_SCRIPTS_DIR="$(_edc_lib_resolve_scripts_dir)"
+EDC_SCRIPTS_DIR="$(edc_resolve_script_dir)"
 export EDC_SCRIPTS_DIR
 EDC_JSON_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/json-cli.mjs"
 EDC_STREAM_FILTER_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/stream-filter.mjs"

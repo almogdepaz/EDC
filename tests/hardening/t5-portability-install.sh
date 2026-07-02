@@ -112,6 +112,16 @@ else
   exit 1
 fi
 
+# ── 5e2: shell entrypoints share script-dir resolution ─────────────────────
+if grep -q '^edc_resolve_script_dir()' plugins/edc/scripts/edc-lib.sh \
+  && ! grep -R '^_edc_resolve_script_dir()' plugins/edc/scripts/edc*.sh >/tmp/edc-t5-script-dir.txt; then
+  echo "PASS: shell entrypoints share script-dir resolution"
+else
+  echo "FAIL: shell entrypoints still duplicate script-dir resolution"
+  cat /tmp/edc-t5-script-dir.txt 2>/dev/null || true
+  exit 1
+fi
+
 # ── 5f2: terminal runtime install derives copy/chmod from one table ────────
 if grep -q 'runtime_install_entries=(' install.sh \
   && grep -q "IFS='|' read -r src dst executable" install.sh \

@@ -52,6 +52,7 @@ const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
 const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
+const EDC_BACKGROUND_STARTING_STALE_MS = 60 * 1000;
 const EDC_BACKGROUND_UI_KEY = "edc-review";
 const EDC_BACKGROUND_UI_POLL_MS = 2000;
 
@@ -416,6 +417,12 @@ function isStatusStale(status) {
   return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_STALE_MS;
 }
 
+function isStartingPidStale(status) {
+  if (/^[1-9]\d*$/.test(String(status.pid || ""))) return false;
+  const startedAt = Date.parse(status.started_at || "");
+  return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_STARTING_STALE_MS;
+}
+
 function serializeStatus(fields) {
   return Object.entries(fields)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -482,13 +489,16 @@ function runningBackgroundJob(cwd) {
   if (status.status !== "running") return null;
 
   const alive = isPidAlive(status.pid);
+  const startingPidStale = isStartingPidStale(status);
   if (alive === true) return { runId: status.run_id || "current", status };
-  if (alive === null && !isStatusStale(status)) return { runId: status.run_id || "current", status };
+  if (alive === null && !startingPidStale && !isStatusStale(status)) return { runId: status.run_id || "current", status };
 
   const kind = status.kind || "job";
   const reason = alive === false
     ? `background ${kind} process is no longer running`
-    : `background ${kind} status is stale`;
+    : startingPidStale
+      ? `background ${kind} process did not finish starting`
+      : `background ${kind} status is stale`;
   markRunningBackgroundFailed(
     cwd,
     statusPath,

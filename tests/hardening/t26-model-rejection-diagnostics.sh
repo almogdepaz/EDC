@@ -38,7 +38,7 @@ set -euo pipefail
 cat <<'JSON'
 {"type":"result","subtype":"success","is_error":true,"result":"Model 'bad-model' is not supported"}
 JSON
-exit 1
+exit 0
 MOCK
 chmod +x "$TMP/bin/pi" "$TMP/bin/codex" "$TMP/bin/claude"
 

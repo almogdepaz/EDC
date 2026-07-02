@@ -165,6 +165,32 @@ else
   echo "$out"
 fi
 
+DOCTOR_REPO="$TMP/doctor-policy-fail"
+setup_doctor_repo "$DOCTOR_REPO"
+jq '.policy.unmatchedPathPolicy = "fail"' edc-context/manifest.json > edc-context/manifest.json.tmp
+mv edc-context/manifest.json.tmp edc-context/manifest.json
+out=$("$BASH_BIN" "$DOCTOR" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  check "28.2b: doctor accepts policy.unmatchedPathPolicy=fail" 1
+else
+  check "28.2b: doctor accepts policy.unmatchedPathPolicy=fail" 0
+  echo "$out"
+fi
+
+DOCTOR_REPO="$TMP/doctor-policy-allow"
+setup_doctor_repo "$DOCTOR_REPO"
+jq '.policy.unmatchedPathPolicy = "allow"' edc-context/manifest.json > edc-context/manifest.json.tmp
+mv edc-context/manifest.json.tmp edc-context/manifest.json
+out=$("$BASH_BIN" "$DOCTOR" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  check "28.2c: doctor accepts policy.unmatchedPathPolicy=allow" 1
+else
+  check "28.2c: doctor accepts policy.unmatchedPathPolicy=allow" 0
+  echo "$out"
+fi
+
 DOCTOR_REPO="$TMP/doctor-uncovered"
 setup_doctor_repo "$DOCTOR_REPO"
 printf 'orphan\n' > orphan.ts

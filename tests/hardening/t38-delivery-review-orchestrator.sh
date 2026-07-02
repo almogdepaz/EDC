@@ -23,6 +23,7 @@ SCENARIO_FILE="$TMPDIR_T38/scenario"
 scenario="valid"
 [ -f "\$SCENARIO_FILE" ] && scenario=\$(cat "\$SCENARIO_FILE")
 
+printf '%s\n' "\$@" > "$TMPDIR_T38/last-args"
 if [[ "\$prompt" == *"DELIVERY REVIEW TASK"* ]]; then
   printf '%s\n' "\$prompt" > "$TMPDIR_T38/last-prompt"
   report_path=\$(printf '%s\n' "\$prompt" | grep '^DELIVERY_REPORT_PATH: ' | head -1 | sed 's/^DELIVERY_REPORT_PATH: //')
@@ -78,6 +79,8 @@ export EDC_AGENT_CLI=claude
 
 setup_repo
 echo valid > "$TMPDIR_T38/scenario"
+export EDC_REVIEW_MODEL=review-test-model
+unset EDC_BUILD_MODEL
 result=0
 out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
@@ -93,6 +96,14 @@ else
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
+if grep -qx -- '--model' "$TMPDIR_T38/last-args" && grep -qx 'review-test-model' "$TMPDIR_T38/last-args"; then
+  echo "PASS: delivery-review uses EDC_REVIEW_MODEL"
+else
+  echo "FAIL: delivery-review did not pass EDC_REVIEW_MODEL"
+  echo "--- args ---"; cat "$TMPDIR_T38/last-args"; echo "--- end ---"
+  exit 1
+fi
+unset EDC_REVIEW_MODEL
 
 setup_repo
 echo missing-report > "$TMPDIR_T38/scenario"

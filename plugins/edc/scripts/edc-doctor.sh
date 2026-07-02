@@ -42,8 +42,8 @@ if [ -f "$MANIFEST" ]; then
       || fail "$MANIFEST schemaVersion must equal 2"
     jq -e '.policy.defaultMode | IN("advisory","inject")' "$MANIFEST" >/dev/null 2>&1 \
       || fail "policy.defaultMode must be advisory or inject"
-    jq -e '.policy.unmatchedPathPolicy == "warn-allow"' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "policy.unmatchedPathPolicy must equal warn-allow"
+    jq -e '.policy.unmatchedPathPolicy | IN("warn-allow","allow","fail")' "$MANIFEST" >/dev/null 2>&1 \
+      || fail "policy.unmatchedPathPolicy must be warn-allow, allow, or fail"
     while IFS= read -r doc; do
       [ -n "$doc" ] || continue
       [ -f "$doc" ] || fail "missing module doc: $doc"

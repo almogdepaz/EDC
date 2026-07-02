@@ -592,8 +592,8 @@ edc_load_config() {
 resolve_model_for_phase() {
   local __phase="$1" __outvar="$2" __resolved=""
   case "$__phase" in
-    edc-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
-    *)           __resolved="${EDC_BUILD_MODEL:-}" ;;
+    edc-review*|edc-delivery-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
+    *)                                __resolved="${EDC_BUILD_MODEL:-}" ;;
   esac
   if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
     __resolved="${EDC_PI_MODEL:-}"
@@ -695,6 +695,14 @@ edc_kill_process_tree() {
     edc_kill_process_tree "$child"
   done
   kill "$pid" 2>/dev/null || true
+}
+
+edc_stream_pipeline_rc() {
+  local runner_rc="$1" filter_rc="$2"
+  if [ "$filter_rc" -eq 86 ] || [ "$filter_rc" -eq 87 ]; then
+    return 1
+  fi
+  return "$runner_rc"
 }
 
 edc_run_codex_stream() {
@@ -819,13 +827,17 @@ edc_spawn() {
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
             | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          rc=${PIPESTATUS[0]}
+          local -a pipeline_status=("${PIPESTATUS[@]}")
+          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
+          rc=$?
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" "execute the task per the system prompt." \
             < /dev/null \
             | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          rc=${PIPESTATUS[0]}
+          local -a pipeline_status=("${PIPESTATUS[@]}")
+          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
+          rc=$?
         fi
       else
         cmd+=(--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob")
@@ -833,12 +845,16 @@ edc_spawn() {
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
             | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          rc=${PIPESTATUS[0]}
+          local -a pipeline_status=("${PIPESTATUS[@]}")
+          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
+          rc=$?
         else
           run_with_timeout "$timeout_secs" "$phase" \
             "${cmd[@]}" <<< "$prompt" \
             | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-          rc=${PIPESTATUS[0]}
+          local -a pipeline_status=("${PIPESTATUS[@]}")
+          edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
+          rc=$?
         fi
       fi
       ;;
@@ -857,12 +873,16 @@ edc_spawn() {
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
           | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        rc=${PIPESTATUS[0]}
+        local -a pipeline_status=("${PIPESTATUS[@]}")
+        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
+        rc=$?
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "${cmd[@]}" <<< "$effective_prompt" \
           | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        rc=${PIPESTATUS[0]}
+        local -a pipeline_status=("${PIPESTATUS[@]}")
+        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
+        rc=$?
       fi
       ;;
     codex)
@@ -904,12 +924,16 @@ edc_spawn() {
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        rc=${PIPESTATUS[0]}
+        local -a pipeline_status=("${PIPESTATUS[@]}")
+        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
+        rc=$?
       else
         run_with_timeout "$timeout_secs" "$phase" \
           "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
-        rc=${PIPESTATUS[0]}
+        local -a pipeline_status=("${PIPESTATUS[@]}")
+        edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
+        rc=$?
       fi
       rm -f "$pi_supervisor"
       [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"

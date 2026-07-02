@@ -86,6 +86,25 @@ exit 1
   assert.match(status.content, /status: failed/);
   assert.match(status.content, /reason: HEAD changed during background review/);
   assert.match(status.content, /hint: rerun the review after the working branch stops changing/);
+
+  const oldStartedAt = new Date(Date.now() - 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  writeFileSync(statusPath, [
+    "kind=review",
+    "status=running",
+    `started_at=${oldStartedAt}`,
+    "run_id=stuck-starting",
+    "pid=starting",
+    "args=HEAD --base master",
+    "log=.git/edc/review.log",
+    "",
+  ].join("\n"));
+  selections.push("Review current branch vs default branch");
+  const messagesBeforeRestart = messages.length;
+  await handler("", ctx);
+  const restartMessage = messages.slice(messagesBeforeRestart).find((message) => message.customType === "edc-background");
+  assert.ok(restartMessage, "restart message should be emitted");
+  assert.match(restartMessage.content, /Background EDC review started\./);
+  assert.doesNotMatch(restartMessage.content, /already running/);
 } finally {
   if (childPid) {
     try { process.kill(childPid, "SIGTERM"); } catch {}

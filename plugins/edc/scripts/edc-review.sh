@@ -533,9 +533,25 @@ build_mode() {
   # Step 2: get changed files
   local files
   if [[ "$target" == https://* ]]; then
-    files=$(gh pr diff "$target" --name-only 2>/dev/null)
+    local gh_err
+    gh_err=$(mktemp "${TMPDIR:-/tmp}/edc-gh-pr-diff-$$.XXXXXX") || exit 1
+    if ! files=$(gh pr diff "$target" --name-only 2>"$gh_err"); then
+      echo "ERROR: gh pr diff failed for target: $target" >&2
+      sed 's/^/gh: /' "$gh_err" >&2
+      rm -f "$gh_err"
+      exit 2
+    fi
+    rm -f "$gh_err"
   elif [[ "$target" == pr:* ]]; then
-    files=$(gh pr diff "${target#pr:}" --name-only 2>/dev/null)
+    local gh_err
+    gh_err=$(mktemp "${TMPDIR:-/tmp}/edc-gh-pr-diff-$$.XXXXXX") || exit 1
+    if ! files=$(gh pr diff "${target#pr:}" --name-only 2>"$gh_err"); then
+      echo "ERROR: gh pr diff failed for target: $target" >&2
+      sed 's/^/gh: /' "$gh_err" >&2
+      rm -f "$gh_err"
+      exit 2
+    fi
+    rm -f "$gh_err"
   elif [ -f "$target" ]; then
     files=$(grep '^+++ b/' "$target" | sed 's|^+++ b/||' || true)
     if [ -z "$files" ]; then
@@ -544,7 +560,7 @@ build_mode() {
     fi
   else
     local base="${baseline:-${target}^}"
-    files=$(git diff "${base}..${target}" --name-only)
+    files=$(git diff -z "${base}...${target}" --name-only | tr '\0' '\n')
   fi
 
   if [ -z "$files" ]; then
@@ -569,12 +585,8 @@ build_mode() {
     rm -rf "$EDC_REVIEW_TASKS_DIR"
     mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
-    local file_json file_list context_mode direct_module instruction_1 extra_instruction
-    file_json=$(echo "$files" \
-      | grep -v '^$' \
-      | sed 's/^/"/;s/$/"/' \
-      | tr '\n' ',' \
-      | sed 's/,$//')
+    local files_json file_list context_mode direct_module instruction_1 extra_instruction
+    files_json=$(printf '%s\n' "$files" | grep -v '^$' | jq -R . | jq -s -c .)
     file_list=$(echo "$files" | grep -v '^$' | sed 's/^/- /')
 
     if [ "$ignore_context" -eq 1 ]; then
@@ -589,17 +601,15 @@ build_mode() {
       extra_instruction=""
     fi
 
-    cat > "$EDC_REVIEW_TASKS_MANIFEST" <<TASK_MANIFEST
-{
-  "target": "$target",
-  "baseline": "$baseline",
-  "head": "$head",
-  "contextMode": "$context_mode",
-  "modules": [
-    { "name": "$direct_module", "doc": "", "files": [$file_json] }
-  ]
-}
-TASK_MANIFEST
+    jq -n \
+      --arg target "$target" \
+      --arg baseline "$baseline" \
+      --arg head "$head" \
+      --arg contextMode "$context_mode" \
+      --arg module "$direct_module" \
+      --argjson files "$files_json" \
+      '{target: $target, baseline: $baseline, head: $head, contextMode: $contextMode, modules: [{name: $module, doc: "", files: $files}]}' \
+      > "$EDC_REVIEW_TASKS_MANIFEST"
 
     cat > "$EDC_REVIEW_TASKS_DIR/${direct_module}.md" <<TASK
 # Review Task: \`${direct_module}\`
@@ -772,46 +782,53 @@ TASK
   sorted_modules=$(printf '%s\n' "${!MODULE_FILES[@]}" | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
-  {
-    echo "{"
-    echo "  \"target\": \"$target\","
-    echo "  \"baseline\": \"$baseline\","
-    echo "  \"head\": \"$head\","
-    if [ "$no_context_refresh" -eq 1 ]; then
-      echo "  \"contextMode\": \"no-refresh\","
-    else
-      echo "  \"contextMode\": \"context\","
+  local context_mode modules_json
+  if [ "$no_context_refresh" -eq 1 ]; then
+    context_mode="no-refresh"
+  else
+    context_mode="context"
+  fi
+  modules_json="[]"
+  while IFS= read -r module; do
+    local module_doc="${EDC_MODULES_DIR}/${module}.md"
+    local module_type="${MODULE_TYPE[$module]:-module}"
+    if [ "$module_type" != "module" ]; then
+      module_doc=""
     fi
-    echo "  \"modules\": ["
-    local first=1
-    while IFS= read -r module; do
-      [ "$first" -eq 0 ] && echo "    ,"
-      local module_doc="${EDC_MODULES_DIR}/${module}.md"
-      local module_type="${MODULE_TYPE[$module]:-module}"
-      if [ "$module_type" != "module" ]; then
-        module_doc=""
-      fi
-      echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
-      local file_json
-      file_json=$(echo "${MODULE_FILES[$module]}" \
-        | grep -v '^$' \
-        | sed 's/^/"/;s/$/"/' \
-        | tr '\n' ',' \
-        | sed 's/,$//')
-      echo -n "$file_json"
-      if [ "$module_type" = "contextless" ]; then
-        echo -n "], \"type\": \"contextless\", \"contextlessId\": \"${MODULE_CONTEXTLESS_ID[$module]}\", \"reviewPolicy\": \"${MODULE_POLICY[$module]}\" }"
-      elif [ "$module_type" = "unmapped" ]; then
-        echo -n "], \"type\": \"uncovered\" }"
-      else
-        echo -n "] }"
-      fi
-      first=0
-    done <<< "$sorted_modules"
-    echo ""
-    echo "  ]"
-    echo "}"
-  } > "$EDC_REVIEW_TASKS_MANIFEST"
+    local files_json module_json
+    files_json=$(printf '%s' "${MODULE_FILES[$module]}" | grep -v '^$' | jq -R . | jq -s -c .)
+    if [ "$module_type" = "contextless" ]; then
+      module_json=$(jq -n \
+        --arg name "$module" \
+        --arg doc "$module_doc" \
+        --argjson files "$files_json" \
+        --arg contextlessId "${MODULE_CONTEXTLESS_ID[$module]}" \
+        --arg reviewPolicy "${MODULE_POLICY[$module]}" \
+        '{name: $name, doc: $doc, files: $files, type: "contextless", contextlessId: $contextlessId, reviewPolicy: $reviewPolicy}')
+    elif [ "$module_type" = "unmapped" ]; then
+      module_json=$(jq -n \
+        --arg name "$module" \
+        --arg doc "$module_doc" \
+        --argjson files "$files_json" \
+        '{name: $name, doc: $doc, files: $files, type: "uncovered"}')
+    else
+      module_json=$(jq -n \
+        --arg name "$module" \
+        --arg doc "$module_doc" \
+        --argjson files "$files_json" \
+        '{name: $name, doc: $doc, files: $files}')
+    fi
+    modules_json=$(jq -c --argjson item "$module_json" '. + [$item]' <<< "$modules_json")
+  done <<< "$sorted_modules"
+
+  jq -n \
+    --arg target "$target" \
+    --arg baseline "$baseline" \
+    --arg head "$head" \
+    --arg contextMode "$context_mode" \
+    --argjson modules "$modules_json" \
+    '{target: $target, baseline: $baseline, head: $head, contextMode: $contextMode, modules: $modules}' \
+    > "$EDC_REVIEW_TASKS_MANIFEST"
 
   # per-module task files
   while IFS= read -r module; do

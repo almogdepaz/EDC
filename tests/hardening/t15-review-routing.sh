@@ -587,5 +587,78 @@ EOF
   rm -rf "$TMPDIR_T15M"
 )
 
+# ── 15.15: branch reviews use merge-base diff, not snapshot diff ───────────
+TMPDIR_T15N=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15N"
+  git checkout -q -b feature
+  echo "branch" > branch-only.ts
+  git add branch-only.ts
+  git commit -q -m "branch change"
+  git checkout -q master
+  echo "main" > main-only.ts
+  git add main-only.ts
+  git commit -q -m "main change"
+
+  out=$("$BASH_BIN" "$SCRIPT" --build feature --base master --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && grep -q 'branch-only.ts' edc-context/review-tasks/ignore-context.md \
+     && ! grep -q 'main-only.ts' edc-context/review-tasks/ignore-context.md; then
+    check "15.15: branch review excludes base-side changes after branch point" 1
+  else
+    check "15.15: branch review excludes base-side changes after branch point" 0
+    echo "$out"
+    cat edc-context/review-tasks/ignore-context.md 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15N"
+)
+
+# ── 15.16: changed paths are JSON escaped in review-task manifests ─────────
+TMPDIR_T15O=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15O"
+  printf 'weird\n' > 'weird"name.txt'
+  git add 'weird"name.txt'
+  git commit -q -m "add weird path"
+
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && jq -e . edc-context/review-tasks/manifest.json >/dev/null \
+     && jq -e '.modules[0].files[] == "weird\"name.txt"' edc-context/review-tasks/manifest.json >/dev/null; then
+    check "15.16: review-task manifest escapes quote-containing paths" 1
+  else
+    check "15.16: review-task manifest escapes quote-containing paths" 0
+    echo "$out"
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15O"
+)
+
+# ── 15.17: gh PR diff failures surface stderr ──────────────────────────────
+TMPDIR_T15P=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15P"
+  mkdir -p fake-bin
+  cat > fake-bin/gh <<'EOF'
+#!/usr/bin/env bash
+echo "gh auth failed: login required" >&2
+exit 2
+EOF
+  chmod +x fake-bin/gh
+  set +e
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] && echo "$out" | grep -q "gh pr diff failed" && echo "$out" | grep -q "gh auth failed"; then
+    check "15.17: gh PR diff failure reports gh stderr" 1
+  else
+    check "15.17: gh PR diff failure reports gh stderr" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15P"
+)
+
 cd "$ORIG_DIR"
 check_summary "T15"

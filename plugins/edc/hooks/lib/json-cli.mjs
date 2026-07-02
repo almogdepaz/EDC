@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
-import { basename } from "node:path";
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { basename, dirname } from "node:path";
 
 function die(message, code = 1) {
   console.error(message);
@@ -244,6 +244,24 @@ function command() {
       const [target, baseline, head, contextMode, metaPath, filesDir] = args;
       const modules = lines(readFileSync(metaPath, "utf8")).map((line) => reviewManifestModuleFromMeta(line, filesDir));
       writeJson({ target, baseline, head, contextMode, modules });
+      return;
+    }
+    case "result-write": {
+      const [path, kind, exitCode, reasonCode, failureReason, failureHint, failedModule, finalReview, startedHead, finishedHead] = args;
+      const result = {
+        kind,
+        exitCode: Number(exitCode),
+        reasonCode,
+        finishedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      };
+      if (failureReason) result.failureReason = failureReason;
+      if (failureHint) result.failureHint = failureHint;
+      if (failedModule) result.failedModule = failedModule;
+      if (finalReview) result.finalReview = finalReview;
+      if (startedHead) result.startedHead = startedHead;
+      if (finishedHead) result.finishedHead = finishedHead;
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`);
       return;
     }
     case "spawn-metrics": {

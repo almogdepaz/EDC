@@ -80,6 +80,17 @@ else
   exit 1
 fi
 
+node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review');
+assert.equal(result.exitCode, 1);
+assert.equal(result.reasonCode, 'review-write-containment');
+assert.equal(result.failedModule, 'core');
+NODE
+echo "PASS: review containment writes structured failure result"
+
 git checkout -- src/a.txt
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
@@ -94,6 +105,17 @@ else
   echo "--- stderr ---"; cat "$LOG_DIR/good.err"
   exit 1
 fi
+
+node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success');
+assert.equal(result.finalReview, 'review-HEAD.md');
+NODE
+echo "PASS: review success writes structured result"
 
 if [ -f "$LOG_DIR/shasum-paths.log" ] && grep -qx 'src/clean.txt' "$LOG_DIR/shasum-paths.log"; then
   echo "FAIL: review containment hashed clean tracked files"

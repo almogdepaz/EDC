@@ -87,6 +87,27 @@ exit 1
   assert.match(status.content, /reason: HEAD changed during background review/);
   assert.match(status.content, /hint: rerun the review after the working branch stops changing/);
 
+  writeFileSync(reviewScript, `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .git/edc
+cat > .git/edc/result.json <<'JSON'
+{"kind":"review","exitCode":1,"reasonCode":"report-validation","failedModule":"core","failureReason":"structured validation for module core","failureHint":"structured hint from result file"}
+JSON
+echo 'generic log failure' >&2
+exit 1
+`);
+  chmodSync(reviewScript, 0o755);
+  selections.push("Review current branch vs default branch", "Job status");
+  const messagesBeforeStructuredStart = messages.length;
+  await handler("", ctx);
+  const structuredStart = messages.slice(messagesBeforeStructuredStart).find((message) => message.customType === "edc-background");
+  assert.ok(structuredStart, "structured failure scenario should start a background review");
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")) && /structured validation/.test(readFileSync(statusPath, "utf-8")), 3000));
+  await handler("", ctx);
+  const structuredStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
+  assert.match(structuredStatus.content, /reason: structured validation for module core/);
+  assert.match(structuredStatus.content, /hint: structured hint from result file/);
+
   const oldStartedAt = new Date(Date.now() - 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
   writeFileSync(statusPath, [
     "kind=review",

@@ -485,10 +485,21 @@ function writeRunningBackgroundStatus(statusPath, logPath, fields) {
 }
 
 function failureClassificationShell(kind) {
+  const structuredPrefix = `
+  structured_reason=""
+  structured_hint=""
+  if [ -f "$result_file" ]; then
+    structured_reason="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.failureReason || j.reasonCode || "");' "$result_file" 2>/dev/null || true)"
+    structured_hint="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.failureHint || "");' "$result_file" 2>/dev/null || true)"
+  fi
+  if [ -n "$structured_reason" ]; then
+    failure_reason="$structured_reason"
+    failure_hint="$structured_hint"`;
+
   if (kind !== "review") {
     return `
-if [ "$rc" -ne 0 ]; then
-  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+if [ "$rc" -ne 0 ]; then${structuredPrefix}
+  elif [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background ${kind}"
     failure_hint="rerun edc ${kind} after the working branch stops changing"
   elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
@@ -502,8 +513,8 @@ fi`;
   }
 
   return `
-if [ "$rc" -ne 0 ]; then
-  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+if [ "$rc" -ne 0 ]; then${structuredPrefix}
+  elif [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background review"
     failure_hint="rerun the review after the working branch stops changing"
   elif grep -q 'report validation failed for module' "$log_file" 2>/dev/null; then
@@ -568,6 +579,7 @@ status_file=${shellQuote(statusPath.path)}
 log_file=${shellQuote(logPath.path)}
 log_display=${shellQuote(logPath.display)}
 status_dir=${shellQuote(dirname(statusPath.path))}
+result_file="$status_dir/result.json"
 mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -583,7 +595,8 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
   [ -n "$started_head" ] && echo "started_head=$started_head"
 } > "$status_file"
 
-bash ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
+rm -f "$result_file"
+EDC_RESULT_FILE="$result_file" bash ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 finished_head="$(git rev-parse HEAD 2>/dev/null || true)"

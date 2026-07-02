@@ -67,6 +67,39 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
+EDC_REVIEW_RESULT_ACTIVE=0
+EDC_REVIEW_RESULT_WRITTEN=0
+EDC_REVIEW_RESULT_STARTED_HEAD=""
+
+edc_review_result_path() {
+  if [ -n "${EDC_RESULT_FILE:-}" ]; then
+    echo "$EDC_RESULT_FILE"
+  else
+    echo "$EDC_BUILD_DIR/last-run.json"
+  fi
+}
+
+edc_write_review_result() {
+  [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ] || return 0
+  local exit_code="$1" reason_code="$2" failure_reason="${3:-}" failure_hint="${4:-}" failed_module="${5:-}" final_review="${6:-}"
+  local result_file finished_head
+  result_file=$(edc_review_result_path)
+  finished_head=$(git rev-parse HEAD 2>/dev/null || true)
+  if ! node "$EDC_JSON_CLI" result-write "$result_file" review "$exit_code" "$reason_code" "$failure_reason" "$failure_hint" "$failed_module" "$final_review" "$EDC_REVIEW_RESULT_STARTED_HEAD" "$finished_head"; then
+    echo "WARNING: failed to write EDC result file: $result_file" >&2
+  fi
+  EDC_REVIEW_RESULT_WRITTEN=1
+}
+
+edc_review_result_on_exit() {
+  local rc=$?
+  if [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_REVIEW_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then
+    edc_write_review_result "$rc" "review-pipeline-failed" "review pipeline failed" "inspect the log for the subprocess error and rerun after fixing it" "" ""
+  fi
+  return "$rc"
+}
+trap edc_review_result_on_exit EXIT
+
 # read_manifest_source_commit + assert_context_fresh come from edc-assert-fresh.sh.
 # recover_context_if_needed (freshness gate + spawn build/update + force-retry)
 # comes from edc-recover-context.sh. Both sourced (not exec'd) so functions
@@ -334,6 +367,9 @@ verify_mode() {
 
 auto_mode() {
   edc_require_agent_cli
+  EDC_REVIEW_RESULT_ACTIVE=1
+  EDC_REVIEW_RESULT_WRITTEN=0
+  EDC_REVIEW_RESULT_STARTED_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
 
   local target="$1"; shift
   local extra_args=("$@")
@@ -388,6 +424,7 @@ auto_mode() {
   if ! echo "$out" | grep -q "^Review tasks ready"; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
     echo "$out" >&2
+    edc_write_review_result 1 "review-task-build-failed" "review task generation failed" "inspect the log for task-generation output and rerun after fixing it" "" ""
     exit 1
   fi
 
@@ -403,6 +440,7 @@ auto_mode() {
     done <<< "$(manifest_modules)"
     if [ "$prewritten_missing" -ne 0 ]; then
       echo "ERROR: no TASK lines in script output and no complete prewritten reports" >&2
+      edc_write_review_result 1 "report-validation" "review report validation failed" "inspect the reviewer output in the log; a prewritten report is incomplete" "" ""
       exit 1
     fi
   fi
@@ -422,22 +460,23 @@ auto_mode() {
     edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report"
     review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
     edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt" \
-      || { rm -f "$before_snapshot" "$after_snapshot"; echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+      || { rm -f "$before_snapshot" "$after_snapshot"; echo "ERROR: review invocation failed for module $module" >&2; edc_write_review_result 1 "review-invocation-failed" "review invocation failed for module $module" "inspect the module reviewer output in the log and rerun after fixing it" "$module" ""; exit 1; }
     edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report"
     changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
     rm -f "$before_snapshot" "$after_snapshot"
     if [ -n "$changed_forbidden" ]; then
       echo "ERROR: review subagent touched forbidden paths for module $module:" >&2
       echo "$changed_forbidden" | sed 's/^/  /' >&2
+      edc_write_review_result 1 "review-write-containment" "review subagent touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module" ""
       exit 1
     fi
     assert_report_valid "$module" \
-      || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
+      || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
   done <<< "$tasks"
 
   # Consolidate + verify
-  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
-  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; edc_write_review_result 1 "consolidation-failed" "review consolidation failed" "inspect the log for report validation errors and rerun after fixing them" "" ""; exit 1; }
+  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; edc_write_review_result 1 "verification-failed" "review verification failed" "inspect the log for missing or stale review artifacts" "" ""; exit 1; }
 
   # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
   # review-<target>.md at the repo root is the durable artifact. On success,
@@ -447,6 +486,8 @@ auto_mode() {
   if [ "${EDC_KEEP_REVIEW_TASKS:-0}" != "1" ]; then
     rm -rf "$EDC_REVIEW_TASKS_DIR"
   fi
+
+  edc_write_review_result 0 "success" "" "" "" "$(final_review_filename "$target")"
 
   # Explicit exit so any late-arriving subprocess output can't poison our
   # exit code after the pipeline succeeded.

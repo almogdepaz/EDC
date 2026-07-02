@@ -10,7 +10,10 @@ BASH_BIN="${BASH_BIN:-bash}"
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"; check_cleanup' EXIT
+LOG_DIR="$(mktemp -d)"
+PI_CALLS_LOG="$LOG_DIR/pi-calls.log"
+export PI_CALLS_LOG
+trap 'rm -rf "$TMP" "$LOG_DIR"; check_cleanup' EXIT
 
 setup_repo() {
   cd "$TMP"
@@ -71,7 +74,7 @@ MOCK_PY
   cat > "$TMP/bin/pi" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> pi-calls.log
+printf '%s\n' "$*" >> "${PI_CALLS_LOG:-pi-calls.log}"
 prompt=""
 for arg in "$@"; do
   case "$arg" in
@@ -157,111 +160,111 @@ MOCK
 
 setup_repo
 write_mock_pi
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 >out.log 2>err.log
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/out.log" 2>"$LOG_DIR/err.log"
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md; then
   check "18.1: EDC_AGENT_CLI=pi completes stale-context review via pi CLI" 1
 else
   check "18.1: EDC_AGENT_CLI=pi completes stale-context review via pi CLI" 0
-  cat out.log err.log
+  cat "$LOG_DIR/out.log" "$LOG_DIR/err.log"
 fi
 
-if [ -f pi-calls.log ] && grep -q -- '--mode json' pi-calls.log && grep -q -- '--no-context-files' pi-calls.log; then
+if [ -f "$PI_CALLS_LOG" ] && grep -q -- '--mode json' "$PI_CALLS_LOG" && grep -q -- '--no-context-files' "$PI_CALLS_LOG"; then
   check "18.2: pi backend uses json clean-slate CLI mode" 1
 else
   check "18.2: pi backend uses json clean-slate CLI mode" 0
-  cat pi-calls.log 2>/dev/null || true
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >update.out 2>update.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
 rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'Update OK' update.out; then
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/update.out"; then
   check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 1
 else
   check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 0
-  cat update.out update.err
+  cat "$LOG_DIR/update.out" "$LOG_DIR/update.err"
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-audit.sh" >audit.out 2>audit.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-audit.sh" >"$LOG_DIR/audit.out" 2>"$LOG_DIR/audit.err"
 rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'Audit reports:' audit.out; then
+if [ "$rc" -eq 0 ] && grep -q 'Audit reports:' "$LOG_DIR/audit.out"; then
   check "18.4: EDC_AGENT_CLI=pi runs audit orchestrator" 1
 else
   check "18.4: EDC_AGENT_CLI=pi runs audit orchestrator" 0
-  cat audit.out audit.err
+  cat "$LOG_DIR/audit.out" "$LOG_DIR/audit.err"
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-build.sh" --force >build.out 2>build.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-build.sh" --force >"$LOG_DIR/build.out" 2>"$LOG_DIR/build.err"
 rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'Build OK' build.out; then
+if [ "$rc" -eq 0 ] && grep -q 'Build OK' "$LOG_DIR/build.out"; then
   check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 1
 else
   check "18.5: EDC_AGENT_CLI=pi runs build orchestrator" 0
-  cat build.out build.err
+  cat "$LOG_DIR/build.out" "$LOG_DIR/build.err"
 fi
 
-model_count=$(grep -c -- '--model t18-model' pi-calls.log 2>/dev/null || true)
+model_count=$(grep -c -- '--model t18-model' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$model_count" -ge 3 ]; then
   check "18.6: pi backend forwards phase model vars" 1
 else
   check "18.6: pi backend forwards phase model vars" 0
-  cat pi-calls.log 2>/dev/null || true
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-fallback_before=$(grep -c -- '--model t18-fallback-model' pi-calls.log 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >fallback-update.out 2>fallback-update.err
+fallback_before=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/fallback-update.out" 2>"$LOG_DIR/fallback-update.err"
 rc=$?
-fallback_after=$(grep -c -- '--model t18-fallback-model' pi-calls.log 2>/dev/null || true)
-if [ "$rc" -eq 0 ] && grep -q 'Update OK' fallback-update.out && [ "$fallback_after" -gt "$fallback_before" ]; then
+fallback_after=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/fallback-update.out" && [ "$fallback_after" -gt "$fallback_before" ]; then
   check "18.7: pi backend forwards EDC_PI_MODEL fallback" 1
 else
   check "18.7: pi backend forwards EDC_PI_MODEL fallback" 0
-  cat fallback-update.out fallback-update.err
-  cat pi-calls.log 2>/dev/null || true
+  cat "$LOG_DIR/fallback-update.out" "$LOG_DIR/fallback-update.err"
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-alias_before=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >alias-update.out 2>alias-update.err
+alias_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/alias-update.out" 2>"$LOG_DIR/alias-update.err"
 rc=$?
-alias_after=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
-if [ "$rc" -eq 0 ] && grep -q 'Update OK' alias-update.out && [ "$alias_after" -gt "$alias_before" ]; then
+alias_after=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/alias-update.out" && [ "$alias_after" -gt "$alias_before" ]; then
   check "18.8: pi backend forwards EDC_PI_MODEL exactly" 1
 else
   check "18.8: pi backend forwards EDC_PI_MODEL exactly" 0
-  cat alias-update.out alias-update.err
-  cat pi-calls.log 2>/dev/null || true
+  cat "$LOG_DIR/alias-update.out" "$LOG_DIR/alias-update.err"
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
 rm -f review-HEAD.md
-raw_before=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 >raw-model-review.out 2>raw-model-review.err
+raw_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
+PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 >"$LOG_DIR/raw-model-review.out" 2>"$LOG_DIR/raw-model-review.err"
 rc=$?
-raw_after=$(grep -c -- '--model gpt-5.5' pi-calls.log 2>/dev/null || true)
+raw_after=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md && [ "$raw_after" -gt "$raw_before" ]; then
   check "18.9: raw edc-review.sh accepts --agent/--model and forwards model exactly" 1
 else
   check "18.9: raw edc-review.sh accepts --agent/--model and forwards model exactly" 0
-  cat raw-model-review.out raw-model-review.err
-  cat pi-calls.log 2>/dev/null || true
+  cat "$LOG_DIR/raw-model-review.out" "$LOG_DIR/raw-model-review.err"
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >hang-update.out 2>hang-update.err
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/hang-update.out" 2>"$LOG_DIR/hang-update.err"
 rc=$?
-if [ "$rc" -eq 0 ] && grep -q 'Update OK' hang-update.out; then
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/hang-update.out"; then
   check "18.10: pi backend stops reading after agent_end" 1
 else
   check "18.10: pi backend stops reading after agent_end" 0
-  cat hang-update.out hang-update.err
+  cat "$LOG_DIR/hang-update.out" "$LOG_DIR/hang-update.err"
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >agent-end-error.out 2>agent-end-error.err
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-error.out" 2>"$LOG_DIR/agent-end-error.err"
 rc=$?
-if [ "$rc" -ne 0 ] && grep -q 'provider down' agent-end-error.err; then
+if [ "$rc" -ne 0 ] && grep -q 'provider down' "$LOG_DIR/agent-end-error.err"; then
   check "18.11: pi backend fails on agent_end assistant error" 1
 else
   check "18.11: pi backend fails on agent_end assistant error" 0
-  cat agent-end-error.out agent-end-error.err
+  cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
 fi
 
 echo

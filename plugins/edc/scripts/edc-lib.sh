@@ -1015,6 +1015,37 @@ edc_diff_curator_forbidden_paths() {
   return 1
 }
 
+edc_review_write_allowed_path() {
+  local path="$1" allowed_report="$2"
+  case "$path" in
+    "$allowed_report") return 0 ;;
+    "$EDC_BUILD_DIR/spawn-log.jsonl") return 0 ;;
+    "$EDC_BUILD_DIR"/transcripts/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+edc_snapshot_review_forbidden_paths() {
+  local output="$1" allowed_report="$2"
+  : > "$output"
+  {
+    git ls-files
+    git ls-files --others --exclude-standard 2>/dev/null || true
+  } | sort -u | while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    edc_review_write_allowed_path "$path" "$allowed_report" && continue
+    if [ -f "$path" ]; then
+      shasum -a 256 "$path"
+    else
+      printf 'MISSING  %s\n' "$path"
+    fi
+  done | sort > "$output"
+}
+
+edc_diff_review_forbidden_paths() {
+  edc_diff_curator_forbidden_paths "$@"
+}
+
 edc_run_context_curator_edit() {
   local before after changed prompt
   before=$(mktemp)

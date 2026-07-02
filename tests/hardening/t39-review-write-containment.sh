@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# t39-review-write-containment: review subagents may write only assigned review reports.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCRIPT="$ROOT/plugins/edc/scripts/edc-review.sh"
+TMP="$(mktemp -d)"
+LOG_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$LOG_DIR"' EXIT
+
+setup_repo() {
+  cd "$TMP"
+  export GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_SYSTEM=/dev/null
+  git init -q
+  git config user.email test@test.com
+  git config user.name Test
+  git config commit.gpgsign false
+  mkdir -p src edc-context/modules edc-context/reports .edc/skills/edc-review
+  printf 'one\n' > src/a.txt
+  git add src/a.txt
+  git commit -q -m init
+  printf 'two\n' > src/a.txt
+  git add src/a.txt
+  git commit -q -m change
+  printf '# Repo\n\n## Route by path/task\n' > edc-context/index.md
+  printf '# Core\n\n## Scope\n' > edc-context/modules/core.md
+  printf '## Issues\n' > edc-context/reports/issues.md
+  cat > edc-context/manifest.json <<EOF
+{"schemaVersion":2,"sourceCommit":"$(git rev-parse HEAD)","repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"unmapped":{"allowedGlobs":[]},"modules":[{"name":"core","doc":"edc-context/modules/core.md","priority":10,"match":{"prefixes":["src/"]}}]}
+EOF
+  printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
+  printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
+  printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
+  printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md
+  printf 'PATTERNS_MARKER\n' > .edc/skills/edc-review/patterns.md
+}
+
+write_fake_claude() {
+  mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/claude" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+prompt=$(cat)
+mkdir -p edc-context/review-tasks
+if [ "${EDC_T39_FORBIDDEN_WRITE:-0}" = "1" ]; then
+  printf 'pwned\n' >> src/a.txt
+fi
+printf '## Summary\n\nmock review\n' > edc-context/review-tasks/report-core.md
+printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
+printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
+MOCK
+  chmod +x "$TMP/bin/claude"
+}
+
+setup_repo
+write_fake_claude
+
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/bad.out" 2>"$LOG_DIR/bad.err"
+bad_rc=$?
+set -e
+if [ "$bad_rc" -ne 0 ] && grep -q 'review subagent touched forbidden paths' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
+  echo "PASS: review containment blocks source writes"
+else
+  echo "FAIL: review containment did not block source writes"
+  echo "--- stdout ---"; cat "$LOG_DIR/bad.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/bad.err"
+  exit 1
+fi
+
+git checkout -- src/a.txt
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/good.out" 2>"$LOG_DIR/good.err"
+good_rc=$?
+set -e
+if [ "$good_rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock review' review-HEAD.md; then
+  echo "PASS: review containment allows assigned report writes"
+else
+  echo "FAIL: review containment blocked valid report write"
+  echo "--- stdout ---"; cat "$LOG_DIR/good.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/good.err"
+  exit 1
+fi

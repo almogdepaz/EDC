@@ -415,10 +415,22 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    local review_prompt
-    review_prompt=$(resolve_prompt review "$task_path") || exit 1
+    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report
+    allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+    before_snapshot=$(mktemp)
+    after_snapshot=$(mktemp)
+    edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report"
+    review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
     edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt" \
-      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+      || { rm -f "$before_snapshot" "$after_snapshot"; echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+    edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report"
+    changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+    rm -f "$before_snapshot" "$after_snapshot"
+    if [ -n "$changed_forbidden" ]; then
+      echo "ERROR: review subagent touched forbidden paths for module $module:" >&2
+      echo "$changed_forbidden" | sed 's/^/  /' >&2
+      exit 1
+    fi
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
   done <<< "$tasks"

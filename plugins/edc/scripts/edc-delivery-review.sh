@@ -135,6 +135,8 @@ assert_delivery_report_valid() {
 }
 
 delivery_main() {
+  edc_result_begin delivery-review
+  trap edc_result_on_exit EXIT
   local target="" base="" context_mode=""
   local -a ignore_args=()
 
@@ -197,7 +199,8 @@ delivery_main() {
   edc_spawn "edc-delivery-review" "${EDC_REVIEW_TIMEOUT:-1800}" "$prompt" \
     || { echo "ERROR: edc-delivery-review invocation failed" >&2; exit 1; }
 
-  assert_delivery_report_valid "$report_path" || exit 1
+  assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$report_path"; exit 1; }
+  edc_result_success "$report_path"
   echo "Delivery review report: $report_path"
   exit 0
 }

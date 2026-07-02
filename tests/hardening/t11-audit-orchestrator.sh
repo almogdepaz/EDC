@@ -150,7 +150,8 @@ result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && [ "$(grep -c '^worker:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)" -eq 2 ] \
-   && grep -q '^synthesis$' "$TMPDIR_T11/audit-log"; then
+   && grep -q '^synthesis$' "$TMPDIR_T11/audit-log" \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
   echo "PASS: missing-context recovery → per-module audit + synthesis produced both reports"
 else
   echo "FAIL (11a): missing-context path. exit=$result"
@@ -178,7 +179,8 @@ setup_repo "fresh"
 echo "missing-issues" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing"; then
+if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing" \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 1 && j.reasonCode === "audit-report-validation" ? 0 : 1)'; then
   echo "PASS: missing report rejected with descriptive error"
 else
   echo "FAIL (11c): expected non-zero exit + 'audit report missing'. exit=$result"

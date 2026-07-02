@@ -193,6 +193,8 @@ EOF
 # ── main ─────────────────────────────────────────────────────────────────────
 
 build_main() {
+  edc_result_begin build
+  trap edc_result_on_exit EXIT
   local force=0
   local -a passthrough=()
 
@@ -221,8 +223,15 @@ build_main() {
   edc_require_agent_cli
 
   # Decide route in shell (LLM does NOT make this call).
-  local route
-  route=$(decide_route "$force") || exit $?
+  local route route_rc=0
+  route=$(decide_route "$force") || route_rc=$?
+  if [ "$route_rc" -ne 0 ]; then
+    case "$route_rc" in
+      12) edc_result_failure "$route_rc" "legacy-v1-layout" "legacy v1 edc-context layout detected" "remove edc-context and run edc build again" ;;
+      *) edc_result_failure "$route_rc" "build-route-failed" "build route decision failed" "inspect edc-clean-slate output and rerun after fixing it" ;;
+    esac
+    exit "$route_rc"
+  fi
   echo "→ build route: $route"
 
   # Wipe if route demands it.
@@ -284,6 +293,7 @@ build_main() {
   fi
   edc_remove_context_curator_report
 
+  edc_result_success
   echo "Build OK. Layout validated by edc-doctor; context curator report/edit pass completed."
   exit 0
 }

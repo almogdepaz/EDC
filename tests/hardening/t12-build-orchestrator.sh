@@ -121,7 +121,8 @@ if [ "$result" -ne 0 ]; then
   echo "FAIL (12a): orchestrator exited $result"
   echo "$out"; exit 1
 fi
-if grep -qx "build" "$EDC_T12_LOG"; then
+if grep -qx "build" "$EDC_T12_LOG" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "build" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
   echo "PASS: no edc-context/ → BUILD"
 else
   echo "FAIL (12a): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1
@@ -139,7 +140,8 @@ if [ "$result" -ne 0 ]; then
   echo "FAIL (12b): orchestrator exited $result"
   echo "$out"; exit 1
 fi
-if grep -qx "update" "$EDC_T12_LOG"; then
+if grep -qx "update" "$EDC_T12_LOG" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "build" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
   echo "PASS: healthy v2 → UPDATE"
 else
   echo "FAIL (12b): expected 'update' action, log:"; cat "$EDC_T12_LOG"; exit 1
@@ -255,7 +257,8 @@ out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ]; then
   echo "FAIL (12h): expected non-zero exit on v1 layout, got 0"; echo "$out"; exit 1
 fi
-if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context"; then
+if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "build" && j.exitCode === 12 && j.reasonCode === "legacy-v1-layout" ? 0 : 1)'; then
   echo "PASS: v1 layout refused with migration hint"
 else
   echo "FAIL (12h): expected migration hint mentioning 'legacy v1' and 'rm -rf edc-context'"

@@ -58,6 +58,54 @@ EDC_CLAUDE_AGENTS="CLAUDE.md"
 EDC_AGENTS_REF_START="<!-- EDC_CONTEXT_REFERENCE_START -->"
 EDC_AGENTS_REF_END="<!-- EDC_CONTEXT_REFERENCE_END -->"
 
+EDC_RESULT_ACTIVE=0
+EDC_RESULT_WRITTEN=0
+EDC_RESULT_KIND=""
+EDC_RESULT_STARTED_HEAD=""
+
+edc_result_file() {
+  if [ -n "${EDC_RESULT_FILE:-}" ]; then
+    echo "$EDC_RESULT_FILE"
+  else
+    echo "$EDC_BUILD_DIR/last-run.json"
+  fi
+}
+
+edc_result_begin() {
+  EDC_RESULT_KIND="$1"
+  EDC_RESULT_ACTIVE=1
+  EDC_RESULT_WRITTEN=0
+  EDC_RESULT_STARTED_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
+}
+
+edc_result_write() {
+  [ "${EDC_RESULT_ACTIVE:-0}" = "1" ] || return 0
+  local exit_code="$1" reason_code="$2" failure_reason="${3:-}" failure_hint="${4:-}" failed_module="${5:-}" final_review="${6:-}"
+  local result_file finished_head
+  result_file=$(edc_result_file)
+  finished_head=$(git rev-parse HEAD 2>/dev/null || true)
+  if ! node "$EDC_JSON_CLI" result-write "$result_file" "$EDC_RESULT_KIND" "$exit_code" "$reason_code" "$failure_reason" "$failure_hint" "$failed_module" "$final_review" "$EDC_RESULT_STARTED_HEAD" "$finished_head"; then
+    echo "WARNING: failed to write EDC result file: $result_file" >&2
+  fi
+  EDC_RESULT_WRITTEN=1
+}
+
+edc_result_success() {
+  edc_result_write 0 success "" "" "" "${1:-}"
+}
+
+edc_result_failure() {
+  edc_result_write "${1:-1}" "${2:-pipeline-failed}" "${3:-$EDC_RESULT_KIND pipeline failed}" "${4:-inspect the log for the subprocess error and rerun after fixing it}" "${5:-}" "${6:-}"
+}
+
+edc_result_on_exit() {
+  local rc=$?
+  if [ "${EDC_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then
+    edc_result_failure "$rc" "$EDC_RESULT_KIND-pipeline-failed" "$EDC_RESULT_KIND pipeline failed" "inspect the log for the subprocess error and rerun after fixing it" "" ""
+  fi
+  return "$rc"
+}
+
 edc_is_generated_agents_file() {
   local file="$1"
   [ -f "$file" ] || return 1

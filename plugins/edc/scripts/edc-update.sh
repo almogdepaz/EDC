@@ -119,6 +119,8 @@ auto_detect_base() {
 # ── main ─────────────────────────────────────────────────────────────────────
 
 update_main() {
+  edc_result_begin update
+  trap edc_result_on_exit EXIT
   local base=""
   local -a passthrough=()
 
@@ -149,7 +151,14 @@ update_main() {
   edc_require_agent_cli
 
   # Preflight: shell decides whether the on-disk state is updateable.
-  preflight_check || exit 1
+  if ! preflight_check; then
+    if [ -f "$EDC_CONTEXT_DIR/.meta.json" ]; then
+      edc_result_failure 1 "legacy-v1-layout" "legacy v1 edc-context layout detected" "remove edc-context and run edc build again"
+    else
+      edc_result_failure 1 "update-preflight-failed" "edc-context is not updateable" "run edc build --force to rebuild context"
+    fi
+    exit 1
+  fi
 
   # Auto-detect base if not given. Pass through to skill so its git-diff
   # call sees the same base. Empty base = "skill auto-detects" (existing
@@ -189,6 +198,7 @@ update_main() {
   fi
   edc_remove_context_curator_report
 
+  edc_result_success
   echo "Update OK. Layout validated by edc-doctor; context curator report/edit pass completed."
   exit 0
 }

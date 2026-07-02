@@ -151,7 +151,8 @@ if [ "$result" -eq 0 ]; then
   echo "FAIL (13c): expected non-zero exit on v1 layout"
   echo "$out"; exit 1
 fi
-if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context"; then
+if echo "$out" | grep -q "legacy v1" && echo "$out" | grep -q "rm -rf edc-context" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 1 && j.reasonCode === "legacy-v1-layout" ? 0 : 1)'; then
   echo "PASS: v1 layout refused with migration hint"
 else
   echo "FAIL (13c): expected migration hint"
@@ -173,7 +174,8 @@ if [ "$result" -ne 0 ]; then
   echo "FAIL (13d): orchestrator exited $result on healthy v2"
   echo "$out"; exit 1
 fi
-if grep -q "spawned" "$EDC_T13_LOG"; then
+if grep -q "spawned" "$EDC_T13_LOG" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
   echo "PASS: healthy v2 → update spawned"
 else
   echo "FAIL (13d): expected agent spawn, log:"

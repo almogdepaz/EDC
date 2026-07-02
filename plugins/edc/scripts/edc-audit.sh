@@ -136,6 +136,8 @@ EOF
 }
 
 audit_main() {
+  edc_result_begin audit
+  trap edc_result_on_exit EXIT
   local -a ignore_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -183,7 +185,7 @@ audit_main() {
     edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt" \
       || { echo "ERROR: edc-audit invocation failed for module $module" >&2; exit 1; }
     assert_markdown_report_valid "$report_path" "module $module" \
-      || { echo "ERROR: module audit validation failed for $module" >&2; exit 1; }
+      || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
   done < <(manifest_audit_modules)
 
   if [ "$module_count" -eq 0 ]; then
@@ -199,12 +201,13 @@ audit_main() {
     || { echo "ERROR: edc-audit synthesis invocation failed" >&2; exit 1; }
 
   # Validate reports.
-  assert_audit_reports_valid || exit 1
+  assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output in the log; canonical reports are missing or incomplete"; exit 1; }
 
   if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
     rm -rf "$AUDIT_TASKS_DIR"
   fi
 
+  edc_result_success
   echo "Audit reports:"
   echo "  $EDC_COMPLEXITY"
   echo "  $EDC_ISSUES"

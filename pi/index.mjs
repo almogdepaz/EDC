@@ -943,7 +943,7 @@ async function handleEdcMenu(pi, args, ctx) {
       await runReviewAgainstDefault(pi, ctx);
       break;
     case EDC_MENU.DELIVERY_REVIEW_DEFAULT:
-      runBackgroundAction(pi, ctx, "delivery-review", "edc-delivery-review.sh", defaultBaseReviewArgs(ctx.cwd));
+      runBackgroundAction(pi, ctx, "delivery-review", "edc-delivery-review.sh");
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);

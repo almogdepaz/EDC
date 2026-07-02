@@ -106,6 +106,36 @@ fi
 unset EDC_REVIEW_MODEL
 
 setup_repo
+git branch -M main
+echo valid > "$TMPDIR_T38/scenario"
+result=0
+out=$("${EDC_BASH:-bash}" "$SCRIPT" --full 2>&1) || result=$?
+if [ "$result" -eq 0 ] && [ -f delivery-review-current.md ] \
+  && grep -q 'DELIVERY_MODE: full' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'No git diff is the source of truth for this review.' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'Delivery review report: delivery-review-current.md' <<<"$out"; then
+  echo "PASS: delivery-review supports explicit full current-state mode"
+else
+  echo "FAIL: delivery-review --full mode failed. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- prompt ---"; cat "$TMPDIR_T38/last-prompt" 2>/dev/null || true; echo "--- end ---"
+  exit 1
+fi
+
+setup_repo
+git branch -M main
+echo valid > "$TMPDIR_T38/scenario"
+result=0
+out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] && [ -f delivery-review-current.md ] \
+  && grep -q 'DELIVERY_MODE: full' "$TMPDIR_T38/last-prompt"; then
+  echo "PASS: delivery-review auto-selects full mode on clean main"
+else
+  echo "FAIL: delivery-review did not auto-select full mode on clean main. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- prompt ---"; cat "$TMPDIR_T38/last-prompt" 2>/dev/null || true; echo "--- end ---"
+  exit 1
+fi
+
+setup_repo
 echo missing-report > "$TMPDIR_T38/scenario"
 result=0
 out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?

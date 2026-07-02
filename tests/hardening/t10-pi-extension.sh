@@ -368,7 +368,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     { selection: "Build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
     { selection: "Update context from default branch", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
     { selection: "Audit code quality", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
-    { selection: "Review delivery / architecture", kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
+    { selection: "Review delivery / architecture", kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args:  agent=pi" },
   ];
   for (const testCase of backgroundCases) {
     const beforeMessages = calls.messages.length;

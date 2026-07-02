@@ -93,7 +93,7 @@ recover_context_if_needed() {
   # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
   # state and route to update by mistake.
   if [ -x "$CLEAN_SLATE_SH" ]; then
-    "$EDC_BASH" "$CLEAN_SLATE_SH" >&2 || true
+    bash "$CLEAN_SLATE_SH" >&2 || true
   fi
 
   case "$state" in
@@ -122,7 +122,7 @@ recover_context_if_needed() {
   # the build with --force exactly once before giving up.
   if [ -x "$CLEAN_SLATE_SH" ]; then
     echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
-    "$EDC_BASH" "$CLEAN_SLATE_SH" --force >&2 || true
+    bash "$CLEAN_SLATE_SH" --force >&2 || true
     local force_build_prompt
     force_build_prompt=$(resolve_prompt build --force "${_edc_build_args[@]}") || return 1
     edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" \

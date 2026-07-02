@@ -138,12 +138,12 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const childProcess = await import("node:child_process");
 
   fs.mkdirSync(`${cwd}/.edc/scripts`, { recursive: true });
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\nsleep 0.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-delivery-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "delivery args: $* agent=$EDC_AGENT_CLI"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-doctor.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nif [ "\${BASH_VERSINFO[0]}" -lt 4 ]; then echo old-bash; exit 2; fi\necho "doctor args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 0.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-delivery-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "delivery args: $* agent=$EDC_AGENT_CLI"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-doctor.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "doctor args: $* agent=$EDC_AGENT_CLI"\n`);
   for (const script of ["edc-review.sh", "edc-build.sh", "edc-update.sh", "edc-audit.sh", "edc-delivery-review.sh", "edc-doctor.sh"]) {
     fs.chmodSync(`${cwd}/.edc/scripts/${script}`, 0o755);
   }
@@ -290,20 +290,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 2\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
 
-  const bashCandidates = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash"];
-  const realBash = bashCandidates.find((candidate) => {
-    try {
-      return childProcess.execFileSync(candidate, ["-lc", "printf %s ${BASH_VERSINFO[0]}"], { encoding: "utf-8" }).trim() >= "4";
-    } catch {
-      return false;
-    }
-  });
+  const realBash = childProcess.execFileSync("/usr/bin/env", ["bash", "-lc", "command -v bash"], { encoding: "utf-8" }).trim();
   if (!realBash) {
     console.log("RACE_TEST_BASH_MISSING");
     process.exit(1);
   }
   fs.mkdirSync(`${raceDir}/fake-bin`, { recursive: true });
-  fs.writeFileSync(`${raceDir}/fake-bin/bash`, `#!/bin/sh\nif [ "$1" = "-lc" ] && printf '%s' "$2" | grep -q BASH_VERSINFO; then printf '5'; exit 0; fi\nsleep 1\nexec ${realBash} "$@"\n`);
+  fs.writeFileSync(`${raceDir}/fake-bin/bash`, `#!/bin/sh\nsleep 1\nexec ${realBash} "$@"\n`);
   fs.chmodSync(`${raceDir}/fake-bin/bash`, 0o755);
 
   const previousPath = process.env.PATH;

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-build orchestrator.
 # Deterministic control plane for /edc:edc-build.
 #
@@ -88,7 +83,7 @@ EOF
 decide_route() {
   local force="$1"
   local rc=0
-  "$EDC_BASH" "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
   case "$rc" in
     0)  # no context dir
       echo "build"
@@ -236,7 +231,7 @@ build_main() {
 
   # Wipe if route demands it.
   if [ "$route" = "wipe-and-build" ]; then
-    "$EDC_BASH" "$CLEAN_SLATE_SH" --force >&2 \
+    bash "$CLEAN_SLATE_SH" --force >&2 \
       || { echo "ERROR: clean-slate --force failed" >&2; exit 1; }
   fi
 
@@ -279,7 +274,7 @@ build_main() {
     echo "ERROR: edc-doctor.sh not found at $DOCTOR_SH" >&2
     exit 1
   fi
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: build produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi
@@ -287,7 +282,7 @@ build_main() {
   edc_run_context_curator || exit 1
   edc_run_context_curator_edit || exit 1
 
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: context curator edit produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi

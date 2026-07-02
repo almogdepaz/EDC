@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "edc-doctor: requires bash >= 4.0" >&2
-  exit 2
-}
 
 set -euo pipefail
 

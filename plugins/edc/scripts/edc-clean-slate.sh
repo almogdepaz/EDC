@@ -28,12 +28,7 @@
 #   10  --check: partial / malformed v2 (caller should wipe + rebuild)
 #   11  --check: layout is healthy v2
 #   12  --check or auto: v1 layout detected; user must manually wipe
-#   2   bash version too low / usage error
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "edc-clean-slate: requires bash >= 4.0" >&2
-  exit 2
-}
-
+#   2   usage error
 set -uo pipefail
 
 _edc_clean_slate_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

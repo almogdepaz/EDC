@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-build-plan: deterministic task planner for edc full builds.
 #
 # Usage: edc-build-plan.sh [--changed <name>[,<name>...]] < input.json

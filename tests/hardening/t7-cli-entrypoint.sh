@@ -76,7 +76,6 @@ run_cli() {
   HOME="$FAKE_HOME" \
   EDC_BUILD_MODEL="t7-model" \
   EDC_REVIEW_MODEL="t7-model" \
-  EDC_BASH="$FAKE_BIN/bash" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
@@ -85,7 +84,6 @@ run_cli_pi_model_only() {
   PATH="$FAKE_BIN:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_PI_MODEL="t7-pi-model" \
-  EDC_BASH="$FAKE_BIN/bash" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }

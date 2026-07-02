@@ -282,43 +282,11 @@ function nowRunId(kind = "job") {
   return `${stamp}-${kind}-${process.pid}`;
 }
 
-function piSubprocessEnv(ctx, bashPath = "") {
+function piSubprocessEnv(ctx) {
   const env = { ...process.env, EDC_AGENT_CLI: "pi" };
-  if (bashPath) {
-    env.EDC_BASH = bashPath;
-    env.PATH = `${dirname(bashPath)}:${env.PATH || ""}`;
-  }
   const model = currentPiModelSlug(ctx);
   if (model) env.EDC_PI_MODEL = model;
   return env;
-}
-
-function isBash4OrNewer(path) {
-  try {
-    const version = execFileSync(path, ["-lc", "printf '%s' \"${BASH_VERSINFO[0]}\""], {
-      timeout: 3000,
-      encoding: "utf-8",
-    }).trim();
-    return Number(version) >= 4;
-  } catch {
-    return false;
-  }
-}
-
-function resolveBashExecutable() {
-  const candidates = [];
-  const pathBash = process.env.PATH
-    ? process.env.PATH.split(":").map((dir) => join(dir, "bash"))
-    : [];
-  candidates.push(...pathBash, "/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash");
-
-  const seen = new Set();
-  for (const candidate of candidates) {
-    if (!candidate || seen.has(candidate) || !existsSync(candidate)) continue;
-    seen.add(candidate);
-    if (isBash4OrNewer(candidate)) return candidate;
-  }
-  return "";
 }
 
 function runEdcScript(scriptName, args, ctx) {
@@ -327,16 +295,10 @@ function runEdcScript(scriptName, args, ctx) {
     return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: install EDC orchestrator first\n" });
   }
 
-  const bashPath = resolveBashExecutable();
-  if (!bashPath) {
-    return Promise.resolve({ code: 2, stdout: "", stderr: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)\n" });
-  }
-
-  const script = `set -- ${renderShellArgs(args)}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
   return new Promise((resolve) => {
-    const child = spawn(bashPath, ["-lc", script], {
+    const child = spawn("bash", [edcScript, ...args], {
       cwd: ctx.cwd,
-      env: piSubprocessEnv(ctx, bashPath),
+      env: piSubprocessEnv(ctx),
       stdio: ["ignore", "pipe", "pipe"],
       signal: ctx.signal,
     });
@@ -579,11 +541,6 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
     return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
   }
 
-  const bashPath = resolveBashExecutable();
-  if (!bashPath) {
-    return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
-  }
-
   const statusPath = backgroundStatusPath(ctx.cwd);
   const logPath = backgroundJobLogPath(ctx.cwd, kind);
   if (!statusPath || !logPath) {
@@ -626,7 +583,7 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
   [ -n "$started_head" ] && echo "started_head=$started_head"
 } > "$status_file"
 
-${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
+bash ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -660,11 +617,11 @@ ${failureClassificationShell(kind)}
 } > "$status_file"
 `;
 
-  const child = spawn(bashPath, ["-lc", script], {
+  const child = spawn("bash", ["-lc", script], {
     cwd: ctx.cwd,
     detached: true,
     stdio: "ignore",
-    env: piSubprocessEnv(ctx, bashPath),
+    env: piSubprocessEnv(ctx),
   });
   child.unref();
 

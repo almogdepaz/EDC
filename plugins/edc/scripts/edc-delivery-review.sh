@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required: uses arrays and process-safe prompt construction
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-delivery-review orchestrator.
 # Runs the delivery/architecture review skill against a branch/commit diff.
 

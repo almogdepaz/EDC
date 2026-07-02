@@ -142,7 +142,7 @@ edc mode inject
 
 | Symptom | What to check |
 |---|---|
-| `bash >=4` or array errors | macOS `/bin/bash` is 3.2. Install Homebrew Bash and ensure it is on `PATH`, or set `EDC_BASH=/opt/homebrew/bin/bash`. |
+| `bash` not found | Install or restore the system Bash executable on `PATH`. macOS `/bin/bash` 3.2 is supported. |
 | `jq: command not found` | Install `jq`; EDC orchestrators use it for manifest and report validation. |
 | `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash`, writes to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
 | Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from default branch** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |

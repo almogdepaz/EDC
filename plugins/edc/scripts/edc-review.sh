@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required: uses declare -A (assoc arrays) and set -u with empty arrays
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-review orchestrator
 # All deterministic control flow for edc-review lives here.
 #
@@ -393,7 +388,7 @@ auto_mode() {
 
   # Build review tasks now that context is fresh.
   local out
-  out=$("$EDC_BASH" "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
+  out=$(bash "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
 
   if ! echo "$out" | grep -q "^Review tasks ready"; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
@@ -434,8 +429,8 @@ auto_mode() {
   done <<< "$tasks"
 
   # Consolidate + verify
-  "$EDC_BASH" "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
-  "$EDC_BASH" "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
+  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
 
   # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
   # review-<target>.md at the repo root is the durable artifact. On success,
@@ -661,13 +656,59 @@ TASK
       ;;
   esac
 
-  declare -A MODULE_FILES MODULE_TYPE MODULE_POLICY MODULE_CONTEXTLESS_ID
   local ambiguous_count=0 uncovered_count=0 mapped_count=0 contextless_count=0 allowed_unmapped_count=0
   local -a unmapped_unexpected=()
   local -a ambiguous_lines=()
+  local -a module_names=()
+  local -a module_files=()
+  local -a module_types=()
+  local -a module_policies=()
+  local -a module_contextless_ids=()
+
+  local module_index_result=""
+
+  _module_index() {
+    local needle="$1" i
+    i=0
+    while [ "$i" -lt "${#module_names[@]}" ]; do
+      if [ "${module_names[$i]}" = "$needle" ]; then
+        module_index_result="$i"
+        return 0
+      fi
+      i=$((i + 1))
+    done
+    module_index_result=""
+    return 1
+  }
+
+  _ensure_module() {
+    local module="$1" type="${2:-module}" policy="${3:-}" contextless_id="${4:-}" idx
+    if _module_index "$module"; then
+      idx="$module_index_result"
+      module_types[$idx]="$type"
+      module_policies[$idx]="$policy"
+      module_contextless_ids[$idx]="$contextless_id"
+    else
+      idx=${#module_names[@]}
+      module_names[$idx]="$module"
+      module_files[$idx]=""
+      module_types[$idx]="$type"
+      module_policies[$idx]="$policy"
+      module_contextless_ids[$idx]="$contextless_id"
+    fi
+    module_index_result="$idx"
+  }
+
+  _append_module_file() {
+    local module="$1" file="$2" type="${3:-module}" policy="${4:-}" contextless_id="${5:-}" idx
+    _ensure_module "$module" "$type" "$policy" "$contextless_id"
+    idx="$module_index_result"
+    module_files[$idx]="${module_files[$idx]}${file}"$'\n'
+  }
 
   _record_contextless() {
-    local id="$1" policy="$2" file="$3" module
+    local id="$1" policy="$2" file="$3" module contextless_id
+    contextless_id="$id"
     case "$policy" in
       account-only)
         if [ "$id" = "legacy-unmapped" ]; then
@@ -676,28 +717,20 @@ TASK
         else
           module="contextless-${id}"
         fi
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="account-only"
-        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
       promotion-check)
         module="contextless-promotion-check"
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="promotion-check"
-        MODULE_CONTEXTLESS_ID["$module"]="promotion-check"
+        contextless_id="promotion-check"
         ;;
       no-context-review)
         module="contextless-${id}"
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="no-context-review"
-        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
       *)
         echo "ERROR: invalid contextless reviewPolicy from classifier: $policy" >&2
         exit 2
         ;;
     esac
-    MODULE_FILES["$module"]+="${file}"$'\n'
+    _append_module_file "$module" "$file" "contextless" "$policy" "$contextless_id"
   }
 
   local classifications
@@ -712,8 +745,7 @@ TASK
     case "$state" in
       context-module:*)
         module="${state#context-module:}"
-        MODULE_FILES["$module"]+="${file}"$'\n'
-        MODULE_TYPE["$module"]="module"
+        _append_module_file "$module" "$file" "module"
         mapped_count=$((mapped_count + 1))
         ;;
       contextless:*)
@@ -725,8 +757,7 @@ TASK
         ;;
       uncovered)
         uncovered_count=$((uncovered_count + 1))
-        MODULE_FILES["unmapped"]+="${file}"$'\n'
-        MODULE_TYPE["unmapped"]="unmapped"
+        _append_module_file "unmapped" "$file" "unmapped"
         unmapped_unexpected+=("$file")
         ;;
       ambiguous)
@@ -776,14 +807,14 @@ TASK
     esac
   fi
 
-  echo "routing summary: mapped=$mapped_count contextless=$contextless_count uncovered=$uncovered_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
+  echo "routing summary: mapped=$mapped_count contextless=$contextless_count uncovered=$uncovered_count allowed-unmapped=$allowed_unmapped_count modules=${#module_names[@]}" >&2
 
   # Step 4: write $EDC_REVIEW_TASKS_DIR/
   rm -rf "$EDC_REVIEW_TASKS_DIR"
   mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
   local sorted_modules
-  sorted_modules=$(printf '%s\n' "${!MODULE_FILES[@]}" | sort)
+  sorted_modules=$(printf '%s\n' "${module_names[@]}" | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
   local context_mode modules_json
@@ -795,19 +826,25 @@ TASK
   modules_json="[]"
   while IFS= read -r module; do
     local module_doc="${EDC_MODULES_DIR}/${module}.md"
-    local module_type="${MODULE_TYPE[$module]:-module}"
+    local module_idx module_type module_policy module_contextless_id module_file_blob
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    module_contextless_id="${module_contextless_ids[$module_idx]:-}"
+    module_file_blob="${module_files[$module_idx]}"
     if [ "$module_type" != "module" ]; then
       module_doc=""
     fi
     local files_json module_json
-    files_json=$(printf '%s' "${MODULE_FILES[$module]}" | grep -v '^$' | jq -R . | jq -s -c .)
+    files_json=$(printf '%s' "$module_file_blob" | grep -v '^$' | jq -R . | jq -s -c .)
     if [ "$module_type" = "contextless" ]; then
       module_json=$(jq -n \
         --arg name "$module" \
         --arg doc "$module_doc" \
         --argjson files "$files_json" \
-        --arg contextlessId "${MODULE_CONTEXTLESS_ID[$module]}" \
-        --arg reviewPolicy "${MODULE_POLICY[$module]}" \
+        --arg contextlessId "$module_contextless_id" \
+        --arg reviewPolicy "$module_policy" \
         '{name: $name, doc: $doc, files: $files, type: "contextless", contextlessId: $contextlessId, reviewPolicy: $reviewPolicy}')
     elif [ "$module_type" = "unmapped" ]; then
       module_json=$(jq -n \
@@ -836,23 +873,29 @@ TASK
 
   # per-module task files
   while IFS= read -r module; do
-    local file_list baseline_line module_context_line
-    file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
+    local file_list baseline_line module_context_line module_idx module_type module_policy module_contextless_id module_file_blob
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    module_contextless_id="${module_contextless_ids[$module_idx]:-}"
+    module_file_blob="${module_files[$module_idx]}"
+    file_list=$(echo "$module_file_blob" | grep -v '^$' | sed 's/^/- /')
 
     if [ "$module" = "allowed-unmapped" ]; then
-      write_allowed_unmapped_report "${MODULE_FILES[$module]}"
+      write_allowed_unmapped_report "$module_file_blob"
       continue
     fi
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "account-only" ]; then
-      write_contextless_account_report "$module" "${MODULE_CONTEXTLESS_ID[$module]}" "${MODULE_FILES[$module]}"
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "account-only" ]; then
+      write_contextless_account_report "$module" "$module_contextless_id" "$module_file_blob"
       continue
     fi
 
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "promotion-check" ]; then
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "promotion-check" ]; then
       cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
@@ -876,7 +919,7 @@ TASK
       continue
     fi
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "no-context-review" ]; then
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "no-context-review" ]; then
       cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
@@ -935,7 +978,12 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]:-}" = "account-only" ]; then
+    local module_idx module_type module_policy
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "account-only" ]; then
       continue
     fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required: uses set -u with empty arrays
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-audit orchestrator.
 # Deterministic control plane for terminal/orchestrated edc audit runs.
 #

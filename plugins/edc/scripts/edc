@@ -172,7 +172,7 @@ build_cmd() {
 
   (
     cd "$target"
-    EDC_AGENT_CLI="$agent" "$EDC_BASH" "$build_script" "${passthrough[@]}"
+    EDC_AGENT_CLI="$agent" bash "$build_script" "${passthrough[@]}"
   )
 }
 
@@ -229,7 +229,7 @@ review_cmd() {
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$review_script" "${passthrough[@]}"
 }
 
 delivery_review_cmd() {
@@ -285,7 +285,7 @@ delivery_review_cmd() {
   delivery_script="$(find_script edc-delivery-review.sh)" \
     || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$delivery_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$delivery_script" "${passthrough[@]}"
 }
 
 audit_cmd() {
@@ -335,7 +335,7 @@ audit_cmd() {
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$audit_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$audit_script" "${passthrough[@]}"
 }
 
 update_cmd() {
@@ -390,14 +390,14 @@ update_cmd() {
   update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$update_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" bash "$update_script" "${passthrough[@]}"
 }
 
 doctor_cmd() {
   local doctor_script
   doctor_script="$(find_script edc-doctor.sh)" \
     || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
-  "$EDC_BASH" "$doctor_script"
+  bash "$doctor_script"
 }
 
 mode_cmd() {
@@ -476,8 +476,6 @@ main() {
   }
 
   _load_config
-  EDC_BASH="${EDC_BASH:-$BASH}"
-  export EDC_BASH
 
   # Parse top-level --model <slug>. Must appear before the subcommand verb.
   while [ "$#" -gt 0 ]; do

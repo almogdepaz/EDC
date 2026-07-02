@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t19-bash-alignment: nested edc script calls use EDC_BASH, not ambient PATH bash.
+# t19-bash-alignment: edc review auto-mode runs without EDC_BASH indirection.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -8,22 +8,6 @@ SCRIPT="$ROOT/plugins/edc/scripts/edc-review.sh"
 check_init --file
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
-
-resolve_bash4() {
-  local candidate
-  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-REAL_BASH="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
-ORIGINAL_PATH="$PATH"
 
 setup_repo() {
   cd "$TMP"
@@ -42,15 +26,8 @@ setup_repo() {
   git commit -q -m change
 }
 
-write_fake_tools() {
+write_fake_pi() {
   mkdir -p "$TMP/bin"
-  cat > "$TMP/bin/bash" <<'FAKE_BASH'
-#!/bin/sh
-echo "FAKE_BASH_USED: nested call resolved bash from PATH" >&2
-exit 42
-FAKE_BASH
-  chmod +x "$TMP/bin/bash"
-
   cat > "$TMP/bin/pi" <<'FAKE_PI'
 #!/bin/sh
 set -eu
@@ -63,26 +40,26 @@ FAKE_PI
 }
 
 setup_repo
-write_fake_tools
+write_fake_pi
 
-PATH="$TMP/bin:$ORIGINAL_PATH" \
-EDC_BASH="$REAL_BASH" \
+unset EDC_BASH
+PATH="$TMP/bin:$PATH" \
 EDC_AGENT_CLI=pi \
 EDC_KEEP_REVIEW_TASKS=1 \
-"$REAL_BASH" "$SCRIPT" HEAD --base HEAD~1 --ignore-context >out.log 2>err.log
+bash "$SCRIPT" HEAD --base HEAD~1 --ignore-context >out.log 2>err.log
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock review via pi' review-HEAD.md; then
-  check "19.1: review auto-mode uses EDC_BASH for nested self/consolidate/verify calls" 1
+  check "19.1: review auto-mode runs without EDC_BASH" 1
 else
-  check "19.1: review auto-mode uses EDC_BASH for nested self/consolidate/verify calls" 0
+  check "19.1: review auto-mode runs without EDC_BASH" 0
   cat out.log err.log
 fi
 
-if grep -q 'FAKE_BASH_USED' err.log out.log 2>/dev/null; then
-  check "19.2: ambient PATH bash was not used" 0
+if env | grep -q '^EDC_BASH='; then
+  check "19.2: EDC_BASH stays unset in test process" 0
 else
-  check "19.2: ambient PATH bash was not used" 1
+  check "19.2: EDC_BASH stays unset in test process" 1
 fi
 
 echo

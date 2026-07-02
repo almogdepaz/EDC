@@ -10,22 +10,21 @@ PLUGIN_SCRIPT="plugins/edc/scripts/edc-review.sh"
 
 echo "=== T5: Portability + plugin install ==="
 
-# ── 5a: bash version gate present ──────────────────────────────��─────────────
-if grep -q 'BASH_VERSINFO\[0\]' "$SCRIPT" && grep -q 'brew install bash' "$SCRIPT"; then
-  echo "PASS: bash version gate present in script"
+# ── 5a: bash 3.2-compatible scripts do not require bash >=4 ────────────────
+if ! grep -R 'BASH_VERSINFO\[0\].*-ge 4\|brew install bash\|bash >=4' plugins/edc/scripts pi/README.md >/tmp/edc-t5-bash4.txt; then
+  echo "PASS: plugin runtime no longer requires bash >=4"
 else
-  echo "FAIL: bash version gate missing"
+  echo "FAIL: plugin runtime still requires bash >=4"
+  cat /tmp/edc-t5-bash4.txt
   exit 1
 fi
 
-# ── 5b: version gate exits 2 on bash < 4 ─────────────────────��───────────────
-# Simulate BASH_VERSINFO[0]=3 by sourcing a modified env — we can't actually run
-# under bash 3.2, so test the logic statically: the gate uses [[ ]] which is
-# bash-only and exits 2. Verify the exit code in the gate.
-if grep -A3 'BASH_VERSINFO' "$SCRIPT" | grep -q 'exit 2'; then
-  echo "PASS: version gate exits with code 2"
+# ── 5b: runtime no longer resolves or exports EDC_BASH ──────────────────────
+if ! grep -R 'EDC_BASH\|resolveBashExecutable' plugins/edc/scripts pi/index.mjs tests/hardening/run-all.sh >/tmp/edc-t5-edc-bash.txt; then
+  echo "PASS: runtime no longer carries EDC_BASH interpreter contract"
 else
-  echo "FAIL: version gate does not exit 2"
+  echo "FAIL: runtime still carries EDC_BASH interpreter contract"
+  cat /tmp/edc-t5-edc-bash.txt
   exit 1
 fi
 

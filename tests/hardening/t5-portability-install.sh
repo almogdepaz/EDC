@@ -104,6 +104,75 @@ else
   exit 1
 fi
 
+# ── 5e3: remote installer uses a tagged archive, not per-file raw fetches ───
+if grep -q 'EDC_INSTALL_REF:-v' install.sh \
+  && grep -q 'archive/refs/tags/\$EDC_INSTALL_REF.tar.gz' install.sh \
+  && ! grep -q '^download()' install.sh; then
+  echo "PASS: remote installer bootstraps from a tagged archive"
+else
+  echo "FAIL: remote installer still depends on per-file raw downloads from main"
+  exit 1
+fi
+
+REMOTE_TMP=$(mktemp -d)
+REPO_ROOT_T5="$PWD"
+REMOTE_HOME="$REMOTE_TMP/home"
+REMOTE_BIN="$REMOTE_TMP/bin"
+mkdir -p "$REMOTE_HOME" "$REMOTE_BIN"
+cp install.sh "$REMOTE_TMP/install.sh"
+cat >"$REMOTE_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[ -n "$out" ] || exit 64
+printf '%s\n' "$url" >"${EDC_REMOTE_URL_LOG:?}"
+printf 'fake archive\n' >"$out"
+EOF
+chmod +x "$REMOTE_BIN/curl"
+cat >"$REMOTE_BIN/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dest=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$dest" ] || exit 64
+mkdir -p "$dest"
+cp -R "${EDC_REPO_ROOT:?}/plugins" "$dest/plugins"
+cp "${EDC_REPO_ROOT:?}/install.sh" "$dest/install.sh"
+EOF
+chmod +x "$REMOTE_BIN/tar"
+(
+  cd "$REMOTE_TMP"
+  EDC_REPO_ROOT="$REPO_ROOT_T5" \
+  EDC_REMOTE_URL_LOG="$REMOTE_TMP/url.log" \
+  HOME="$REMOTE_HOME" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_BIN:$PATH" \
+  bash install.sh --agent claude --no-path >/tmp/edc-t5-remote-install.out 2>&1
+)
+if grep -q 'archive/refs/tags/v' "$REMOTE_TMP/url.log" \
+  && [ -x "$REMOTE_HOME/.edc/scripts/edc" ]; then
+  echo "PASS: remote install uses tagged archive source tree"
+else
+  echo "FAIL: remote install did not use tagged archive source tree"
+  cat /tmp/edc-t5-remote-install.out
+  exit 1
+fi
+rm -rf "$REMOTE_TMP"
+
 # ── 5f: session-start hook contains installOrchestratorScript ────────────────
 if grep -q 'installOrchestratorScript' "$HOOK"; then
   echo "PASS: installOrchestratorScript present in session-start hook"

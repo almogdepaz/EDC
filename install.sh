@@ -12,10 +12,11 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-BRANCH="main"
-BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.1}"
+INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
+ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOCAL_PLUGIN_ROOT="$SCRIPT_DIR/plugins/edc"
+EDC_INSTALL_TMP=""
 
 AGENT=""
 ADD_PATH=1
@@ -23,7 +24,7 @@ ADD_PATH=1
 usage() {
   cat <<EOF
 Usage:
-  curl -fsSL $BASE/install.sh | bash -s <agent>
+  curl -fsSL $INSTALL_URL | bash -s <agent>
   bash install.sh --agent <agent> [--no-path]
 
 Agents: claude, cursor, codex, pi
@@ -119,20 +120,39 @@ PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
 
-download() {
-  local src="$1" dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  curl -fsSL "$BASE/$src" -o "$dst"
+cleanup_install_tmp() {
+  if [ -n "$EDC_INSTALL_TMP" ]; then
+    rm -rf "$EDC_INSTALL_TMP"
+  fi
+}
+trap cleanup_install_tmp EXIT
+
+prepare_source_tree() {
+  if [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ]; then
+    return 0
+  fi
+
+  command -v curl >/dev/null 2>&1 || die "curl is required for remote install"
+  command -v tar >/dev/null 2>&1 || die "tar is required for remote install"
+
+  EDC_INSTALL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-install.XXXXXX")"
+  local archive="$EDC_INSTALL_TMP/edc.tar.gz"
+  local source_dir="$EDC_INSTALL_TMP/source"
+  mkdir -p "$source_dir"
+
+  curl -fsSL "$ARCHIVE_URL" -o "$archive"
+  tar -xzf "$archive" -C "$source_dir" --strip-components=1
+  SCRIPT_DIR="$source_dir"
+
+  [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ] \
+    || die "downloaded archive does not contain EDC plugin runtime: $ARCHIVE_URL"
 }
 
-copy_or_download() {
+copy_from_source() {
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
-  if [ -f "$SCRIPT_DIR/$src" ]; then
-    cp "$SCRIPT_DIR/$src" "$dst"
-  else
-    download "$src" "$dst"
-  fi
+  [ -f "$SCRIPT_DIR/$src" ] || die "installer source missing: $src"
+  cp "$SCRIPT_DIR/$src" "$dst"
 }
 
 skill_rel() {
@@ -173,7 +193,7 @@ install_terminal_cli() {
   local entry src dst executable
   for entry in "${runtime_install_entries[@]}"; do
     IFS='|' read -r src dst executable <<< "$entry"
-    copy_or_download "$src" "$dst"
+    copy_from_source "$src" "$dst"
     [ "$executable" = "x" ] && chmod +x "$dst"
   done
 
@@ -367,7 +387,7 @@ install_edc_skills() {
     "$target/edc-context"
   for f in "${SKILLS[@]}"; do
     rel=$(skill_rel "$f")
-    copy_or_download "$f" "$target/$rel"
+    copy_from_source "$f" "$target/$rel"
   done
 }
 
@@ -383,11 +403,12 @@ install_public_edc_skills() {
     "$target/edc-module-context-impl"
   for f in "${PUBLIC_SKILLS[@]}"; do
     rel=$(skill_rel "$f")
-    copy_or_download "$f" "$target/$rel"
+    copy_from_source "$f" "$target/$rel"
   done
 }
 
 install_claude_runtime() {
+  prepare_source_tree
   install_terminal_cli
   install_edc_skills "$HOME/.edc/skills"
   echo "Installed EDC terminal CLI at $HOME/.edc/scripts/edc."
@@ -411,6 +432,7 @@ case "$AGENT" in
     ;;
 
   cursor)
+    prepare_source_tree
     TARGET="$HOME/.cursor"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Cursor..."
@@ -424,6 +446,7 @@ case "$AGENT" in
     ;;
 
   codex)
+    prepare_source_tree
     TARGET="$HOME/.codex/skills"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Codex..."
@@ -437,6 +460,7 @@ case "$AGENT" in
     ;;
 
   pi)
+    prepare_source_tree
     if ! command -v pi >/dev/null 2>&1; then
       die "pi CLI not found on PATH. Install pi first: https://pi.dev"
     fi

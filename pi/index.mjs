@@ -607,6 +607,11 @@ fi
 final_review=""
 if [ ${shellQuote(kind)} = "review" ]; then
   final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
+  structured_final_review=""
+  if [ -f "$result_file" ]; then
+    structured_final_review="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.finalReview || "");' "$result_file" 2>/dev/null || true)"
+  fi
+  [ -n "$structured_final_review" ] && final_review="$structured_final_review"
 fi
 failure_reason=""
 failure_hint=""

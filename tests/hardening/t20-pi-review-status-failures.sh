@@ -108,6 +108,23 @@ exit 1
   assert.match(structuredStatus.content, /reason: structured validation for module core/);
   assert.match(structuredStatus.content, /hint: structured hint from result file/);
 
+  writeFileSync(reviewScript, `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .git/edc
+cat > .git/edc/result.json <<'JSON'
+{"kind":"review","exitCode":0,"reasonCode":"success","finalReview":"review-structured.md"}
+JSON
+echo 'review succeeded without legacy verified log line'
+exit 0
+`);
+  chmodSync(reviewScript, 0o755);
+  selections.push("Review current branch vs default branch", "Job status");
+  await handler("", ctx);
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=success/.test(readFileSync(statusPath, "utf-8")), 3000));
+  await handler("", ctx);
+  const structuredSuccessStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
+  assert.match(structuredSuccessStatus.content, /final review: review-structured\.md/);
+
   const oldStartedAt = new Date(Date.now() - 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
   writeFileSync(statusPath, [
     "kind=review",

@@ -18,6 +18,13 @@ if [ ! -f "$SCRIPT" ]; then
 fi
 echo "PASS: $SCRIPT exists"
 
+if grep -q 'mktemp "${manifest}.tmp.XXXXXX"' "$SCRIPT"; then
+  echo "PASS: edc mode temp file is created beside manifest for atomic rename"
+else
+  echo "FAIL: edc mode should create temp file beside manifest before mv"
+  exit 1
+fi
+
 TMPDIR_T7=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T7"' EXIT
 

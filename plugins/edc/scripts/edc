@@ -422,8 +422,11 @@ mode_cmd() {
   [ -f "$JSON_CLI" ] || die "json-cli.mjs not found at $JSON_CLI"
 
   local tmp
-  tmp="$(mktemp)"
-  node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"
+  tmp="$(mktemp "${manifest}.tmp.XXXXXX")"
+  if ! node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
   mv "$tmp" "$manifest"
   echo "policy.defaultMode set to $mode in $manifest"
 }

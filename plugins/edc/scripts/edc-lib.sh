@@ -979,13 +979,18 @@ edc_curator_edit_allowed_path() {
   esac
 }
 
+edc_emit_dirty_tracked_paths() {
+  git diff --name-only -z -- 2>/dev/null || true
+  git diff --cached --name-only -z -- 2>/dev/null || true
+}
+
 edc_snapshot_curator_forbidden_paths() {
   local output="$1"
   : > "$output"
   {
-    git ls-files
-    git ls-files --others --exclude-standard "$EDC_CONTEXT_DIR" 2>/dev/null || true
-  } | sort -u | while IFS= read -r path; do
+    edc_emit_dirty_tracked_paths
+    git ls-files --others --exclude-standard -z "$EDC_CONTEXT_DIR" 2>/dev/null || true
+  } | while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     case "$path" in
       "$EDC_BUILD_DIR/spawn-log.jsonl") continue ;;
@@ -996,7 +1001,7 @@ edc_snapshot_curator_forbidden_paths() {
     else
       printf 'MISSING  %s\n' "$path"
     fi
-  done | sort > "$output"
+  done | sort -u > "$output"
 }
 
 edc_diff_curator_forbidden_paths() {
@@ -1029,9 +1034,9 @@ edc_snapshot_review_forbidden_paths() {
   local output="$1" allowed_report="$2"
   : > "$output"
   {
-    git ls-files
-    git ls-files --others --exclude-standard 2>/dev/null || true
-  } | sort -u | while IFS= read -r path; do
+    edc_emit_dirty_tracked_paths
+    git ls-files --others --exclude-standard -z 2>/dev/null || true
+  } | while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
     edc_review_write_allowed_path "$path" "$allowed_report" && continue
     if [ -f "$path" ]; then
@@ -1039,7 +1044,7 @@ edc_snapshot_review_forbidden_paths() {
     else
       printf 'MISSING  %s\n' "$path"
     fi
-  done | sort > "$output"
+  done | sort -u > "$output"
 }
 
 edc_diff_review_forbidden_paths() {

@@ -18,7 +18,8 @@ setup_repo() {
   git config commit.gpgsign false
   mkdir -p src edc-context/modules edc-context/reports .edc/skills/edc-review
   printf 'one\n' > src/a.txt
-  git add src/a.txt
+  printf 'clean\n' > src/clean.txt
+  git add src/a.txt src/clean.txt
   git commit -q -m init
   printf 'two\n' > src/a.txt
   git add src/a.txt
@@ -38,6 +39,16 @@ EOF
 
 write_fake_claude() {
   mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/shasum" <<MOCK
+#!/usr/bin/env bash
+last=""
+for arg in "\$@"; do
+  last="\$arg"
+done
+printf '%s\n' "\$last" >> "$LOG_DIR/shasum-paths.log"
+exec /usr/bin/shasum "\$@"
+MOCK
+  chmod +x "$TMP/bin/shasum"
   cat > "$TMP/bin/claude" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -82,4 +93,12 @@ else
   echo "--- stdout ---"; cat "$LOG_DIR/good.out"
   echo "--- stderr ---"; cat "$LOG_DIR/good.err"
   exit 1
+fi
+
+if [ -f "$LOG_DIR/shasum-paths.log" ] && grep -qx 'src/clean.txt' "$LOG_DIR/shasum-paths.log"; then
+  echo "FAIL: review containment hashed clean tracked files"
+  cat "$LOG_DIR/shasum-paths.log"
+  exit 1
+else
+  echo "PASS: review containment hashes only changed-path candidates"
 fi

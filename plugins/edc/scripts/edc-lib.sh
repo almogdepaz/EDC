@@ -216,144 +216,14 @@ edc_require_agent_cli() {
     pi)
       command -v pi > /dev/null 2>&1 \
         || { echo "ERROR: EDC_AGENT_CLI=pi but 'pi' not found on PATH" >&2; exit 2; }
-      command -v python3 > /dev/null 2>&1 \
-        || { echo "ERROR: EDC_AGENT_CLI=pi requires python3 for JSON subprocess supervision" >&2; exit 2; }
+      command -v node > /dev/null 2>&1 \
+        || { echo "ERROR: EDC_AGENT_CLI=pi requires node for JSON subprocess supervision" >&2; exit 2; }
       ;;
     *)
       echo "ERROR: EDC_AGENT_CLI must be 'claude', 'cursor', 'codex', or 'pi'" >&2
       exit 2
       ;;
   esac
-}
-
-write_pi_json_supervisor() {
-  local path="$1"
-  cat > "$path" <<'PY'
-#!/usr/bin/env python3
-import json
-import signal
-import subprocess
-import sys
-
-proc = None
-
-
-def stop(signum, _frame):
-    global proc
-    if proc is not None and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-    sys.exit(128 + signum)
-
-
-signal.signal(signal.SIGTERM, stop)
-signal.signal(signal.SIGINT, stop)
-
-cmd = sys.argv[1:]
-if not cmd:
-    print("ERROR: missing pi command", file=sys.stderr)
-    sys.exit(2)
-
-proc = subprocess.Popen(
-    cmd,
-    stdin=subprocess.DEVNULL,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True,
-    bufsize=1,
-)
-
-SUCCESS_STOP_REASONS = {"stop"}
-
-
-def stop_proc():
-    global proc
-    if proc is not None and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
-
-def final_assistant(messages):
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        if isinstance(message, dict) and message.get("role") == "assistant":
-            return message
-    return None
-
-
-def error_text(value):
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("errorMessage", "message", "error"):
-            nested = value.get(key)
-            if nested:
-                return error_text(nested)
-        try:
-            return json.dumps(value, sort_keys=True)
-        except Exception:
-            return str(value)
-    return str(value)
-
-
-def classify_agent_end(event):
-    assistant = final_assistant(event.get("messages"))
-    if assistant is None:
-        return False, "agent_end did not include a final assistant message"
-
-    error_message = assistant.get("errorMessage")
-    if error_message:
-        return False, error_text(error_message)
-
-    stop_reason = assistant.get("stopReason")
-    if stop_reason not in SUCCESS_STOP_REASONS:
-        return False, f"agent_end stopReason was {stop_reason or 'missing'}"
-
-    return True, ""
-
-
-try:
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        try:
-            event = json.loads(line)
-        except Exception:
-            continue
-
-        event_type = event.get("type")
-        if event_type == "error":
-            print(f"ERROR: pi subprocess: {error_text(event.get('error') or event)}", file=sys.stderr)
-            stop_proc()
-            sys.exit(1)
-
-        if event_type == "agent_end":
-            ok, reason = classify_agent_end(event)
-            stop_proc()
-            if ok:
-                sys.exit(0)
-            print(f"ERROR: pi subprocess: {reason}", file=sys.stderr)
-            sys.exit(1)
-
-    rc = proc.wait()
-    if rc != 0:
-        sys.exit(rc)
-    print("ERROR: pi subprocess ended without successful agent_end", file=sys.stderr)
-    sys.exit(1)
-finally:
-    stop_proc()
-PY
-  chmod +x "$path"
 }
 
 # ── stream filter ────────────────────────────────────────────────────────────
@@ -916,26 +786,27 @@ edc_spawn() {
       local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
       [ -n "$model" ] && cmd+=(--model "$model")
       cmd+=("@$effective_prompt_file")
-      local pi_supervisor
-      pi_supervisor=$(mktemp "${TMPDIR:-/tmp}/edc-pi-supervisor-$$.XXXXXX.py") \
-        || { echo "ERROR: could not create pi supervisor" >&2; return 1; }
-      write_pi_json_supervisor "$pi_supervisor"
+      local pi_supervisor="$EDC_SCRIPTS_DIR/../hooks/lib/pi-supervisor.mjs"
+      if [ ! -f "$pi_supervisor" ]; then
+        echo "ERROR: pi supervisor not found at $pi_supervisor" >&2
+        [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
+        return 1
+      fi
       if [ -n "$capture" ]; then
         run_with_timeout "$timeout_secs" "$phase" \
-          "$pi_supervisor" "${cmd[@]}" < /dev/null \
+          node "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | tee "$capture" | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         local -a pipeline_status=("${PIPESTATUS[@]}")
         edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[2]}"
         rc=$?
       else
         run_with_timeout "$timeout_secs" "$phase" \
-          "$pi_supervisor" "${cmd[@]}" < /dev/null \
+          node "$pi_supervisor" "${cmd[@]}" < /dev/null \
           | STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" stream_filter
         local -a pipeline_status=("${PIPESTATUS[@]}")
         edc_stream_pipeline_rc "${pipeline_status[0]}" "${pipeline_status[1]}"
         rc=$?
       fi
-      rm -f "$pi_supervisor"
       [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
       ;;
     *)

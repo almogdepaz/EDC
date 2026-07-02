@@ -566,7 +566,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       process.exit(1);
     }
   }
-  for (const requiredRuntime of ["classify-cli.mjs", "route.mjs", "paths.mjs"]) {
+  for (const requiredRuntime of ["classify-cli.mjs", "pi-supervisor.mjs", "route.mjs", "paths.mjs"]) {
     if (!fs.existsSync(`${cwd}/.edc/hooks/lib/${requiredRuntime}`)) {
       console.log("CLASSIFIER_RUNTIME_INSTALL_FAIL:" + requiredRuntime);
       process.exit(1);

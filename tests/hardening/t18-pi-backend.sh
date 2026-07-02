@@ -76,6 +76,12 @@ EOF
 
 write_mock_pi() {
   mkdir -p "$TMP/bin"
+  cat > "$TMP/bin/python3" <<'MOCK_PY'
+#!/usr/bin/env bash
+echo "python3 should not be required for pi supervision" >&2
+exit 127
+MOCK_PY
+  chmod +x "$TMP/bin/python3"
   cat > "$TMP/bin/pi" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail

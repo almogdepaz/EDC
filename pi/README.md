@@ -35,7 +35,7 @@ Use a pinned git ref when you need reproducible installs, e.g. `pi install git:g
 
 Orchestrated pi reviews require:
 
-- `pi`, `git`, `jq`, and `python3` on `PATH`
+- `pi`, `git`, `jq`, and `node` on `PATH`
 - Bash >= 4; on macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2
 - shell access for background build/update/review/delivery-review/audit subprocesses
 - write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`

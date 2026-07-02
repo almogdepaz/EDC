@@ -156,6 +156,7 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
   local hooks_target="$HOME/.edc/hooks/lib"
   copy_or_download "plugins/edc/hooks/lib/classify-cli.mjs"   "$hooks_target/classify-cli.mjs"
+  copy_or_download "plugins/edc/hooks/lib/pi-supervisor.mjs"  "$hooks_target/pi-supervisor.mjs"
   copy_or_download "plugins/edc/hooks/lib/route.mjs"          "$hooks_target/route.mjs"
   copy_or_download "plugins/edc/hooks/lib/paths.mjs"          "$hooks_target/paths.mjs"
   copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
@@ -163,7 +164,6 @@ install_terminal_cli() {
   copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
   copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
   copy_or_download "plugins/edc/scripts/edc-build-plan.sh"    "$scripts_target/edc-build-plan.sh"
-  copy_or_download "plugins/edc/scripts/edc-spawn-analyze.sh" "$scripts_target/edc-spawn-analyze.sh"
   chmod +x \
     "$scripts_target/edc" \
     "$scripts_target/edc-review.sh" \
@@ -177,8 +177,8 @@ install_terminal_cli() {
     "$scripts_target/edc-assert-fresh.sh" \
     "$scripts_target/edc-recover-context.sh" \
     "$scripts_target/edc-build-plan.sh" \
-    "$scripts_target/edc-spawn-analyze.sh" \
-    "$hooks_target/classify-cli.mjs"
+    "$hooks_target/classify-cli.mjs" \
+    "$hooks_target/pi-supervisor.mjs"
   # edc-lib.sh is sourced, not exec'd — no chmod needed
   install_shell_path
 }

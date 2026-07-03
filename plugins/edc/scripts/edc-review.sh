@@ -212,6 +212,19 @@ filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
+normalize_review_report_headings() {
+  local report="$1"
+  if grep -q '^## Findings\b' "$report" || ! grep -q '^## Critical Findings\b' "$report"; then
+    return 0
+  fi
+
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/edc-report-normalize-$$.XXXXXX") || return 1
+  awk '{ if ($0 == "## Critical Findings" || $0 ~ /^## Critical Findings[[:space:]]/) print "## Findings"; else print }' "$report" > "$tmp" \
+    && cat "$tmp" > "$report"
+  rm -f "$tmp"
+}
+
 # assert_report_valid <module>: require the reporting contract's Findings section.
 # (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
@@ -226,6 +239,7 @@ assert_report_valid() {
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
     return 1
   fi
+  normalize_review_report_headings "$report"
   if ! grep -q '^## Findings\b' "$report"; then
     echo "ERROR: $report missing required section: ## Findings (module: $module)" >&2
     echo "HINT: this usually means the edc-review skill wrote an incomplete report. check the subprocess output above." >&2

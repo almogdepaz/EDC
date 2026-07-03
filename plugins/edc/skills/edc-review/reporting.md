@@ -16,6 +16,8 @@ Generate a durable markdown report for every scoped or standalone security revie
 
 ## Findings
 
+Use the exact heading `## Findings`. Do not replace it with `## Critical Findings`, `## Security Findings`, severity-specific headings, or any other variant. Severity-specific findings belong under this section as `### ...` subsections.
+
 ### No security findings
 Use this subsection when no exploitable or security-relevant issue survived verification. Include what was checked and key limitations.
 

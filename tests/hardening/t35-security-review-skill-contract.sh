@@ -32,6 +32,7 @@ check "review requires concrete attack path for findings" "$(has "concrete attac
 check "review allows no-security-findings reports" "$(has "No security findings" && echo 1 || echo 0)"
 check "review methodology is security-titled" "$(file_has "$METHODOLOGY" "Security Review Methodology" && echo 1 || echo 0)"
 check "reporting is security-titled" "$(file_has "$REPORTING" "Security Report" && echo 1 || echo 0)"
+check "reporting requires exact Findings heading" "$(file_has "$REPORTING" "exact heading \`## Findings\`" && file_has "$REPORTING" "Do not replace" && echo 1 || echo 0)"
 check "adversarial reference remains present" "$(file_has "$ADVERSARIAL" "Attacker Model" && echo 1 || echo 0)"
 check "patterns reference remains vulnerability-focused" "$(file_has "$PATTERNS" "Common Issue Patterns" && file_has "$PATTERNS" "Access Control Bypass" && echo 1 || echo 0)"
 check "review no longer advertises generic code review" "$(not_has "Code review for PRs" && not_has "standard code review" && echo 1 || echo 0)"

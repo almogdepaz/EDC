@@ -79,7 +79,21 @@ else
   exit 1
 fi
 
-# ── 3d: valid report passes consolidate ───────────────────────────────────────
+# ── 3d: consolidate normalizes common Critical Findings heading drift ────────
+printf '## What Changed\n\nscoped diff\n\n## Critical Findings\n\nNo security findings.\n' > edc-context/review-tasks/report-foo.md
+
+result=0
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?
+if [ "$result" -eq 0 ] && grep -q '^## Findings$' edc-context/review-tasks/report-foo.md; then
+  echo "PASS: --consolidate normalizes ## Critical Findings to ## Findings"
+else
+  echo "FAIL: expected --consolidate to normalize ## Critical Findings, got exit $result"
+  cat /tmp/t3-stderr.txt
+  cat edc-context/review-tasks/report-foo.md
+  exit 1
+fi
+
+# ── 3e: valid report passes consolidate ───────────────────────────────────────
 printf '## Findings\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
 
 result=0
@@ -92,7 +106,7 @@ else
   exit 1
 fi
 
-# ── 3e: manifest declares v2 schema ───────────────────────────────────────────
+# ── 3f: manifest declares v2 schema ───────────────────────────────────────────
 if jq -e '.schemaVersion == 2' edc-context/manifest.json > /dev/null; then
   echo "PASS: edc-context/manifest.json schemaVersion == 2"
 else

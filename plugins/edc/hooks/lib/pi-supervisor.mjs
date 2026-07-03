@@ -53,6 +53,14 @@ function classifyAgentEnd(event) {
   return { ok: true, reason: "" };
 }
 
+function plaintextFatalReason(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return "";
+  if (/^No API key found for\b/.test(trimmed)) return trimmed;
+  if (/^Use \/login to log into a provider\b/.test(trimmed)) return trimmed;
+  return "";
+}
+
 function stopChild() {
   if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
@@ -77,11 +85,25 @@ process.on("SIGTERM", () => handleSignal(15));
 process.on("SIGINT", () => handleSignal(2));
 
 child.stderr.on("data", (chunk) => {
+  const text = chunk.toString();
+  const reason = plaintextFatalReason(text);
+  if (reason) {
+    process.stderr.write(`ERROR: pi subprocess: ${reason}\n`);
+    finish(1);
+    return;
+  }
   process.stdout.write(chunk);
 });
 
 const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
 lines.on("line", (line) => {
+  const reason = plaintextFatalReason(line);
+  if (reason) {
+    process.stderr.write(`ERROR: pi subprocess: ${reason}\n`);
+    finish(1);
+    return;
+  }
+
   process.stdout.write(`${line}\n`);
   if (line.length === 0) return;
 

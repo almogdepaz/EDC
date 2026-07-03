@@ -105,6 +105,12 @@ finish_ok() {
   fi
   exit 0
 }
+if [ "${PI_FAKE_AUTH_TEXT:-0}" = "1" ]; then
+  printf '{"type":"session","version":3,"id":"mock","cwd":"%s"}\n' "$PWD"
+  printf 'No API key found for azure-openai-responses.\n\nUse /login to log into a provider via OAuth or API key.\n'
+  sleep 30
+  exit 1
+fi
 if printf '%s' "$prompt" | grep -q 'BUILD_SKILL_MARKER'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
@@ -265,6 +271,21 @@ if [ "$rc" -ne 0 ] && grep -q 'provider down' "$LOG_DIR/agent-end-error.err"; th
 else
   check "18.11: pi backend fails on agent_end assistant error" 0
   cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
+fi
+
+auth_start=$(date +%s)
+PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
+rc=$?
+auth_duration=$(( $(date +%s) - auth_start ))
+if [ "$rc" -ne 0 ] \
+   && [ "$auth_duration" -lt 3 ] \
+   && grep -q 'No API key found for azure-openai-responses' "$LOG_DIR/plain-auth.err" \
+   && ! grep -q "timed out" "$LOG_DIR/plain-auth.err"; then
+  check "18.12: pi backend fails fast on plaintext provider auth errors" 1
+else
+  check "18.12: pi backend fails fast on plaintext provider auth errors" 0
+  printf 'duration=%s rc=%s\n' "$auth_duration" "$rc"
+  cat "$LOG_DIR/plain-auth.out" "$LOG_DIR/plain-auth.err"
 fi
 
 echo

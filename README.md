@@ -12,7 +12,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 pi install npm:@sgtbeatdown/edc
 cd your-repo
 pi
-# run /edc, choose Build context, then Review current branch vs main
+# run /edc, choose Build context, then Review all (security, delivery, quality)
 ```
 
 First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
@@ -62,13 +62,17 @@ edc build  --agent codex --focus orchestrator
 edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
-# run the security review pipeline in the current repo
-edc review --agent claude --base main
-edc review --agent cursor HEAD --base main
-edc review --agent codex --pr 42
-edc review --agent pi HEAD --base main
-edc review --agent codex https://github.com/owner/repo/pull/42
-edc review --agent codex HEAD --base main --ignore 'generated/**'
+# run all review lenses in the current repo: security, delivery, then quality
+edc review-all --agent claude HEAD --base main
+edc review-all --agent pi HEAD --base main
+
+# run the security-only review pipeline in the current repo
+edc security-review --agent claude --base main
+edc security-review --agent cursor HEAD --base main
+edc security-review --agent codex --pr 42
+edc security-review --agent pi HEAD --base main
+edc security-review --agent codex https://github.com/owner/repo/pull/42
+edc security-review --agent codex HEAD --base main --ignore 'generated/**'
 
 # goal/spec delivery + architecture-fit review
 edc delivery-review --agent claude HEAD --base main
@@ -168,13 +172,13 @@ Claude, Cursor, and Codex expose thin wrappers for the same deterministic orches
 
 ```bash
 # terminal CLI
-edc review --agent claude --pr 42
-edc review --agent codex https://github.com/owner/repo/pull/42
-edc review --agent pi HEAD --base main
-edc review --agent claude abc1234                 # single commit; base defaults to abc1234^
-edc review --agent claude HEAD --base HEAD~5      # commit range
-edc review --agent claude path/to/changes.patch   # pre-generated diff file
-edc review --agent claude --pr 42 --base main --ignore-context
+edc security-review --agent claude --pr 42
+edc security-review --agent codex https://github.com/owner/repo/pull/42
+edc security-review --agent pi HEAD --base main
+edc security-review --agent claude abc1234                 # single commit; base defaults to abc1234^
+edc security-review --agent claude HEAD --base HEAD~5      # commit range
+edc security-review --agent claude path/to/changes.patch   # pre-generated diff file
+edc security-review --agent claude --pr 42 --base main --ignore-context
 
 # Claude slash command equivalent
 /edc:edc-run-review --pr 42

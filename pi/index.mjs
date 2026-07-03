@@ -36,7 +36,8 @@ const EDC_COMMAND = {
 };
 
 const EDC_MENU = {
-  REVIEW_DEFAULT: "Review current branch vs default branch",
+  REVIEW_ALL_DEFAULT: "Review all (security, delivery, quality)",
+  SECURITY_REVIEW_DEFAULT: "Security review current branch vs default branch",
   DELIVERY_REVIEW_DEFAULT: "Review delivery / architecture",
   JOB_STATUS: "Job status",
   KILL_JOB: "Kill running EDC job",
@@ -102,7 +103,8 @@ function renderEdcHelp() {
     "Opens the interactive EDC menu.",
     "",
     "Menu actions:",
-    "- Review current branch vs default branch",
+    "- Review all (security, delivery, quality)",
+    "- Security review current branch vs default branch",
     "- Review delivery / architecture",
     "- Job status",
     "- Kill running EDC job",
@@ -115,7 +117,8 @@ function renderEdcHelp() {
     "  /edc kill",
     "",
     "Non-interactive use is intentionally CLI-only:",
-    "  edc review --agent pi HEAD --base <default-branch>",
+    "  edc review-all --agent pi HEAD --base <default-branch>",
+    "  edc security-review --agent pi HEAD --base <default-branch>",
     "  edc delivery-review --agent pi HEAD --base <default-branch>",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
@@ -136,7 +139,7 @@ function reviewSkipsContextPrompt(args) {
 }
 
 function isEdcOrchestratorCommand(command) {
-  const scriptName = "edc-(?:build|update|review|delivery-review|audit|doctor)\\.sh";
+  const scriptName = "edc-(?:build|update|review|review-all|delivery-review|audit|doctor)\\.sh";
   return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])\\$HOME/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])/[^\\s"']*/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command);
@@ -863,7 +866,8 @@ function interactiveOnlyMessage() {
     "/edc is interactive-only.",
     "",
     "Use the EDC CLI for non-interactive runs:",
-    "  edc review --agent pi HEAD --base <default-branch>",
+    "  edc review-all --agent pi HEAD --base <default-branch>",
+    "  edc security-review --agent pi HEAD --base <default-branch>",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -876,7 +880,7 @@ function killRunningJobAction(pi, ctx) {
   sendInfo(pi, "edc-job-kill", message);
 }
 
-async function runReviewAgainstDefault(pi, ctx) {
+async function runReviewAgainstDefault(pi, ctx, kind = "review", scriptName = "edc-review.sh") {
   const renderedArgs = defaultBaseReviewArgs(ctx.cwd);
   const freshness = getContextFreshness(ctx.cwd);
   const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
@@ -885,7 +889,7 @@ async function runReviewAgainstDefault(pi, ctx) {
     return;
   }
 
-  const result = startBackgroundJob("review", "edc-review.sh", renderedArgs, ctx);
+  const result = startBackgroundJob(kind, scriptName, renderedArgs, ctx);
   if (result.error) {
     sendInfo(pi, "edc-background", result.error);
   } else if (result.alreadyRunning) {
@@ -933,7 +937,8 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   const choice = await ctx.ui.select("EDC", [
-    EDC_MENU.REVIEW_DEFAULT,
+    EDC_MENU.REVIEW_ALL_DEFAULT,
+    EDC_MENU.SECURITY_REVIEW_DEFAULT,
     EDC_MENU.DELIVERY_REVIEW_DEFAULT,
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
@@ -945,8 +950,11 @@ async function handleEdcMenu(pi, args, ctx) {
   ]);
 
   switch (choice) {
-    case EDC_MENU.REVIEW_DEFAULT:
-      await runReviewAgainstDefault(pi, ctx);
+    case EDC_MENU.REVIEW_ALL_DEFAULT:
+      await runReviewAgainstDefault(pi, ctx, "review-all", "edc-review-all.sh");
+      break;
+    case EDC_MENU.SECURITY_REVIEW_DEFAULT:
+      await runReviewAgainstDefault(pi, ctx, "review", "edc-review.sh");
       break;
     case EDC_MENU.DELIVERY_REVIEW_DEFAULT:
       runBackgroundAction(pi, ctx, "delivery-review", "edc-delivery-review.sh");

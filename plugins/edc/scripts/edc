@@ -9,6 +9,8 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review-all --agent claude|cursor|codex|pi [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
   edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
   edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
@@ -18,14 +20,16 @@ Usage:
 Commands:
   build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
   update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
-  review           Run the security review pipeline (auto-builds/updates context if needed)
+  review-all       Run security, delivery, and quality review phases
+  security-review  Run the security review pipeline (auto-builds/updates context if needed)
+  review           Backward-compatible alias for security-review
   delivery-review  Run the goal/spec delivery + architecture-fit review pipeline
   audit            Run the code-quality audit pipeline (auto-builds/updates context if needed)
   mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build, update, review, delivery-review, and audit.
+  --agent is required for build, update, review-all, security-review, review, delivery-review, and audit.
   --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
@@ -229,7 +233,7 @@ build_cmd() {
 }
 
 review_cmd() {
-  parse_agent_context_args review 1 passthrough passthrough "" "--base" "$@"
+  parse_agent_context_args security-review 1 passthrough passthrough "" "--base" "$@"
   finalize_agent_context 1
 
   local review_script
@@ -237,6 +241,17 @@ review_cmd() {
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
   EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+}
+
+review_all_cmd() {
+  parse_agent_context_args review-all 1 passthrough passthrough "" "--base" "$@"
+  finalize_agent_context 1
+
+  local review_all_script
+  review_all_script="$(find_script edc-review-all.sh)" \
+    || die "edc-review-all.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review-all.sh"
+
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_all_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 
 delivery_review_cmd() {
@@ -381,7 +396,10 @@ main() {
     build)
       build_cmd "$@"
       ;;
-    review)
+    review-all)
+      review_all_cmd "$@"
+      ;;
+    security-review|review)
       review_cmd "$@"
       ;;
     delivery-review)

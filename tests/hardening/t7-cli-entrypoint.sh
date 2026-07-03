@@ -71,10 +71,11 @@ cat > "$FAKE_BIN/bash" <<'EOF'
 set -eu
 script_name=$(basename "$1")
 case "$script_name" in
-  edc-build.sh)  bucket=build  ;;
-  edc-review.sh)          bucket=review ;;
+  edc-build.sh)          bucket=build ;;
+  edc-review.sh)         bucket=review ;;
+  edc-review-all.sh)     bucket=review_all ;;
   edc-delivery-review.sh) bucket=delivery ;;
-  edc-audit.sh)           bucket=audit  ;;
+  edc-audit.sh)          bucket=audit ;;
   *)             bucket=other  ;;
 esac
 out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
@@ -279,6 +280,38 @@ if grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
 else
   echo "FAIL: review args not forwarded correctly"
   cat "$CAPTURE/review/args"
+  exit 1
+fi
+
+# ── 7f1b: explicit security-review alias delegates to security orchestrator ─
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli security-review --agent codex HEAD --base main)
+if [ "$(cat "$CAPTURE/review/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null; then
+  echo "PASS: security-review invokes repo edc-review.sh with args"
+else
+  echo "FAIL: security-review did not delegate correctly"
+  cat "$CAPTURE/review/agent" "$CAPTURE/review/script" "$CAPTURE/review/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1c: review-all delegates to combined orchestrator with args ───────────
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review-all --agent codex HEAD --base main --ignore generated/**)
+if [ "$(cat "$CAPTURE/review_all/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: review-all invokes repo edc-review-all.sh with args"
+else
+  echo "FAIL: review-all did not delegate correctly"
+  cat "$CAPTURE/review_all/agent" "$CAPTURE/review_all/script" "$CAPTURE/review_all/args" 2>/dev/null || true
   exit 1
 fi
 

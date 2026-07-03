@@ -354,7 +354,8 @@ print_cli_hint() {
     pi)
       echo "  edc build  --agent pi             # build or update edc-context/"
       echo "  edc update --agent pi --base main # force incremental update"
-      echo "  edc review --agent pi HEAD --base main # security review of current branch"
+      echo "  edc review-all --agent pi HEAD --base main # security + delivery + quality review"
+      echo "  edc security-review --agent pi HEAD --base main # security-only review"
       echo "  edc delivery-review --agent pi HEAD --base main # delivery/architecture review"
       echo "  edc audit  --agent pi             # code quality audit"
       echo "  edc doctor                        # validate context"
@@ -365,7 +366,8 @@ print_cli_hint() {
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
       echo "  edc update --agent $agent             # force incremental update"
-      echo "  edc review --agent $agent --base main # security review of current branch"
+      echo "  edc review-all --agent $agent HEAD --base main # security + delivery + quality review"
+      echo "  edc security-review --agent $agent --base main # security-only review"
       echo "  edc delivery-review --agent $agent HEAD --base main # delivery/architecture review"
       echo "  edc audit  --agent $agent             # code quality audit"
       echo "  edc doctor                            # validate context"

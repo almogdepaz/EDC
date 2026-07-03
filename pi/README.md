@@ -47,7 +47,7 @@ Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool rep
 1. Start `pi` in a git repository.
 2. Run `/edc`.
 3. Choose **Build context** once.
-4. Choose **Review current branch vs default branch**.
+4. Choose **Review all (security, delivery, quality)**.
 5. Check progress with **Job status**.
 
 ## Command
@@ -60,7 +60,8 @@ Pi exposes one interactive command:
 
 Menu actions:
 
-- Review current branch vs default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background security review with `HEAD --base <detected-base>`
+- Review all (security, delivery, quality) — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and runs security review, delivery/architecture review, then quality audit with `HEAD --base <detected-base>`
+- Security review current branch vs default branch — starts a background security-only review with `HEAD --base <detected-base>`
 - Review delivery / architecture — detects the repo default branch and starts a background delivery/architecture review with `HEAD --base <detected-base>`
 - Job status — shows the current background job status
 - Build context — starts a background context build
@@ -71,7 +72,8 @@ Menu actions:
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
 
 ```bash
-edc review --agent pi HEAD --base <default-branch>
+edc review-all --agent pi HEAD --base <default-branch>
+edc security-review --agent pi HEAD --base <default-branch>
 edc delivery-review --agent pi HEAD --base <default-branch>
 edc build --agent pi
 edc update --agent pi --base <default-branch>

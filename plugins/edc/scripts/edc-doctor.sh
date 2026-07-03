@@ -58,7 +58,7 @@ if [ "$failures" -eq 0 ]; then
   states_file="$tmp_dir/states.tsv"
   git ls-files > "$paths_file"
   set +e
-  node "$CLASSIFY_CLI" "${ignore_args[@]}" "$MANIFEST" < "$paths_file" > "$states_file" 2> "$tmp_dir/classify.err"
+  node "$CLASSIFY_CLI" ${ignore_args[@]+"${ignore_args[@]}"} "$MANIFEST" < "$paths_file" > "$states_file" 2> "$tmp_dir/classify.err"
   rc=$?
   set -e
   if [ "$rc" -ne 0 ]; then

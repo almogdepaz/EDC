@@ -76,7 +76,7 @@ _edc_split_recovery_args() {
   done
   if [ "$seen_sep" -eq 0 ]; then
     # No separator: same args go to both phases.
-    _edc_update_args=("${_edc_build_args[@]}")
+    _edc_update_args=(${_edc_build_args[@]+"${_edc_build_args[@]}"})
   fi
 }
 
@@ -100,14 +100,14 @@ recover_context_if_needed() {
     MISSING)
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..." >&2
       local build_prompt
-      build_prompt=$(resolve_prompt build "${_edc_build_args[@]}") || return 1
+      build_prompt=$(resolve_prompt build ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
       edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt" \
         || { echo "ERROR: edc-build invocation failed" >&2; return 1; }
       ;;
     STALE)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
       local update_prompt
-      update_prompt=$(resolve_prompt update "${_edc_update_args[@]}") || return 1
+      update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}) || return 1
       edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" \
         || { echo "ERROR: edc-update invocation failed" >&2; return 1; }
       ;;
@@ -124,7 +124,7 @@ recover_context_if_needed() {
     echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
     bash "$CLEAN_SLATE_SH" --force >&2 || true
     local force_build_prompt
-    force_build_prompt=$(resolve_prompt build --force "${_edc_build_args[@]}") || return 1
+    force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
     edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" \
       || { echo "ERROR: edc-build retry failed" >&2; return 1; }
   fi

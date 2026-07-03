@@ -84,14 +84,14 @@ uncovered=0
 ambiguous=0
 ignored=0
 ignore_args=()
-for glob in "${ignore_globs[@]}"; do
+for glob in ${ignore_globs[@]+"${ignore_globs[@]}"}; do
   ignore_args+=(--ignore "$glob")
 done
 
 paths_file="$tmp_dir/paths.txt"
 states_file="$tmp_dir/states.tsv"
 git ls-files > "$paths_file"
-if ! node "$classify_cli" "${ignore_args[@]}" "$input" < "$paths_file" > "$states_file"; then
+if ! node "$classify_cli" ${ignore_args[@]+"${ignore_args[@]}"} "$input" < "$paths_file" > "$states_file"; then
   echo "edc-manifest: classify-cli.mjs failed" >&2
   exit 1
 fi
@@ -120,5 +120,5 @@ node "$json_cli" manifest-finalize \
   "$uncovered" \
   "$ambiguous" \
   "$ignored" \
-  "${ignore_globs[@]}" \
+  ${ignore_globs[@]+"${ignore_globs[@]}"} \
   < "$input"

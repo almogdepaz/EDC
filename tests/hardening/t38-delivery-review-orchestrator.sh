@@ -109,7 +109,7 @@ setup_repo
 git branch -M main
 echo valid > "$TMPDIR_T38/scenario"
 result=0
-out=$("${EDC_BASH:-bash}" "$SCRIPT" --full 2>&1) || result=$?
+out=$(/bin/bash "$SCRIPT" --full 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-current.md ] \
   && grep -q 'DELIVERY_MODE: full' "$TMPDIR_T38/last-prompt" \
   && grep -q 'No git diff is the source of truth for this review.' "$TMPDIR_T38/last-prompt" \

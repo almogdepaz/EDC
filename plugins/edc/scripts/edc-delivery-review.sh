@@ -235,7 +235,7 @@ delivery_main() {
       || { echo "ERROR: base is not a commit-ish ref: $base" >&2; exit 2; }
   fi
 
-  recover_context_if_needed "${ignore_args[@]}" \
+  recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
     || exit 1
 
   local safe report_path prompt branch head_sha

@@ -166,7 +166,7 @@ update_main() {
 
   echo "→ spawning $EDC_AGENT_CLI for edc-update..."
   local prompt
-  prompt=$(resolve_prompt update "${passthrough[@]}") || exit 1
+  prompt=$(resolve_prompt update ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$prompt" \
     || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
 

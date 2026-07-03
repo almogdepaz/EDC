@@ -216,7 +216,6 @@ build_cmd() {
   finalize_agent_context 0
 
   local target="${PARSED_POSITIONAL_TARGET:-.}"
-  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   [ -d "$target" ] || die "build target directory not found: $target"
 
   local build_script
@@ -225,7 +224,7 @@ build_cmd() {
 
   (
     cd "$target"
-    EDC_AGENT_CLI="$PARSED_AGENT" bash "$build_script" "${passthrough[@]}"
+    EDC_AGENT_CLI="$PARSED_AGENT" bash "$build_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
   )
 }
 
@@ -233,48 +232,44 @@ review_cmd() {
   parse_agent_context_args review 1 passthrough passthrough "" "--base" "$@"
   finalize_agent_context 1
 
-  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local review_script
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 
 delivery_review_cmd() {
   parse_agent_context_args delivery-review 1 passthrough passthrough "" "--base" "$@"
   finalize_agent_context 1
 
-  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local delivery_script
   delivery_script="$(find_script edc-delivery-review.sh)" \
     || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 
 audit_cmd() {
   parse_agent_context_args audit 1 none strict "" "" "$@"
   finalize_agent_context 1
 
-  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 
 update_cmd() {
   parse_agent_context_args update 1 none strict "" "--base" "$@"
   finalize_agent_context 1
 
-  local -a passthrough=("${PARSED_PASSTHROUGH[@]}")
   local update_script
   update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$update_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$update_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 doctor_cmd() {
   local doctor_script

@@ -406,7 +406,7 @@ auto_mode() {
   # existing context; it just refuses to create/update it. --ignore-context is
   # the stronger pure-baseline mode.
   if [ "$no_context_refresh" -ne 1 ] && [ "$ignore_context" -ne 1 ]; then
-    recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
+    recover_context_if_needed ${build_args[@]+"${build_args[@]}"} -- ${update_args[@]+"${update_args[@]}"} \
       || exit 1
   fi
 
@@ -415,7 +415,7 @@ auto_mode() {
   # substitution confines that exit to the subshell while preserving filesystem
   # outputs under $EDC_REVIEW_TASKS_DIR.
   local out build_rc=0
-  out=$(build_mode "$target" "${extra_args[@]}" 2>&1) || build_rc=$?
+  out=$(build_mode "$target" ${extra_args[@]+"${extra_args[@]}"} 2>&1) || build_rc=$?
 
   if [ "$build_rc" -ne 0 ] || [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
@@ -611,7 +611,7 @@ build_mode() {
   # $EDC_REVIEW_TASKS_DIR/ - itself under $EDC_CONTEXT_DIR/ - or prior
   # review-*.md files as if they were source).
   files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
-  files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
+  files=$(filter_ignored_files "$files" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
 
   if [ -z "$files" ]; then
     echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
@@ -812,7 +812,7 @@ TASK
   if [ "$ambiguous_count" -gt 0 ]; then
     echo "ERROR: $ambiguous_count file(s) match multiple modules or contextless entries:" >&2
     local line
-    for line in "${ambiguous_lines[@]}"; do
+    for line in ${ambiguous_lines[@]+"${ambiguous_lines[@]}"}; do
       echo "  $line" >&2
     done
     echo "HINT: edit $MANIFEST - bump priority, tighten match rules, or remove overlapping contextless globs" >&2
@@ -824,7 +824,7 @@ TASK
       fail)
         echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (policy=fail):" >&2
         local f
-        for f in "${unmapped_unexpected[@]}"; do
+        for f in ${unmapped_unexpected[@]+"${unmapped_unexpected[@]}"}; do
           echo "  $f" >&2
         done
         echo "HINT: add a module rule or contextless.entries coverage in $MANIFEST, then re-run." >&2
@@ -833,7 +833,7 @@ TASK
       warn-allow)
         echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (will review under 'unmapped'):" >&2
         local f
-        for f in "${unmapped_unexpected[@]}"; do
+        for f in ${unmapped_unexpected[@]+"${unmapped_unexpected[@]}"}; do
           echo "  $f" >&2
         done
         ;;
@@ -850,7 +850,7 @@ TASK
   mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
   local sorted_modules
-  sorted_modules=$(printf '%s\n' "${module_names[@]}" | sort)
+  sorted_modules=$(printf '%s\n' ${module_names[@]+"${module_names[@]}"} | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
   local context_mode

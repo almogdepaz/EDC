@@ -249,7 +249,7 @@ build_main() {
   fi
 
   echo "→ spawning $EDC_AGENT_CLI for edc-$action..."
-  prompt=$(resolve_prompt "$action" "${passthrough[@]}") || exit 1
+  prompt=$(resolve_prompt "$action" ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   local timeout_var
   if [ "$action" = "update" ]; then
     timeout_var="${EDC_UPDATE_TIMEOUT:-1800}"

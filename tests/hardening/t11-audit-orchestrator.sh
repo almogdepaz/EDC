@@ -147,7 +147,7 @@ which_claude=$(command -v claude)
 setup_repo "none"
 echo "valid" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
+out=$(/bin/bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && [ "$(grep -c '^worker:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)" -eq 2 ] \
    && grep -q '^synthesis$' "$TMPDIR_T11/audit-log" \

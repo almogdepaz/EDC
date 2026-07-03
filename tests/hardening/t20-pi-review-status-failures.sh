@@ -125,6 +125,22 @@ exit 0
   const structuredSuccessStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
   assert.match(structuredSuccessStatus.content, /final review: review-structured\.md/);
 
+  writeFileSync(reviewScript, `#!/usr/bin/env bash
+set -euo pipefail
+echo 'ERROR: script did not produce review tasks. Output:' >&2
+echo 'ERROR: no changed files found for target: HEAD' >&2
+echo 'HINT: review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base.' >&2
+exit 1
+`);
+  chmodSync(reviewScript, 0o755);
+  selections.push("Review current branch vs default branch", "Job status");
+  await handler("", ctx);
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")) && /no changed files/.test(readFileSync(statusPath, "utf-8")), 3000));
+  await handler("", ctx);
+  const noChangesStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
+  assert.match(noChangesStatus.content, /reason: no changed files found for review/);
+  assert.match(noChangesStatus.content, /hint: review uses committed diff plus dirty tracked files/);
+
   const oldStartedAt = new Date(Date.now() - 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
   writeFileSync(statusPath, [
     "kind=review",

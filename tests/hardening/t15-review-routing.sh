@@ -622,16 +622,64 @@ TMPDIR_T15O=$(mktemp -d)
   rm -rf "$TMPDIR_T15O"
 )
 
-# ── 15.17: review auto-mode does not use build output as IPC ──────────────
+# ── 15.17: dirty tracked worktree files are review inputs ─────────────────
+TMPDIR_T15Q=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15Q"
+  write_minimal_context
+  mkdir -p src
+  echo "original" > src/dirty.ts
+  git add src edc-context
+  git commit -q -m "add tracked source"
+  head=$(git rev-parse HEAD)
+  write_manifest edc-context/manifest.json "$head" "warn-allow" '[
+    {"name":"core","doc":"edc-context/modules/core.md","priority":100,"match":{"prefixes":["src/"]}}
+  ]'
+  echo "dirty" > src/dirty.ts
+
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && [ -f edc-context/review-tasks/core.md ] \
+     && grep -q 'src/dirty.ts' edc-context/review-tasks/core.md; then
+    check "15.17: dirty tracked worktree files are included in review tasks" 1
+  else
+    check "15.17: dirty tracked worktree files are included in review tasks" 0
+    echo "$out"
+    cat edc-context/review-tasks/core.md 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15Q"
+)
+
+# ── 15.18: no committed or dirty tracked changes gives actionable error ───
+TMPDIR_T15R=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15R"
+  set +e
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD --ignore-context 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] \
+     && echo "$out" | grep -q 'no changed files found for target: HEAD' \
+     && echo "$out" | grep -q 'dirty tracked files'; then
+    check "15.18: no-change review failure explains dirty tracked-file fallback" 1
+  else
+    check "15.18: no-change review failure explains dirty tracked-file fallback" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15R"
+)
+
+# ── 15.19: review auto-mode does not use build output as IPC ──────────────
 if ! grep -q 'bash "$0" --build' "$SCRIPT" \
    && ! grep -q 'grep -q "\^Review tasks ready"' "$SCRIPT" \
    && grep -q 'find "$EDC_REVIEW_TASKS_DIR"' "$SCRIPT"; then
-  check "15.17: review auto-mode derives task files without shell/log IPC" 1
+  check "15.19: review auto-mode derives task files without shell/log IPC" 1
 else
-  check "15.17: review auto-mode derives task files without shell/log IPC" 0
+  check "15.19: review auto-mode derives task files without shell/log IPC" 0
 fi
 
-# ── 15.18: gh PR diff failures surface stderr ──────────────────────────────
+# ── 15.20: gh PR diff failures surface stderr ──────────────────────────────
 TMPDIR_T15P=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15P"
@@ -647,9 +695,9 @@ EOF
   rc=$?
   set -e
   if [ "$rc" -eq 2 ] && echo "$out" | grep -q "gh pr diff failed" && echo "$out" | grep -q "gh auth failed"; then
-    check "15.18: gh PR diff failure reports gh stderr" 1
+    check "15.20: gh PR diff failure reports gh stderr" 1
   else
-    check "15.18: gh PR diff failure reports gh stderr" 0
+    check "15.20: gh PR diff failure reports gh stderr" 0
     echo "$out"
   fi
   rm -rf "$TMPDIR_T15P"

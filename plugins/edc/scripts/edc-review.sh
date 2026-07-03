@@ -54,6 +54,32 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
+tracked_dirty_files() {
+  {
+    git diff --name-only
+    git diff --cached --name-only
+  } | sed '/^$/d' | sort -u
+}
+
+append_current_head_dirty_files() {
+  local target="$1" files="$2"
+  local target_sha head_sha dirty_files
+  target_sha=$(git rev-parse --verify "$target^{commit}" 2>/dev/null || true)
+  head_sha=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)
+  if [ -z "$target_sha" ] || [ -z "$head_sha" ] || [ "$target_sha" != "$head_sha" ]; then
+    printf '%s\n' "$files" | sed '/^$/d'
+    return 0
+  fi
+
+  dirty_files=$(tracked_dirty_files)
+  if [ -z "$dirty_files" ]; then
+    printf '%s\n' "$files" | sed '/^$/d'
+    return 0
+  fi
+
+  printf '%s\n%s\n' "$files" "$dirty_files" | sed '/^$/d' | sort -u
+}
+
 EDC_REVIEW_RESULT_ACTIVE=0
 EDC_REVIEW_RESULT_WRITTEN=0
 EDC_REVIEW_RESULT_STARTED_HEAD=""
@@ -420,7 +446,16 @@ auto_mode() {
   if [ "$build_rc" -ne 0 ] || [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
     echo "$out" >&2
-    edc_write_review_result 1 "review-task-build-failed" "review task generation failed" "inspect the log for task-generation output and rerun after fixing it" "" ""
+    local failure_reason="review task generation failed"
+    local failure_hint="inspect the log for task-generation output and rerun after fixing it"
+    if grep -q 'ERROR: no changed files found for target:' <<< "$out"; then
+      failure_reason="no changed files found for review"
+      failure_hint="review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base"
+    elif grep -q 'ERROR: no reviewable files after filtering tool output and ignore rules' <<< "$out"; then
+      failure_reason="no reviewable files after filtering"
+      failure_hint="changed files are EDC scratch files or matched by --ignore/.edcignore; choose another target/base or adjust ignore rules"
+    fi
+    edc_write_review_result 1 "review-task-build-failed" "$failure_reason" "$failure_hint" "" ""
     exit 1
   fi
 
@@ -599,10 +634,12 @@ build_mode() {
   else
     local base="${baseline:-${target}^}"
     files=$(git diff -z "${base}...${target}" --name-only | tr '\0' '\n')
+    files=$(append_current_head_dirty_files "$target" "$files")
   fi
 
   if [ -z "$files" ]; then
     echo "ERROR: no changed files found for target: $target" >&2
+    echo "HINT: review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base." >&2
     exit 2
   fi
 

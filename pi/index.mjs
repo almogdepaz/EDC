@@ -528,6 +528,12 @@ if [ "$rc" -ne 0 ]; then${structuredPrefix}
   elif grep -q "has no '## ' headings" "$log_file" 2>/dev/null; then
     failure_reason="review report validation failed"
     failure_hint="inspect the module reviewer output in the log; the report is missing required headings"
+  elif grep -q 'ERROR: no changed files found for target:' "$log_file" 2>/dev/null; then
+    failure_reason="no changed files found for review"
+    failure_hint="review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base"
+  elif grep -q 'ERROR: no reviewable files after filtering tool output and ignore rules' "$log_file" 2>/dev/null; then
+    failure_reason="no reviewable files after filtering"
+    failure_hint="changed files are EDC scratch files or matched by --ignore/.edcignore; choose another target/base or adjust ignore rules"
   elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
     failure_reason="pi provider websocket closed during background review"
     failure_hint="provider connection dropped while a nested pi subprocess was running; rerun edc review, and if it repeats run edc update --agent pi separately or reduce context scope"

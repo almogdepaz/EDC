@@ -95,12 +95,13 @@ echo "PASS: hidden prompt bundles live outside public skills"
 
 # ── 5e: plugin script bundle exists ─────────────────────────────────────────
 if [ -f "$PLUGIN_SCRIPT" ] \
+  && [ -f "plugins/edc/scripts/edc-review-all.sh" ] \
   && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/json-cli.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/stream-filter.mjs" ]; then
-  echo "PASS: plugin runtime includes review + node helper CLIs"
+  echo "PASS: plugin runtime includes review/review-all + node helper CLIs"
 else
-  echo "FAIL: plugin runtime missing review/node helper CLI — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/review-all/node helper CLI — install hook cannot copy"
   exit 1
 fi
 

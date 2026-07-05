@@ -171,6 +171,7 @@ install_terminal_cli() {
   local runtime_install_entries=(
     "plugins/edc/scripts/edc|$scripts_target/edc|x"
     "plugins/edc/scripts/edc-review.sh|$scripts_target/edc-review.sh|x"
+    "plugins/edc/scripts/edc-review-all.sh|$scripts_target/edc-review-all.sh|x"
     "plugins/edc/scripts/edc-delivery-review.sh|$scripts_target/edc-delivery-review.sh|x"
     "plugins/edc/scripts/edc-build.sh|$scripts_target/edc-build.sh|x"
     "plugins/edc/scripts/edc-update.sh|$scripts_target/edc-update.sh|x"

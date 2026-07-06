@@ -60,6 +60,9 @@ fi
 printf '## Findings\n\nmock review\n' > edc-context/review-tasks/report-core.md
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
+if [ "${EDC_T39_EXIT_AFTER_REPORT:-0}" = "1" ]; then
+  exit 1
+fi
 MOCK
   chmod +x "$TMP/bin/claude"
 }
@@ -116,6 +119,31 @@ assert.equal(result.reasonCode, 'success');
 assert.equal(result.finalReview, 'review-HEAD.md');
 NODE
 echo "PASS: review success writes structured result"
+
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
+warn_rc=$?
+set -e
+if [ "$warn_rc" -eq 0 ] \
+  && [ -f review-HEAD.md ] \
+  && grep -q 'mock review' review-HEAD.md \
+  && grep -q 'review subprocess for module core reported failure, but report validation passed' "$LOG_DIR/warn.err"; then
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success');
+NODE
+  echo "PASS: review accepts valid report after failed agent rc with warning"
+else
+  echo "FAIL: review did not accept valid report after failed agent rc"
+  echo "--- stdout ---"; cat "$LOG_DIR/warn.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/warn.err"
+  exit 1
+fi
 
 if [ -f "$LOG_DIR/shasum-paths.log" ] && grep -qx 'src/clean.txt' "$LOG_DIR/shasum-paths.log"; then
   echo "FAIL: review containment hashed clean tracked files"

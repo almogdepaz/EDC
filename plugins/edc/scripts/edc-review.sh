@@ -498,14 +498,17 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report
+    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report spawn_rc
     allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
     before_snapshot=$(mktemp)
     after_snapshot=$(mktemp)
     edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report"
     review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
-    edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt" \
-      || { rm -f "$before_snapshot" "$after_snapshot"; echo "ERROR: review invocation failed for module $module" >&2; edc_write_review_result 1 "review-invocation-failed" "review invocation failed for module $module" "inspect the module reviewer output in the log and rerun after fixing it" "$module" ""; exit 1; }
+    if edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt"; then
+      spawn_rc=0
+    else
+      spawn_rc=$?
+    fi
     edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report"
     changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
     rm -f "$before_snapshot" "$after_snapshot"
@@ -517,6 +520,10 @@ auto_mode() {
     fi
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
+    if [ "$spawn_rc" -ne 0 ]; then
+      echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
+      echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
+    fi
   done <<< "$tasks"
 
   # Consolidate + verify

@@ -90,6 +90,14 @@ _edc_recovery_success_with_warning_if_fresh() {
   return 1
 }
 
+_edc_recovery_failed_after_spawn() {
+  local phase="$1"
+  echo "EDC context recovery failed." >&2
+  echo "reason: $phase subprocess failed and context validation did not pass" >&2
+  echo "next step: inspect the agent log above, then rerun context recovery after fixing the reported issue" >&2
+  echo "hint: if the agent wrote partial context, run edc doctor or rebuild with edc build --agent <agent> --force" >&2
+}
+
 recover_context_if_needed() {
   if assert_context_fresh 2>/dev/null; then
     return 0
@@ -112,7 +120,7 @@ recover_context_if_needed() {
       local build_prompt
       build_prompt=$(resolve_prompt build ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
       if ! edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt"; then
-        _edc_recovery_success_with_warning_if_fresh "edc-build" || { echo "ERROR: edc-build invocation failed" >&2; return 1; }
+        _edc_recovery_success_with_warning_if_fresh "edc-build" || { _edc_recovery_failed_after_spawn "edc-build"; return 1; }
       fi
       ;;
     STALE)
@@ -120,7 +128,7 @@ recover_context_if_needed() {
       local update_prompt
       update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}) || return 1
       if ! edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt"; then
-        _edc_recovery_success_with_warning_if_fresh "edc-update" || { echo "ERROR: edc-update invocation failed" >&2; return 1; }
+        _edc_recovery_success_with_warning_if_fresh "edc-update" || { _edc_recovery_failed_after_spawn "edc-update"; return 1; }
       fi
       ;;
   esac
@@ -138,7 +146,7 @@ recover_context_if_needed() {
     local force_build_prompt
     force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
     if ! edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt"; then
-      _edc_recovery_success_with_warning_if_fresh "edc-build retry" || { echo "ERROR: edc-build retry failed" >&2; return 1; }
+      _edc_recovery_success_with_warning_if_fresh "edc-build retry" || { _edc_recovery_failed_after_spawn "edc-build retry"; return 1; }
     fi
   fi
 

@@ -23,7 +23,8 @@ setup_repo() {
 
 run_recovery_after_failed_spawn() {
   local repo="$1"
-  local script="$TMP/recovery.sh"
+  local mode="${2:-writes-valid-context}"
+  local script="$TMP/recovery-$mode.sh"
   cat > "$script" <<'EOS'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -57,15 +58,17 @@ read_manifest_source_commit() {
 }
 
 edc_spawn() {
-  mkdir -p edc-context
-  cat > "$EDC_INDEX" <<'EOF_INDEX'
+  if [ "$SPAWN_MODE" = "writes-valid-context" ]; then
+    mkdir -p edc-context
+    cat > "$EDC_INDEX" <<'EOF_INDEX'
 # Index
 ## Module Map
 - app
 EOF_INDEX
-  cat > "$MANIFEST" <<EOF_MANIFEST
+    cat > "$MANIFEST" <<EOF_MANIFEST
 {"schemaVersion":2,"sourceCommit":"$(git rev-parse HEAD)","modules":[]}
 EOF_MANIFEST
+  fi
   return 1
 }
 
@@ -74,7 +77,7 @@ EOF_MANIFEST
 recover_context_if_needed
 EOS
   chmod +x "$script"
-  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
+  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" SPAWN_MODE="$mode" "$script" 2>&1
 }
 
 repo="$TMP/repo"
@@ -91,6 +94,24 @@ if grep -q 'EDC context recovery succeeded with warning' <<< "$output" \
 else
   echo "FAIL: recovery did not emit the expected success-with-warning diagnostics"
   printf '%s\n' "$output"
+  exit 1
+fi
+
+failing_repo="$TMP/failing-repo"
+setup_repo "$failing_repo"
+if failure_output=$(run_recovery_after_failed_spawn "$failing_repo" no-context 2>&1); then
+  echo "FAIL: recovery succeeded even though subprocess failed and context validation failed"
+  printf '%s\n' "$failure_output"
+  exit 1
+fi
+
+if grep -q 'EDC context recovery failed.' <<< "$failure_output" \
+  && grep -q 'reason: edc-build subprocess failed and context validation did not pass' <<< "$failure_output" \
+  && grep -q 'next step: inspect the agent log' <<< "$failure_output"; then
+  echo "PASS: recovery failure reports clear reason and next step"
+else
+  echo "FAIL: recovery failure did not report clear diagnostics"
+  printf '%s\n' "$failure_output"
   exit 1
 fi
 

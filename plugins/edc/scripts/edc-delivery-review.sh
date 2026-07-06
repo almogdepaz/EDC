@@ -242,7 +242,7 @@ delivery_main() {
   fi
 
   recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-    || exit 1
+    || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
   local safe report_path prompt branch head_sha
   if [ "$full_mode" -eq 1 ]; then

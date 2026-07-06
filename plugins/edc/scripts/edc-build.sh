@@ -257,7 +257,7 @@ build_main() {
     timeout_var="${EDC_BUILD_TIMEOUT:-3600}"
   fi
   edc_spawn "edc-$action" "$timeout_var" "$prompt" \
-    || { echo "ERROR: edc-$action invocation failed" >&2; exit 1; }
+    || { echo "ERROR: edc-$action invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-$action agent invocation failed" "inspect the log above, then rerun edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
   if [ "$action" = "build" ]; then
     finalize_agents_entrypoint

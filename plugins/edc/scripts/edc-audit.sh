@@ -190,7 +190,7 @@ audit_main() {
 
   # Gate on freshness; recover if needed. After this returns, $EDC_CONTEXT_DIR is fresh.
   recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-    || exit 1
+    || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
   # Spawn one scoped audit subprocess per real module, then synthesize the
   # worker outputs into the canonical reports.

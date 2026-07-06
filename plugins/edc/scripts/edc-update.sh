@@ -168,7 +168,7 @@ update_main() {
   local prompt
   prompt=$(resolve_prompt update ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$prompt" \
-    || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+    || { echo "ERROR: edc-update invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-update agent invocation failed" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI --base $base"; exit 1; }
 
   # Validate via doctor.
   if [ ! -f "$DOCTOR_SH" ]; then

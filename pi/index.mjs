@@ -36,16 +36,23 @@ const EDC_COMMAND = {
 };
 
 const EDC_MENU = {
-  REVIEW_ALL_DEFAULT: "Review all (security, delivery, quality)",
-  SECURITY_REVIEW_DEFAULT: "Security review current branch vs default branch",
-  DELIVERY_REVIEW_DEFAULT: "Review delivery / architecture",
-  JOB_STATUS: "Job status",
-  KILL_JOB: "Kill running EDC job",
-  BUILD: "Build context",
-  UPDATE_DEFAULT: "Update context from default branch",
-  AUDIT: "Audit code quality",
-  DOCTOR: "Doctor / validate context",
-  CANCEL: "Cancel",
+  REVIEW_ALL: "review all changes",
+  SECURITY_REVIEW: "security review",
+  DELIVERY_REVIEW: "delivery review",
+  QUALITY_REVIEW: "quality review",
+  JOB_STATUS: "job status",
+  KILL_JOB: "kill running edc job",
+  BUILD: "build context",
+  UPDATE_DEFAULT: "update context",
+  DOCTOR: "doctor / validate context",
+  CANCEL: "cancel",
+};
+
+const EDC_SCOPE_MENU = {
+  CHANGED_DEFAULT: "changed files vs default branch",
+  FULL_CURRENT: "full current repo",
+  CUSTOM_REFS: "custom refs",
+  CANCEL: "cancel",
 };
 
 const VISIBLE_SKILLS = ["edc-review", "edc-audit", "edc-delivery-review"];
@@ -103,23 +110,24 @@ function renderEdcHelp() {
     "Opens the interactive EDC menu.",
     "",
     "Menu actions:",
-    "- Review all (security, delivery, quality)",
-    "- Security review current branch vs default branch",
-    "- Review delivery / architecture",
-    "- Job status",
-    "- Kill running EDC job",
-    "- Build context",
-    "- Update context from default branch",
-    "- Audit code quality",
-    "- Doctor / validate context",
+    "- review all changes",
+    "- security review",
+    "- delivery review",
+    "- quality review",
+    "- job status",
+    "- kill running edc job",
+    "- build context",
+    "- update context",
+    "- doctor / validate context",
     "",
     "Direct commands:",
     "  /edc kill",
     "",
     "Non-interactive use is intentionally CLI-only:",
-    "  edc review-all --agent pi HEAD --base <default-branch>",
-    "  edc security-review --agent pi HEAD --base <default-branch>",
-    "  edc delivery-review --agent pi HEAD --base <default-branch>",
+    "  edc review --agent pi --diff <default-branch>...HEAD",
+    "  edc security-review --agent pi --diff <default-branch>...HEAD",
+    "  edc delivery-review --agent pi --diff <default-branch>...HEAD",
+    "  edc quality-review --agent pi",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -254,17 +262,50 @@ async function shouldProceedWithReview(args, ctx, freshness = getContextFreshnes
   );
 }
 
-function reviewDeclinedMessage(args) {
+function reviewDeclinedMessage(args, commandName = "review") {
   const renderedArgs = reviewArgsWithDefaultTarget(args);
   return [
     "Review cancelled; EDC context was not refreshed.",
     "",
     "To review anyway without refreshing context, use the CLI:",
-    `\`edc review --agent pi ${renderedArgs} --no-context-refresh\``,
+    `\`edc ${commandName} --agent pi ${renderedArgs} --no-context-refresh\``,
     "",
     "For a pure direct review that ignores any existing `edc-context/`, run:",
-    `\`edc review --agent pi ${renderedArgs} --ignore-context\``,
+    `\`edc ${commandName} --agent pi ${renderedArgs} --ignore-context\``,
   ].join("\n");
+}
+
+async function selectReviewScope(ctx, options = {}) {
+  const supportsFull = options.supportsFull === true;
+  const commandName = options.commandName || "review";
+  const choice = await ctx.ui.select("what do you want to review?", [
+    EDC_SCOPE_MENU.CHANGED_DEFAULT,
+    EDC_SCOPE_MENU.FULL_CURRENT,
+    EDC_SCOPE_MENU.CUSTOM_REFS,
+    EDC_SCOPE_MENU.CANCEL,
+  ]);
+
+  switch (choice) {
+    case EDC_SCOPE_MENU.CHANGED_DEFAULT:
+      return { args: defaultBaseReviewArgs(ctx.cwd) };
+    case EDC_SCOPE_MENU.FULL_CURRENT:
+      if (!supportsFull) {
+        return { error: `full current repo scope is not supported for edc ${commandName} yet; use changed files or custom refs.` };
+      }
+      return { args: ["--full"] };
+    case EDC_SCOPE_MENU.CUSTOM_REFS: {
+      if (typeof ctx.ui.input !== "function") {
+        return { error: `custom refs require CLI for now: edc ${commandName} --agent pi --diff <base>...<target>` };
+      }
+      const base = await ctx.ui.input("base ref", { placeholder: "origin/main" });
+      if (!base) return { cancelled: true };
+      const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
+      if (!target) return { cancelled: true };
+      return { args: [String(target), "--base", String(base)] };
+    }
+    default:
+      return { cancelled: true };
+  }
 }
 
 function findEdcScript(cwd, scriptName) {
@@ -904,8 +945,9 @@ function interactiveOnlyMessage() {
     "/edc is interactive-only.",
     "",
     "Use the EDC CLI for non-interactive runs:",
-    "  edc review-all --agent pi HEAD --base <default-branch>",
-    "  edc security-review --agent pi HEAD --base <default-branch>",
+    "  edc review --agent pi --diff <default-branch>...HEAD",
+    "  edc security-review --agent pi --diff <default-branch>...HEAD",
+    "  edc quality-review --agent pi",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -918,12 +960,19 @@ function killRunningJobAction(pi, ctx) {
   sendInfo(pi, "edc-job-kill", message);
 }
 
-async function runReviewAgainstDefault(pi, ctx, kind = "review", scriptName = "edc-review.sh") {
-  const renderedArgs = defaultBaseReviewArgs(ctx.cwd);
+async function runScopedReview(pi, ctx, kind, scriptName, options = {}) {
+  const scope = await selectReviewScope(ctx, options);
+  if (scope.cancelled) return;
+  if (scope.error) {
+    sendInfo(pi, "edc-review-scope", scope.error);
+    return;
+  }
+
+  const renderedArgs = scope.args || [];
   const freshness = getContextFreshness(ctx.cwd);
   const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
   if (!proceed) {
-    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
+    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, options.commandName || "review"));
     return;
   }
 
@@ -975,27 +1024,27 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   const choice = await ctx.ui.select("EDC", [
-    EDC_MENU.REVIEW_ALL_DEFAULT,
-    EDC_MENU.SECURITY_REVIEW_DEFAULT,
-    EDC_MENU.DELIVERY_REVIEW_DEFAULT,
+    EDC_MENU.REVIEW_ALL,
+    EDC_MENU.SECURITY_REVIEW,
+    EDC_MENU.DELIVERY_REVIEW,
+    EDC_MENU.QUALITY_REVIEW,
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
     EDC_MENU.UPDATE_DEFAULT,
-    EDC_MENU.AUDIT,
     EDC_MENU.DOCTOR,
     EDC_MENU.CANCEL,
   ]);
 
   switch (choice) {
-    case EDC_MENU.REVIEW_ALL_DEFAULT:
-      await runReviewAgainstDefault(pi, ctx, "review-all", "edc-review-all.sh");
+    case EDC_MENU.REVIEW_ALL:
+      await runScopedReview(pi, ctx, "review-all", "edc-review-all.sh", { commandName: "review" });
       break;
-    case EDC_MENU.SECURITY_REVIEW_DEFAULT:
-      await runReviewAgainstDefault(pi, ctx, "review", "edc-review.sh");
+    case EDC_MENU.SECURITY_REVIEW:
+      await runScopedReview(pi, ctx, "review", "edc-review.sh", { commandName: "security-review" });
       break;
-    case EDC_MENU.DELIVERY_REVIEW_DEFAULT:
-      runBackgroundAction(pi, ctx, "delivery-review", "edc-delivery-review.sh");
+    case EDC_MENU.DELIVERY_REVIEW:
+      await runScopedReview(pi, ctx, "delivery-review", "edc-delivery-review.sh", { commandName: "delivery-review", supportsFull: true });
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);
@@ -1010,7 +1059,7 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.UPDATE_DEFAULT:
       runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
       break;
-    case EDC_MENU.AUDIT:
+    case EDC_MENU.QUALITY_REVIEW:
       runBackgroundAction(pi, ctx, "audit", "edc-audit.sh");
       break;
     case EDC_MENU.DOCTOR:

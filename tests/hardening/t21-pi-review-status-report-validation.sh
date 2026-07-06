@@ -45,7 +45,7 @@ exit 1
   };
   await edcExtension(pi);
 
-  const selections = ["Security review current branch vs default branch", "Job status"];
+  const selections = ["security review", "changed files vs default branch", "job status"];
   const ctx = {
     cwd,
     hasUI: true,

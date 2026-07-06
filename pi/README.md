@@ -36,8 +36,7 @@ Use a pinned git ref when you need reproducible installs, e.g. `pi install git:g
 Orchestrated pi reviews require:
 
 - `pi`, `git`, and `node` on `PATH`
-- Bash >= 4; on macOS, install modern Bash with Homebrew if `/bin/bash` is 3.2
-- shell access for background build/update/review/delivery-review/audit subprocesses
+- shell access for background build/update/review/delivery-review/quality-review subprocesses
 - write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`
 
 Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may intentionally block or redirect those operations. EDC does not try to bypass them.
@@ -46,9 +45,9 @@ Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool rep
 
 1. Start `pi` in a git repository.
 2. Run `/edc`.
-3. Choose **Build context** once.
-4. Choose **Review all (security, delivery, quality)**.
-5. Check progress with **Job status**.
+3. Choose **build context** once.
+4. Choose **review all changes** → **changed files vs default branch**.
+5. Check progress with **job status**.
 
 ## Command
 
@@ -60,32 +59,33 @@ Pi exposes one interactive command:
 
 Menu actions:
 
-- Review all (security, delivery, quality) — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and runs security review, delivery/architecture review, then quality audit with `HEAD --base <detected-base>`
-- Security review current branch vs default branch — starts a background security-only review with `HEAD --base <detected-base>`
-- Review delivery / architecture — detects the repo default branch and starts a background delivery/architecture review with `HEAD --base <detected-base>`
-- Job status — shows the current background job status
-- Build context — starts a background context build
-- Update context from default branch — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
-- Audit code quality — starts a background audit
-- Doctor / validate context
+- review all changes — choose a scope, then run security review, delivery/architecture review, and quality review
+- security review — choose a scope, then start a background security-only review
+- delivery review — choose a scope, then start a background delivery/architecture review
+- quality review — starts the existing quality-review/audit orchestrator
+- job status — shows the current background job status
+- build context — starts a background context build
+- update context — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
+- doctor / validate context
 
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
 
 ```bash
-edc review-all --agent pi HEAD --base <default-branch>
-edc security-review --agent pi HEAD --base <default-branch>
-edc delivery-review --agent pi HEAD --base <default-branch>
+edc review --agent pi --diff <default-branch>...HEAD
+edc security-review --agent pi --diff <default-branch>...HEAD
+edc delivery-review --agent pi --diff <default-branch>...HEAD
+edc quality-review --agent pi
 edc build --agent pi
 edc update --agent pi --base <default-branch>
 ```
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope: changed files vs default branch, full current repo where supported, or custom refs where the UI provides text input. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state
 
-Review, build, update, and audit run in the background so the TUI stays usable. EDC keeps exactly one current job slot per git repo:
+Review, build, update, and quality-review/audit run in the background so the TUI stays usable. EDC keeps exactly one current job slot per git repo:
 
 | File | Purpose |
 |---|---|
@@ -103,7 +103,7 @@ Pi exposes only the human-facing EDC methodology skills:
 | Skill | Use |
 |---|---|
 | `edc-review` | Apply the EDC security/adversarial review methodology directly in chat, without running the full orchestrator. |
-| `edc-audit` | Apply the EDC code quality / maintainability audit methodology directly in chat. |
+| `edc-audit` | Apply the EDC quality-review methodology directly in chat. |
 | `edc-delivery-review` | Apply the EDC goal/spec delivery + architecture-fit review methodology directly in chat. |
 
 Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
@@ -116,7 +116,7 @@ Known interactions:
 
 - Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
 - Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
-- Build/update/review/delivery-review/audit need the requirements and write permissions listed above.
+- Build/update/review/delivery-review/quality-review need the requirements and write permissions listed above.
 
 ## Modes
 

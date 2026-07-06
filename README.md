@@ -2,7 +2,7 @@
 
 Repo maps for coding agents.
 
-EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, audits, debugging, and context loading.
+EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, quality review, debugging, and context loading.
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
@@ -12,7 +12,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 pi install npm:@sgtbeatdown/edc
 cd your-repo
 pi
-# run /edc, choose Build context, then Review all (security, delivery, quality)
+# run /edc, choose build context, then review all changes
 ```
 
 First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
@@ -42,9 +42,11 @@ The generated context lives in the target repository under `edc-context/`: an ov
 |---------|----------------|
 | **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
 | **update** | Before review/delivery-review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
-| **review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
+| **review** | On a branch diff. Runs all lenses: security, delivery/architecture, and quality review. |
+| **security-review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
 | **delivery-review** | On a branch or commit diff. Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
-| **audit** | Anytime. Compares context expectations against actual code to flag code-quality and maintainability risks. |
+| **quality-review** | Anytime. Compares context expectations against actual code to flag code-quality and maintainability risks. |
+| **audit** | Deprecated alias for `quality-review`. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
 
@@ -63,8 +65,10 @@ edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
 # run all review lenses in the current repo: security, delivery, then quality
-edc review-all --agent claude HEAD --base main
-edc review-all --agent pi HEAD --base main
+edc review --agent claude --diff main...HEAD
+edc review --agent pi --diff main...HEAD
+# legacy alias during transition
+edc review-all --agent pi --diff main...HEAD
 
 # run the security-only review pipeline in the current repo
 edc security-review --agent claude --base main
@@ -78,9 +82,11 @@ edc security-review --agent codex HEAD --base main --ignore 'generated/**'
 edc delivery-review --agent claude HEAD --base main
 edc delivery-review --agent pi HEAD --base main
 
-# code quality / maintainability audit
-edc audit  --agent claude
-edc audit  --agent pi
+# code quality / maintainability review
+edc quality-review --agent claude
+edc quality-review --agent pi
+# deprecated alias
+edc audit --agent pi
 
 # runtime-mode toggle (used by Claude Code and pi inject/advisory hooks)
 edc mode                # show current mode
@@ -91,7 +97,7 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, and `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it is missing or stale. Review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security-review`, `delivery-review`, and `quality-review` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Differential scope can be written as `--diff <base>...<target>` or legacy `target --base <ref>`. Security review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ## Install
 
@@ -166,7 +172,7 @@ Claude, Cursor, and Codex expose thin wrappers for the same deterministic orches
 | Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 | Cursor | `/edc-build`, `/edc-update`, `/edc-run-review`, `/edc-doctor`; public methodology skills |
 | Codex | `$edc-build`, `$edc-update`, `$edc-run-review`, `$edc-doctor`; public methodology skills |
-| pi | `/edc` interactive menu: review/delivery-review/status/build/update/audit/doctor; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
+| pi | `/edc` interactive menu: review all changes/security review/delivery review/quality review/status/build/update/doctor; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 
 ### Review invocation examples
 

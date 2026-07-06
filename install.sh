@@ -475,7 +475,9 @@ case "$AGENT" in
     fi
     install_terminal_cli
     install_edc_skills "$HOME/.edc/skills"
-    echo "Done. Run /edc inside pi for review/delivery-review/status/build/update/audit/doctor. Toggle mode with 'edc mode advisory|inject'."
+    echo "installed extension/source path: $SCRIPT_DIR/pi"
+    echo "restart pi or run /reload in existing sessions to refresh menu labels."
+    echo "Done. Run /edc inside pi for review/security review/delivery review/quality review/status/build/update/doctor. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi
     print_path_hint
     ;;

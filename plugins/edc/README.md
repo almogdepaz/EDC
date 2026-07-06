@@ -16,9 +16,9 @@ the user-facing tour.
 | `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
-Audit, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.
+Quality review, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu (review/delivery-review/status/build/update/audit/doctor) registered by `pi/`.
+Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu (review all changes/security review/delivery review/quality review/status/build/update/doctor) registered by `pi/`.
 
 ## Internal structure
 
@@ -31,10 +31,10 @@ plugins/edc/
     edc-doctor.md
 
   scripts/                             # everything that ships to ~/.edc/scripts/
-    edc                                # terminal CLI (build / update / review / audit / mode / doctor)
+    edc                                # terminal CLI (build / update / review / quality-review / mode / doctor)
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
-    edc-audit.sh                       # code quality / maintainability audit orchestrator
+    edc-audit.sh                       # quality review / maintainability orchestrator
     edc-review.sh                      # security/adversarial review orchestrator
     edc-delivery-review.sh             # goal/spec delivery + architecture-fit review orchestrator
     edc-doctor.sh                      # context-tree validator
@@ -91,7 +91,7 @@ their outputs.
 - `adversarial.md` — attacker modeling methodology
 - `reporting.md` — security report contract
 
-`skills/edc-audit/` contains the code quality audit bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting.
+`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting.
 
 `skills/edc-delivery-review/` contains the delivery/architecture review bundle. It keeps goal/spec delivery and architecture fit as separate axes.
 

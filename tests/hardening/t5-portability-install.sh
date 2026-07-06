@@ -235,6 +235,14 @@ else
   exit 1
 fi
 
+if grep -q 'restart pi or run /reload' install.sh \
+  && grep -q 'installed extension/source path' install.sh; then
+  echo "PASS: pi installer reminds users to reload existing sessions"
+else
+  echo "FAIL: pi installer missing reload guidance"
+  exit 1
+fi
+
 # ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
 TMPDIR_T5=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T5"' EXIT

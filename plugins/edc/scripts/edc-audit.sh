@@ -158,7 +158,7 @@ audit_main() {
   rm -rf "$AUDIT_TASKS_DIR"
   mkdir -p "$AUDIT_TASKS_DIR" "$EDC_REPORTS_DIR"
 
-  local module module_doc safe report_path worker_prompt module_count=0
+  local module module_doc safe report_path worker_prompt module_count=0 had_warning=0
   while IFS=$'\t' read -r module module_doc; do
     [ -n "${module:-}" ] || continue
     module_count=$((module_count + 1))
@@ -180,6 +180,7 @@ audit_main() {
     assert_markdown_report_valid "$report_path" "module $module" \
       || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
     if [ "$worker_rc" -ne 0 ]; then
+      had_warning=1
       echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
       echo "HINT: treating the validated module audit report as success; inspect the agent log for transport/provider diagnostics." >&2
     fi
@@ -204,6 +205,7 @@ audit_main() {
   # Validate reports.
   assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output in the log; canonical reports are missing or incomplete"; exit 1; }
   if [ "$synthesis_rc" -ne 0 ]; then
+    had_warning=1
     echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but report validation passed." >&2
     echo "HINT: treating the validated audit reports as success; inspect the agent log for transport/provider diagnostics." >&2
   fi
@@ -212,7 +214,11 @@ audit_main() {
     rm -rf "$AUDIT_TASKS_DIR"
   fi
 
-  edc_result_success
+  if [ "$had_warning" -ne 0 ]; then
+    edc_result_success_with_warning "audit validated outputs after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics"
+  else
+    edc_result_success
+  fi
   echo "Audit reports:"
   echo "  $EDC_COMPLEXITY"
   echo "  $EDC_ISSUES"

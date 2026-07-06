@@ -266,8 +266,10 @@ delivery_main() {
   if [ "$spawn_rc" -ne 0 ]; then
     echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but report validation passed." >&2
     echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
+    edc_result_success_with_warning "delivery review validated report after subprocess failure" "inspect the agent log for transport/provider diagnostics" "$report_path"
+  else
+    edc_result_success "$report_path"
   fi
-  edc_result_success "$report_path"
   echo "Delivery review report: $report_path"
   exit 0
 }

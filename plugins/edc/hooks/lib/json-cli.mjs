@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 function die(message, code = 1) {
@@ -25,6 +25,13 @@ function readJson(path) {
 
 function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function writeJsonFileAtomic(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(tmp, path);
 }
 
 function hasOwn(obj, key) {
@@ -123,6 +130,93 @@ function readableError(value) {
     return value.error?.message || value.message || JSON.stringify(value);
   }
   return String(value);
+}
+
+function inferResultStatus(exitCode, reasonCode) {
+  if (Number(exitCode) !== 0) return "failed";
+  return reasonCode === "success-with-warning" ? "success-with-warning" : "success";
+}
+
+function resultOutputs(result) {
+  const outputs = Array.isArray(result.outputs) ? result.outputs.filter((item) => typeof item === "string" && item.length > 0) : [];
+  if (typeof result.finalReview === "string" && result.finalReview.length > 0 && !outputs.includes(result.finalReview)) {
+    outputs.push(result.finalReview);
+  }
+  return outputs;
+}
+
+function normalizeReviewAllPhase(phase, resultFile, childExitCode) {
+  const childRc = Number(childExitCode);
+  if (!existsSync(resultFile)) {
+    return {
+      phase,
+      status: "failed",
+      exitCode: childRc === 0 ? 1 : childRc,
+      reasonCode: `${phase}-result-missing`,
+      message: `${phase} phase did not write a result file`,
+      hint: `inspect the ${phase} phase log output; durable result validation could not run`,
+      resultFile,
+      childExitCode: childRc,
+    };
+  }
+
+  let result;
+  try {
+    result = readJson(resultFile);
+  } catch {
+    return {
+      phase,
+      status: "failed",
+      exitCode: childRc === 0 ? 1 : childRc,
+      reasonCode: `${phase}-result-invalid`,
+      message: `${phase} phase wrote an invalid result file`,
+      hint: `inspect ${resultFile}; it must be valid JSON`,
+      resultFile,
+      childExitCode: childRc,
+    };
+  }
+
+  const resultExitCode = Number(result.exitCode ?? childRc);
+  let status = typeof result.status === "string" ? result.status : inferResultStatus(resultExitCode, result.reasonCode);
+  if (!new Set(["success", "failed", "success-with-warning"]).has(status)) status = inferResultStatus(resultExitCode, result.reasonCode);
+  if (childRc !== 0 && resultExitCode === 0 && status === "success") status = "success-with-warning";
+
+  return {
+    phase,
+    status,
+    exitCode: resultExitCode,
+    reasonCode: result.reasonCode || inferResultStatus(resultExitCode, result.reasonCode),
+    message: result.message || result.failureReason || `${phase} phase ${status}`,
+    hint: result.hint || result.failureHint || "",
+    outputs: resultOutputs(result),
+    resultFile,
+    childExitCode: childRc,
+  };
+}
+
+function formatPhaseLine(phase) {
+  const suffix = phase.outputs?.length > 0 ? ` -> ${phase.outputs.join(", ")}` : "";
+  return `- ${phase.phase}: ${phase.status}${suffix}`;
+}
+
+function printReviewAllSummary(result) {
+  if (result.status === "failed") {
+    console.log("EDC review failed.");
+    console.log("");
+    console.log(`failed phase: ${result.failedPhase}`);
+    console.log(`reason: ${result.message}`);
+    console.log(`code: ${result.reasonCode}`);
+    if (result.hint) console.log(`next step: ${result.hint}`);
+    console.log("");
+    console.log("phases:");
+    for (const phase of result.phases) console.log(formatPhaseLine(phase));
+    return;
+  }
+
+  console.log(result.status === "success-with-warning" ? "EDC review succeeded with warning." : "EDC review succeeded.");
+  console.log("");
+  console.log("phases:");
+  for (const phase of result.phases) console.log(formatPhaseLine(phase));
 }
 
 function command() {
@@ -248,21 +342,75 @@ function command() {
     }
     case "result-write": {
       const [path, kind, exitCode, reasonCode, failureReason, failureHint, failedModule, finalReview, startedHead, finishedHead] = args;
+      const numericExitCode = Number(exitCode);
+      const status = inferResultStatus(numericExitCode, reasonCode);
       const result = {
+        schemaVersion: 1,
         kind,
-        exitCode: Number(exitCode),
+        phase: kind,
+        status,
+        exitCode: numericExitCode,
         reasonCode,
+        message: failureReason || `${kind} ${status}`,
         finishedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
       };
-      if (failureReason) result.failureReason = failureReason;
-      if (failureHint) result.failureHint = failureHint;
+      if (failureReason && status === "failed") result.failureReason = failureReason;
+      if (failureHint) {
+        result.hint = failureHint;
+        if (status === "failed") result.failureHint = failureHint;
+      }
       if (failedModule) result.failedModule = failedModule;
-      if (finalReview) result.finalReview = finalReview;
+      if (finalReview) {
+        result.finalReview = finalReview;
+        result.outputs = [finalReview];
+      } else {
+        result.outputs = [];
+      }
       if (startedHead) result.startedHead = startedHead;
       if (finishedHead) result.finishedHead = finishedHead;
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, `${JSON.stringify(result, null, 2)}\n`);
+      writeJsonFileAtomic(path, result);
       return;
+    }
+    case "review-phase-status": {
+      const [phase, resultFile, childExitCode] = args;
+      process.stdout.write(normalizeReviewAllPhase(phase, resultFile, childExitCode).status);
+      return;
+    }
+    case "review-all-aggregate": {
+      const [path, startedHead, finishedHead, ...phaseArgs] = args;
+      if (phaseArgs.length === 0 || phaseArgs.length % 3 !== 0) die("review-all-aggregate requires phase/result/exit triples", 64);
+      const phases = [];
+      for (let index = 0; index < phaseArgs.length; index += 3) {
+        phases.push(normalizeReviewAllPhase(phaseArgs[index], phaseArgs[index + 1], phaseArgs[index + 2]));
+      }
+      const failed = phases.find((phase) => phase.status === "failed" || Number(phase.exitCode) !== 0);
+      const warning = phases.some((phase) => phase.status === "success-with-warning");
+      const status = failed ? "failed" : warning ? "success-with-warning" : "success";
+      const outputs = [...new Set(phases.flatMap((phase) => phase.outputs || []))];
+      const result = {
+        schemaVersion: 1,
+        kind: "review-all",
+        phase: "review-all",
+        status,
+        exitCode: failed ? 1 : 0,
+        reasonCode: failed ? failed.reasonCode : warning ? "success-with-warning" : "success",
+        message: failed ? failed.message : status === "success-with-warning" ? "review-all completed with warnings" : "review-all completed successfully",
+        hint: failed ? failed.hint : warning ? "inspect warning phase logs for transport/provider diagnostics" : "",
+        outputs,
+        phases,
+        finishedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      };
+      if (startedHead) result.startedHead = startedHead;
+      if (finishedHead) result.finishedHead = finishedHead;
+      if (failed) {
+        result.failedPhase = failed.phase;
+        result.failureReason = failed.message;
+        result.failureHint = failed.hint;
+        result.childResult = failed.resultFile;
+      }
+      writeJsonFileAtomic(path, result);
+      printReviewAllSummary(result);
+      process.exit(result.exitCode);
     }
     case "spawn-metrics": {
       const [phase, backend, modelRequested, duration, capture, logPath] = args;

@@ -189,7 +189,7 @@ result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported failure, but report validation passed" \
    && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
-   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: valid module audit report accepted after failed worker rc"
 else
   echo "FAIL (11c): valid worker report + failed rc should succeed with warning. exit=$result"
@@ -203,7 +203,8 @@ echo "valid-synthesis-exit-fail" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but report validation passed" \
-   && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ]; then
+   && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: valid audit synthesis accepted after failed synthesis rc"
 else
   echo "FAIL (11d): valid synthesis reports + failed rc should succeed with warning. exit=$result"

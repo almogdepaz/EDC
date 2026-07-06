@@ -144,7 +144,7 @@ result=0
 out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q 'delivery-review subprocess reported failure, but report validation passed' <<<"$out" \
-  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: delivery-review accepts valid report after failed agent rc with warning"
 else
   echo "FAIL: delivery-review did not accept valid report after failed agent rc. exit=$result"

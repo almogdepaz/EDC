@@ -490,6 +490,8 @@ auto_mode() {
     fi
   fi
 
+  local had_warning=0
+
   # Spawn one agent subprocess per module.
   # The here-string on each spawn provides the prompt via stdin, overriding
   # the loop's <<< "$tasks" so it doesn't leak into the subprocess.
@@ -521,6 +523,7 @@ auto_mode() {
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
     if [ "$spawn_rc" -ne 0 ]; then
+      had_warning=1
       echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
       echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
     fi
@@ -539,7 +542,11 @@ auto_mode() {
     rm -rf "$EDC_REVIEW_TASKS_DIR"
   fi
 
-  edc_write_review_result 0 "success" "" "" "" "$(final_review_filename "$target")"
+  if [ "$had_warning" -ne 0 ]; then
+    edc_write_review_result 0 "success-with-warning" "review validated reports after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics" "" "$(final_review_filename "$target")"
+  else
+    edc_write_review_result 0 "success" "" "" "" "$(final_review_filename "$target")"
+  fi
 
   # Explicit exit so any late-arriving subprocess output can't poison our
   # exit code after the pipeline succeeded.

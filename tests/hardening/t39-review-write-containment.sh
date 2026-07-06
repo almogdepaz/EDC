@@ -134,8 +134,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
 assert.equal(result.kind, 'review');
+assert.equal(result.status, 'success-with-warning');
 assert.equal(result.exitCode, 0);
-assert.equal(result.reasonCode, 'success');
+assert.equal(result.reasonCode, 'success-with-warning');
 NODE
   echo "PASS: review accepts valid report after failed agent rc with warning"
 else

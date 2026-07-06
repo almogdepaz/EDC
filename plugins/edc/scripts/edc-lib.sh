@@ -94,6 +94,10 @@ edc_result_success() {
   edc_result_write 0 success "" "" "" "${1:-}"
 }
 
+edc_result_success_with_warning() {
+  edc_result_write 0 success-with-warning "${1:-$EDC_RESULT_KIND succeeded with warning}" "${2:-inspect the log for transport/provider diagnostics}" "" "${3:-}"
+}
+
 edc_result_failure() {
   edc_result_write "${1:-1}" "${2:-pipeline-failed}" "${3:-$EDC_RESULT_KIND pipeline failed}" "${4:-inspect the log for the subprocess error and rerun after fixing it}" "${5:-}" "${6:-}"
 }

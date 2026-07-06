@@ -247,6 +247,35 @@ assert_report_valid() {
   fi
 }
 
+assert_report_complete_after_failed_subprocess() {
+  local module="$1"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+  local missing=0 heading
+  for heading in \
+    '## What Changed' \
+    '## Findings' \
+    '## Security Test Confidence' \
+    '## Blast Radius' \
+    '## Historical Context' \
+    '## Limitations' \
+    '## Recommendation'
+  do
+    if ! grep -q "^${heading}\\b" "$report"; then
+      echo "ERROR: $report missing required section after failed subprocess: $heading (module: $module)" >&2
+      missing=1
+    fi
+  done
+  if ! grep -Eq '^(APPROVE|CONDITIONAL|BLOCK)([[:space:]]|$)' "$report"; then
+    echo "ERROR: $report missing explicit APPROVE | CONDITIONAL | BLOCK recommendation after failed subprocess (module: $module)" >&2
+    missing=1
+  fi
+  if [ "$missing" -ne 0 ]; then
+    echo "ERROR: review subprocess for module $module reported failure and wrote an incomplete security report." >&2
+    echo "HINT: failed subprocesses are trusted only when the durable report satisfies the full security report contract." >&2
+    return 1
+  fi
+}
+
 write_allowed_unmapped_report() {
   local files="$1"
   local report="$EDC_REVIEW_TASKS_DIR/report-allowed-unmapped.md"
@@ -524,6 +553,8 @@ auto_mode() {
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
     if [ "$spawn_rc" -ne 0 ]; then
+      assert_report_complete_after_failed_subprocess "$module" \
+        || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the module reviewer output in the log; failed subprocesses must produce the full security report contract before being accepted as warnings" "$module" ""; exit 1; }
       had_warning=1
       echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
       echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2

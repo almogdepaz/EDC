@@ -57,7 +57,58 @@ mkdir -p edc-context/review-tasks
 if [ "${EDC_T39_FORBIDDEN_WRITE:-0}" = "1" ]; then
   printf 'pwned\n' >> src/a.txt
 fi
-printf '## Findings\n\nmock review\n' > edc-context/review-tasks/report-core.md
+if [ "${EDC_T39_COMPLETE_REPORT:-0}" = "1" ]; then
+  cat > edc-context/review-tasks/report-core.md <<'REPORT'
+# Security Review Report
+
+## What Changed
+- Target: `HEAD`
+- Baseline: `HEAD~1`
+- Files reviewed: 1
+- Security-relevant files: 1
+- Context loaded: index/module docs/issues as applicable
+
+## Findings
+
+### No security findings
+No exploitable or security-relevant issue was found in the reviewed scope.
+
+Checked:
+- auth/authorization impact: none
+- validation/input boundaries: src/a.txt
+- external calls/subprocess/filesystem: none
+- sensitive state mutation: none
+- security history/regression scan: no relevant prior fixes
+
+Limitations:
+- mocked review fixture
+
+## Security Test Confidence
+- security-sensitive paths with regression coverage: none
+- missing security regression tests: none
+- mocked-away trust boundaries, if relevant: mocked reviewer
+
+## Blast Radius
+- reachable entrypoints: none
+- callers/modules affected: core
+- EDC invariants or known issues touched: none
+
+## Historical Context
+- removed protections: none
+- reintroduced risky code: none
+- relevant `security` / `CVE` / `fix` commits: none
+
+## Limitations
+- files or call paths not analyzed: none beyond fixture
+- unproven reachability: none
+- external systems/dependencies not inspected: none
+
+## Recommendation
+APPROVE
+REPORT
+else
+  printf '## Findings\n\nmock review\n' > edc-context/review-tasks/report-core.md
+fi
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
 if [ "${EDC_T39_EXIT_AFTER_REPORT:-0}" = "1" ]; then
@@ -122,12 +173,38 @@ echo "PASS: review success writes structured result"
 
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/minimal-failed.out" 2>"$LOG_DIR/minimal-failed.err"
+minimal_failed_rc=$?
+set -e
+if [ "$minimal_failed_rc" -ne 0 ] \
+  && [ ! -f review-HEAD.md ] \
+  && grep -q 'reported failure and wrote an incomplete security report' "$LOG_DIR/minimal-failed.err"; then
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review');
+assert.equal(result.status, 'failed');
+assert.equal(result.exitCode, 1);
+assert.equal(result.reasonCode, 'report-validation');
+assert.equal(result.failedModule, 'core');
+NODE
+  echo "PASS: review rejects incomplete report after failed agent rc"
+else
+  echo "FAIL: review accepted incomplete report after failed agent rc"
+  echo "--- stdout ---"; cat "$LOG_DIR/minimal-failed.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/minimal-failed.err"
+  exit 1
+fi
+
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 EDC_T39_COMPLETE_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
 warn_rc=$?
 set -e
 if [ "$warn_rc" -eq 0 ] \
   && [ -f review-HEAD.md ] \
-  && grep -q 'mock review' review-HEAD.md \
+  && grep -q 'No exploitable or security-relevant issue' review-HEAD.md \
   && grep -q 'review subprocess for module core reported failure, but report validation passed' "$LOG_DIR/warn.err"; then
   node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
@@ -138,9 +215,9 @@ assert.equal(result.status, 'success-with-warning');
 assert.equal(result.exitCode, 0);
 assert.equal(result.reasonCode, 'success-with-warning');
 NODE
-  echo "PASS: review accepts valid report after failed agent rc with warning"
+  echo "PASS: review accepts complete report after failed agent rc with warning"
 else
-  echo "FAIL: review did not accept valid report after failed agent rc"
+  echo "FAIL: review did not accept complete report after failed agent rc"
   echo "--- stdout ---"; cat "$LOG_DIR/warn.out"
   echo "--- stderr ---"; cat "$LOG_DIR/warn.err"
   exit 1

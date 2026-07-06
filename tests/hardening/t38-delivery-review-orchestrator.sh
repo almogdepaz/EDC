@@ -28,13 +28,16 @@ if [[ "\$prompt" == *"DELIVERY REVIEW TASK"* ]]; then
   printf '%s\n' "\$prompt" > "$TMPDIR_T38/last-prompt"
   report_path=\$(printf '%s\n' "\$prompt" | grep '^DELIVERY_REPORT_PATH: ' | head -1 | sed 's/^DELIVERY_REPORT_PATH: //')
   case "\$scenario" in
-    valid)
+    valid|valid-exit-fail)
       printf '# Delivery / Architecture Review\n\n## Summary\n**Delivery verdict:** delivered\n**Architecture fit:** fits\n' > "\$report_path"
       ;;
     missing-report)
       :
       ;;
   esac
+  if [ "\$scenario" = "valid-exit-fail" ]; then
+    exit 1
+  fi
   exit 0
 fi
 
@@ -132,6 +135,20 @@ if [ "$result" -eq 0 ] && [ -f delivery-review-current.md ] \
 else
   echo "FAIL: delivery-review did not auto-select full mode on clean main. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- prompt ---"; cat "$TMPDIR_T38/last-prompt" 2>/dev/null || true; echo "--- end ---"
+  exit 1
+fi
+
+setup_repo
+echo valid-exit-fail > "$TMPDIR_T38/scenario"
+result=0
+out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
+  && grep -q 'delivery-review subprocess reported failure, but report validation passed' <<<"$out" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+  echo "PASS: delivery-review accepts valid report after failed agent rc with warning"
+else
+  echo "FAIL: delivery-review did not accept valid report after failed agent rc. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
 

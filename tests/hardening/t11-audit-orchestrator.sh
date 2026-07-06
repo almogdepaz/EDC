@@ -42,6 +42,9 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
   mkdir -p "\$(dirname "\$report_path")"
   printf 'worker:%s\n' "\$module" >> "\$LOG_FILE"
   printf '## Module Audit: %s\n\nScoped finding.\n' "\$module" > "\$report_path"
+  if [ "\$scenario" = "valid-worker-exit-fail" ]; then
+    exit 1
+  fi
   exit 0
 fi
 
@@ -49,7 +52,7 @@ if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
   printf 'synthesis\n' >> "\$LOG_FILE"
   mkdir -p edc-context/reports
   case "\$scenario" in
-    valid)
+    valid|valid-worker-exit-fail)
       printf '## Summary\n\nSynthesized findings.\n' > edc-context/reports/complexity.md
       printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
       ;;
@@ -60,6 +63,11 @@ if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
     stub-complexity)
       printf 'no headings here just plain text\n' > edc-context/reports/complexity.md
       printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
+      ;;
+    valid-synthesis-exit-fail)
+      printf '## Summary\n\nSynthesized findings.\n' > edc-context/reports/complexity.md
+      printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
+      exit 1
       ;;
   esac
   exit 0
@@ -174,7 +182,36 @@ else
   exit 1
 fi
 
-# ── 11c: fresh context, audit subprocess skips issues.md → orchestrator fails ─
+# ── 11c: valid worker report + failed worker rc → warning, not failure ─────
+setup_repo "fresh"
+echo "valid-worker-exit-fail" > "$TMPDIR_T11/scenario"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported failure, but report validation passed" \
+   && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+  echo "PASS: valid module audit report accepted after failed worker rc"
+else
+  echo "FAIL (11c): valid worker report + failed rc should succeed with warning. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11d: valid synthesis reports + failed synthesis rc → warning, not failure ─
+setup_repo "fresh"
+echo "valid-synthesis-exit-fail" > "$TMPDIR_T11/scenario"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but report validation passed" \
+   && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ]; then
+  echo "PASS: valid audit synthesis accepted after failed synthesis rc"
+else
+  echo "FAIL (11d): valid synthesis reports + failed rc should succeed with warning. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11e: fresh context, audit subprocess skips issues.md → orchestrator fails ─
 setup_repo "fresh"
 echo "missing-issues" > "$TMPDIR_T11/scenario"
 result=0
@@ -183,12 +220,12 @@ if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing" \
    && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 1 && j.reasonCode === "audit-report-validation" ? 0 : 1)'; then
   echo "PASS: missing report rejected with descriptive error"
 else
-  echo "FAIL (11c): expected non-zero exit + 'audit report missing'. exit=$result"
+  echo "FAIL (11e): expected non-zero exit + 'audit report missing'. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
 
-# ── 11d: fresh context, audit subprocess writes structureless report → fails ─
+# ── 11f: fresh context, audit subprocess writes structureless report → fails ─
 setup_repo "fresh"
 echo "stub-complexity" > "$TMPDIR_T11/scenario"
 result=0
@@ -196,7 +233,7 @@ out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && echo "$out" | grep -q "no '## ' headings"; then
   echo "PASS: structureless report rejected with descriptive error"
 else
-  echo "FAIL (11d): expected non-zero exit + 'no ## headings' error. exit=$result"
+  echo "FAIL (11f): expected non-zero exit + 'no ## headings' error. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi

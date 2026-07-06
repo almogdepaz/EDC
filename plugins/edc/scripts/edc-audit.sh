@@ -171,10 +171,18 @@ audit_main() {
     report_path="$AUDIT_TASKS_DIR/$safe.md"
     echo "→ auditing module: $module"
     worker_prompt=$(build_audit_worker_prompt "$module" "$module_doc" "$report_path") || exit 1
-    edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt" \
-      || { echo "ERROR: edc-audit invocation failed for module $module" >&2; exit 1; }
+    local worker_rc
+    if edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt"; then
+      worker_rc=0
+    else
+      worker_rc=$?
+    fi
     assert_markdown_report_valid "$report_path" "module $module" \
       || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
+    if [ "$worker_rc" -ne 0 ]; then
+      echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
+      echo "HINT: treating the validated module audit report as success; inspect the agent log for transport/provider diagnostics." >&2
+    fi
   done < <(manifest_audit_modules)
 
   if [ "$module_count" -eq 0 ]; then
@@ -186,11 +194,19 @@ audit_main() {
   echo "→ synthesizing audit reports..."
   local synthesis_prompt
   synthesis_prompt=$(build_audit_synthesis_prompt) || exit 1
-  edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt" \
-    || { echo "ERROR: edc-audit synthesis invocation failed" >&2; exit 1; }
+  local synthesis_rc
+  if edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt"; then
+    synthesis_rc=0
+  else
+    synthesis_rc=$?
+  fi
 
   # Validate reports.
   assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output in the log; canonical reports are missing or incomplete"; exit 1; }
+  if [ "$synthesis_rc" -ne 0 ]; then
+    echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but report validation passed." >&2
+    echo "HINT: treating the validated audit reports as success; inspect the agent log for transport/provider diagnostics." >&2
+  fi
 
   if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
     rm -rf "$AUDIT_TASKS_DIR"

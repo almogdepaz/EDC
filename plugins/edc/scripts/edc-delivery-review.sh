@@ -255,10 +255,18 @@ delivery_main() {
   rm -f "$report_path"
 
   echo "→ running delivery review via $EDC_AGENT_CLI..."
-  edc_spawn "edc-delivery-review" "${EDC_REVIEW_TIMEOUT:-1800}" "$prompt" \
-    || { echo "ERROR: edc-delivery-review invocation failed" >&2; exit 1; }
+  local spawn_rc
+  if edc_spawn "edc-delivery-review" "${EDC_REVIEW_TIMEOUT:-1800}" "$prompt"; then
+    spawn_rc=0
+  else
+    spawn_rc=$?
+  fi
 
   assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$report_path"; exit 1; }
+  if [ "$spawn_rc" -ne 0 ]; then
+    echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but report validation passed." >&2
+    echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
+  fi
   edc_result_success "$report_path"
   echo "Delivery review report: $report_path"
   exit 0

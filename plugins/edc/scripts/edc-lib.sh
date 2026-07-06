@@ -1090,9 +1090,16 @@ edc_diff_curator_forbidden_paths() {
 }
 
 edc_review_write_allowed_path() {
-  local path="$1" allowed_report="$2"
+  local path="$1"
+  shift || true
+  local allowed
+  for allowed in "$@"; do
+    [ -n "$allowed" ] || continue
+    case "$path" in
+      "$allowed") return 0 ;;
+    esac
+  done
   case "$path" in
-    "$allowed_report") return 0 ;;
     "$EDC_BUILD_DIR/spawn-log.jsonl") return 0 ;;
     "$EDC_BUILD_DIR"/transcripts/*) return 0 ;;
     *) return 1 ;;
@@ -1100,14 +1107,15 @@ edc_review_write_allowed_path() {
 }
 
 edc_snapshot_review_forbidden_paths() {
-  local output="$1" allowed_report="$2"
+  local output="$1"
+  shift
   : > "$output"
   {
     edc_emit_dirty_tracked_paths
     git ls-files --others --exclude-standard -z 2>/dev/null || true
   } | while IFS= read -r -d '' path; do
     [ -n "$path" ] || continue
-    edc_review_write_allowed_path "$path" "$allowed_report" && continue
+    edc_review_write_allowed_path "$path" "$@" && continue
     if [ -f "$path" ]; then
       shasum -a 256 "$path"
     else

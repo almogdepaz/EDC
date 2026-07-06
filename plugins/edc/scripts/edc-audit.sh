@@ -221,11 +221,23 @@ audit_main() {
     report_path="$AUDIT_TASKS_DIR/$safe.md"
     echo "→ auditing module: $module"
     worker_prompt=$(build_audit_worker_prompt "$module" "$module_doc" "$report_path") || exit 1
-    local worker_rc
+    local worker_rc before_snapshot after_snapshot changed_forbidden
+    before_snapshot=$(mktemp)
+    after_snapshot=$(mktemp)
+    edc_snapshot_review_forbidden_paths "$before_snapshot" "$report_path"
     if edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt"; then
       worker_rc=0
     else
       worker_rc=$?
+    fi
+    edc_snapshot_review_forbidden_paths "$after_snapshot" "$report_path"
+    changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+    rm -f "$before_snapshot" "$after_snapshot"
+    if [ -n "$changed_forbidden" ]; then
+      echo "ERROR: audit worker touched forbidden paths for module $module:" >&2
+      echo "$changed_forbidden" | sed 's/^/  /' >&2
+      edc_result_failure 1 "audit-write-containment" "audit worker touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module"
+      exit 1
     fi
     assert_markdown_report_valid "$report_path" "module $module" \
       || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
@@ -251,11 +263,23 @@ audit_main() {
   echo "→ synthesizing audit reports..."
   local synthesis_prompt
   synthesis_prompt=$(build_audit_synthesis_prompt) || exit 1
-  local synthesis_rc
+  local synthesis_rc before_snapshot after_snapshot changed_forbidden
+  before_snapshot=$(mktemp)
+  after_snapshot=$(mktemp)
+  edc_snapshot_review_forbidden_paths "$before_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
   if edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt"; then
     synthesis_rc=0
   else
     synthesis_rc=$?
+  fi
+  edc_snapshot_review_forbidden_paths "$after_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+  rm -f "$before_snapshot" "$after_snapshot"
+  if [ -n "$changed_forbidden" ]; then
+    echo "ERROR: audit synthesis touched forbidden paths:" >&2
+    echo "$changed_forbidden" | sed 's/^/  /' >&2
+    edc_result_failure 1 "audit-write-containment" "audit synthesis touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input"
+    exit 1
   fi
 
   # Validate reports.

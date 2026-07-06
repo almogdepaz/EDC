@@ -261,11 +261,23 @@ delivery_main() {
   rm -f "$report_path"
 
   echo "→ running delivery review via $EDC_AGENT_CLI..."
-  local spawn_rc
+  local spawn_rc before_snapshot after_snapshot changed_forbidden
+  before_snapshot=$(mktemp)
+  after_snapshot=$(mktemp)
+  edc_snapshot_review_forbidden_paths "$before_snapshot" "$report_path"
   if edc_spawn "edc-delivery-review" "${EDC_REVIEW_TIMEOUT:-1800}" "$prompt"; then
     spawn_rc=0
   else
     spawn_rc=$?
+  fi
+  edc_snapshot_review_forbidden_paths "$after_snapshot" "$report_path"
+  changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+  rm -f "$before_snapshot" "$after_snapshot"
+  if [ -n "$changed_forbidden" ]; then
+    echo "ERROR: delivery-review agent touched forbidden paths:" >&2
+    echo "$changed_forbidden" | sed 's/^/  /' >&2
+    edc_result_failure 1 "delivery-write-containment" "delivery-review agent touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "" "$report_path"
+    exit 1
   fi
 
   assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$report_path"; exit 1; }

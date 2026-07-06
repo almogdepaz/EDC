@@ -125,6 +125,49 @@ exit 0
   const structuredSuccessStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
   assert.match(structuredSuccessStatus.content, /final review: review-structured\.md/);
 
+  const reviewAllScript = join(scriptsDir, "edc-review-all.sh");
+  writeFileSync(reviewAllScript, `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .git/edc
+cat > .git/edc/result.json <<'JSON'
+{"schemaVersion":1,"kind":"review-all","status":"success-with-warning","exitCode":0,"reasonCode":"success-with-warning","message":"review-all completed with warnings","hint":"inspect delivery phase log","phases":[{"phase":"security","status":"success"},{"phase":"delivery","status":"success-with-warning"},{"phase":"quality","status":"success"}],"outputs":["review-HEAD.md","delivery-review-HEAD.md"]}
+JSON
+echo 'review-all succeeded with warning'
+exit 0
+`);
+  chmodSync(reviewAllScript, 0o755);
+  selections.push("Review all (security, delivery, quality)", "Job status");
+  await handler("", ctx);
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=success-with-warning/.test(readFileSync(statusPath, "utf-8")), 3000));
+  await handler("", ctx);
+  const structuredWarningStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
+  assert.match(structuredWarningStatus.content, /status: success-with-warning/);
+  assert.match(structuredWarningStatus.content, /code: success-with-warning/);
+  assert.match(structuredWarningStatus.content, /reason: review-all completed with warnings/);
+  assert.match(structuredWarningStatus.content, /hint: inspect delivery phase log/);
+  assert.match(structuredWarningStatus.content, /outputs: review-HEAD\.md, delivery-review-HEAD\.md/);
+
+  writeFileSync(reviewAllScript, `#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p .git/edc
+cat > .git/edc/result.json <<'JSON'
+{"schemaVersion":1,"kind":"review-all","status":"failed","exitCode":1,"reasonCode":"delivery-report-validation","message":"delivery review report validation failed","hint":"inspect delivery review output","failedPhase":"delivery","childResult":"edc-context/build/review-all-delivery.json","phases":[{"phase":"security","status":"success"},{"phase":"delivery","status":"failed","reasonCode":"delivery-report-validation"}]}
+JSON
+echo 'review-all failed in delivery phase'
+exit 1
+`);
+  chmodSync(reviewAllScript, 0o755);
+  selections.push("Review all (security, delivery, quality)", "Job status");
+  await handler("", ctx);
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")) && /failed_phase=delivery/.test(readFileSync(statusPath, "utf-8")), 3000));
+  await handler("", ctx);
+  const structuredPhaseFailureStatus = messages.filter((message) => message.customType === "edc-job-status").at(-1);
+  assert.match(structuredPhaseFailureStatus.content, /failed phase: delivery/);
+  assert.match(structuredPhaseFailureStatus.content, /code: delivery-report-validation/);
+  assert.match(structuredPhaseFailureStatus.content, /reason: delivery review report validation failed/);
+  assert.match(structuredPhaseFailureStatus.content, /hint: inspect delivery review output/);
+  assert.match(structuredPhaseFailureStatus.content, /child result: edc-context\/build\/review-all-delivery\.json/);
+
   writeFileSync(reviewScript, `#!/usr/bin/env bash
 set -euo pipefail
 echo 'ERROR: script did not produce review tasks. Output:' >&2

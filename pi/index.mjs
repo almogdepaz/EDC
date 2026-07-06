@@ -613,21 +613,49 @@ repo_changed=""
 if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
   repo_changed="HEAD changed from $(printf '%s' "$started_head" | cut -c1-8) to $(printf '%s' "$finished_head" | cut -c1-8) during background ${kind}; result may reflect the earlier repo state"
 fi
+read_result_field() {
+  [ -f "$result_file" ] || return 0
+  node -e '
+    const fs = require("fs");
+    const key = process.argv[2];
+    const json = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    let value = "";
+    if (key === "status") value = json.status || (Number(json.exitCode) === 0 ? "success" : "failed");
+    else if (key === "reasonCode") value = json.reasonCode || "";
+    else if (key === "message") value = json.message || json.failureReason || "";
+    else if (key === "hint") value = json.hint || json.failureHint || "";
+    else if (key === "failedPhase") value = json.failedPhase || "";
+    else if (key === "childResult") value = json.childResult || "";
+    else if (key === "finalReview") value = json.finalReview || "";
+    else if (key === "outputs") value = Array.isArray(json.outputs) ? json.outputs.join(", ") : "";
+    process.stdout.write(String(value || "").replace(/[\\r\\n]+/g, " "));
+  ' "$result_file" "$1" 2>/dev/null || true
+}
+structured_status="$(read_result_field status)"
+structured_reason_code="$(read_result_field reasonCode)"
+structured_message="$(read_result_field message)"
+structured_result_hint="$(read_result_field hint)"
+structured_failed_phase="$(read_result_field failedPhase)"
+structured_child_result="$(read_result_field childResult)"
+structured_outputs="$(read_result_field outputs)"
 final_review=""
 if [ ${shellQuote(kind)} = "review" ]; then
   final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
-  structured_final_review=""
-  if [ -f "$result_file" ]; then
-    structured_final_review="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.finalReview || "");' "$result_file" 2>/dev/null || true)"
-  fi
-  [ -n "$structured_final_review" ] && final_review="$structured_final_review"
 fi
+structured_final_review="$(read_result_field finalReview)"
+[ -n "$structured_final_review" ] && final_review="$structured_final_review"
 failure_reason=""
 failure_hint=""
 ${failureClassificationShell(kind)}
+[ -n "$structured_message" ] && failure_reason="$structured_message"
+[ -n "$structured_result_hint" ] && failure_hint="$structured_result_hint"
+status_value="\${structured_status:-}"
+if [ -z "$status_value" ]; then
+  if [ "$rc" -eq 0 ]; then status_value="success"; else status_value="failed"; fi
+fi
 {
   echo "kind=${kind}"
-  if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
+  echo "status=$status_value"
   echo "exit_code=$rc"
   echo "started_at=$started_at"
   echo "finished_at=$finished_at"
@@ -638,6 +666,10 @@ ${failureClassificationShell(kind)}
   [ -n "$started_head" ] && echo "started_head=$started_head"
   [ -n "$finished_head" ] && echo "finished_head=$finished_head"
   [ -n "$repo_changed" ] && echo "repo_changed=$repo_changed"
+  [ -n "$structured_reason_code" ] && echo "reason_code=$structured_reason_code"
+  [ -n "$structured_failed_phase" ] && echo "failed_phase=$structured_failed_phase"
+  [ -n "$structured_child_result" ] && echo "child_result=$structured_child_result"
+  [ -n "$structured_outputs" ] && echo "outputs=$structured_outputs"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
   [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
   [ -n "$final_review" ] && echo "final_review=$final_review"
@@ -731,6 +763,7 @@ function renderBackgroundJobStatus(args, cwd) {
     `status: ${status.status || "unknown"}`,
   ];
   if (status.exit_code) lines.push(`exit code: ${status.exit_code}`);
+  if (status.reason_code) lines.push(`code: ${status.reason_code}`);
   if (status.started_at) lines.push(`started: ${status.started_at}`);
   if (status.finished_at) lines.push(`finished: ${status.finished_at}`);
   if (status.final_review) lines.push(`final review: ${status.final_review}`);
@@ -739,12 +772,17 @@ function renderBackgroundJobStatus(args, cwd) {
   if (status.started_head) lines.push(`started HEAD: ${status.started_head.slice(0, 8)}`);
   if (status.finished_head && status.finished_head !== status.started_head) lines.push(`finished HEAD: ${status.finished_head.slice(0, 8)}`);
   if (status.repo_changed) lines.push(`warning: ${status.repo_changed}`);
+  if (status.failed_phase) lines.push(`failed phase: ${status.failed_phase}`);
+  if (status.outputs) lines.push(`outputs: ${status.outputs}`);
   if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
   if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
+  if (status.child_result) lines.push(`child result: ${status.child_result}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
   if (status.status === "success") {
     lines.push(`EDC ${kind} complete.`);
+  } else if (status.status === "success-with-warning") {
+    lines.push(`EDC ${kind} complete with warnings.`);
   } else if (status.status === "failed") {
     lines.push(`EDC ${kind} failed. Open the log above for details.`);
   } else if (status.status === "cancelled") {

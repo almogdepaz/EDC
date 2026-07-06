@@ -338,6 +338,18 @@ else
   exit 1
 fi
 
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality-review --agent codex --diff origin/main...HEAD)
+if grep -Fx -- 'HEAD' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- 'origin/main' "$CAPTURE/audit/args" >/dev/null; then
+  echo "PASS: quality-review --diff normalizes to target and base args"
+else
+  echo "FAIL: quality-review --diff did not normalize correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
 # ── 7f1e: --diff normalizes to target + --base for diff-capable reviews ─────
 rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli review --agent codex --diff origin/main...HEAD --ignore generated/**)

@@ -45,7 +45,7 @@ The generated context lives in the target repository under `edc-context/`: an ov
 | **review** | On a branch diff. Runs all lenses: security, delivery/architecture, and quality review. |
 | **security-review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
 | **delivery-review** | On a branch or commit diff. Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
-| **quality-review** | Anytime. Compares context expectations against actual code to flag code-quality and maintainability risks. |
+| **quality-review** | Full repo by default, or scoped with `--diff <base>...<target>`. Compares context expectations against actual code to flag code-quality and maintainability risks. |
 | **audit** | Deprecated alias for `quality-review`. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
@@ -85,6 +85,7 @@ edc delivery-review --agent pi HEAD --base main
 # code quality / maintainability review
 edc quality-review --agent claude
 edc quality-review --agent pi
+edc quality-review --agent pi --diff main...HEAD
 # deprecated alias
 edc audit --agent pi
 
@@ -97,7 +98,7 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security-review`, `delivery-review`, and `quality-review` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Differential scope can be written as `--diff <base>...<target>` or legacy `target --base <ref>`. Security review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security-review`, `delivery-review`, and `quality-review` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Differential scope can be written as `--diff <base>...<target>` or legacy `target --base <ref>`. Security review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality review uses the same diff scope to audit only modules owning changed files; without a diff it audits all modules. Structured result files include scope/base/target plus dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ## Install
 

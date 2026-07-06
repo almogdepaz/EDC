@@ -340,14 +340,15 @@ delivery_review_cmd() {
 }
 
 quality_review_cmd() {
-  parse_agent_context_args quality-review 1 none strict "" "" "$@"
+  parse_agent_context_args quality-review 1 passthrough passthrough "" "--base --diff" "$@"
   finalize_agent_context 1
+  normalize_scope_args quality-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 update_cmd() {

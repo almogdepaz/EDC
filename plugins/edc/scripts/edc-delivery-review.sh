@@ -226,6 +226,12 @@ delivery_main() {
     *) echo "ERROR: --context-mode must be advisory or inject" >&2; exit 2 ;;
   esac
 
+  if [ "$full_mode" -eq 1 ]; then
+    edc_result_scope_from_args --full
+  else
+    edc_result_scope_from_args "$target" --base "$base"
+  fi
+
   edc_require_agent_cli
 
   if [ "$full_mode" -eq 0 ]; then

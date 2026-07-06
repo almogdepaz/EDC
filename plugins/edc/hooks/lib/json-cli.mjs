@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { routeFileSync } from "./route.mjs";
 
 function die(message, code = 1) {
   console.error(message);
@@ -199,6 +200,14 @@ function formatPhaseLine(phase) {
   return `- ${phase.phase}: ${phase.status}${suffix}`;
 }
 
+function applyResultScope(result) {
+  if (process.env.EDC_RESULT_SCOPE) result.scope = process.env.EDC_RESULT_SCOPE;
+  if (process.env.EDC_RESULT_BASE) result.base = process.env.EDC_RESULT_BASE;
+  if (process.env.EDC_RESULT_TARGET) result.target = process.env.EDC_RESULT_TARGET;
+  if (process.env.EDC_RESULT_DIRTY_TRACKED_INCLUDED) result.dirtyTrackedIncluded = process.env.EDC_RESULT_DIRTY_TRACKED_INCLUDED === "1";
+  if (process.env.EDC_RESULT_UNTRACKED_INCLUDED) result.untrackedIncluded = process.env.EDC_RESULT_UNTRACKED_INCLUDED === "1";
+}
+
 function printReviewAllSummary(result) {
   if (result.status === "failed") {
     console.log("EDC review failed.");
@@ -308,6 +317,18 @@ function command() {
       }
       return;
     }
+    case "audit-modules-for-files": {
+      const json = readJson(args[0]);
+      const seen = new Set();
+      for (const file of lines(readStdin())) {
+        const moduleName = routeFileSync(json, file);
+        if (!moduleName || seen.has(moduleName)) continue;
+        seen.add(moduleName);
+        const module = array(json.modules).find((candidate) => candidate.name === moduleName);
+        if (module && (module.type || "module") === "module") console.log(`${module.name}\t${module.doc}`);
+      }
+      return;
+    }
     case "review-target": {
       const json = readJson(args[0]);
       if (!json.target) process.exit(1);
@@ -363,11 +384,19 @@ function command() {
       if (finalReview) {
         result.finalReview = finalReview;
         result.outputs = [finalReview];
+      } else if (["build", "update", "context-recovery"].includes(kind)) {
+        result.outputs = ["edc-context/manifest.json", "edc-context/index.md", "edc-context/modules/"];
+      } else if (kind === "audit") {
+        result.outputs = ["edc-context/reports/issues.md", "edc-context/reports/complexity.md"];
       } else {
         result.outputs = [];
       }
+      if (["build", "update", "context-recovery"].includes(kind) && status !== "failed") {
+        result.checks = [{ name: "edc-doctor", status: "success", message: "ok" }];
+      }
       if (startedHead) result.startedHead = startedHead;
       if (finishedHead) result.finishedHead = finishedHead;
+      applyResultScope(result);
       writeJsonFileAtomic(path, result);
       return;
     }
@@ -402,6 +431,7 @@ function command() {
       };
       if (startedHead) result.startedHead = startedHead;
       if (finishedHead) result.finishedHead = finishedHead;
+      applyResultScope(result);
       if (failed) {
         result.failedPhase = failed.phase;
         result.failureReason = failed.message;

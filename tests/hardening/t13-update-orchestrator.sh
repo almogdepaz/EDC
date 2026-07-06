@@ -175,7 +175,7 @@ if [ "$result" -ne 0 ]; then
   echo "$out"; exit 1
 fi
 if grep -q "spawned" "$EDC_T13_LOG" \
-  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 0 && j.reasonCode === "success" && Array.isArray(j.outputs) && j.outputs.includes("edc-context/manifest.json") && Array.isArray(j.checks) && j.checks.some(c => c.name === "edc-doctor" && c.status === "success") ? 0 : 1)'; then
   echo "PASS: healthy v2 → update spawned"
 else
   echo "FAIL (13d): expected agent spawn, log:"

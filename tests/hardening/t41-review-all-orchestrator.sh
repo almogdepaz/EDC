@@ -15,6 +15,8 @@ setup_runtime() {
   cp "$SCRIPT" "$TMP/work/.edc/scripts/edc-review-all.sh"
   cp "$ROOT/plugins/edc/scripts/edc-lib.sh" "$TMP/work/.edc/scripts/edc-lib.sh"
   cp "$ROOT/plugins/edc/hooks/lib/json-cli.mjs" "$TMP/work/.edc/hooks/lib/json-cli.mjs"
+  cp "$ROOT/plugins/edc/hooks/lib/route.mjs" "$TMP/work/.edc/hooks/lib/route.mjs"
+  cp "$ROOT/plugins/edc/hooks/lib/paths.mjs" "$TMP/work/.edc/hooks/lib/paths.mjs"
   chmod +x "$TMP/work/.edc/scripts/edc-review-all.sh" "$TMP/work/.edc/scripts/edc-lib.sh"
 
   cat > "$TMP/work/.edc/scripts/edc-review.sh" <<'SH'
@@ -78,7 +80,7 @@ setup_runtime
   bash .edc/scripts/edc-review-all.sh HEAD --base main --ignore 'generated/**' --context-mode advisory > "$TMP/warning.out" 2>&1
 )
 
-expected=$'security|agent=pi|ctx=advisory|args=HEAD --base main --ignore generated/** --context-mode advisory\ndelivery|agent=pi|ctx=advisory|args=HEAD --base main --ignore generated/** --context-mode advisory\nquality|agent=pi|ctx=advisory|args=--ignore generated/** --context-mode advisory'
+expected=$'security|agent=pi|ctx=advisory|args=HEAD --base main --ignore generated/** --context-mode advisory\ndelivery|agent=pi|ctx=advisory|args=HEAD --base main --ignore generated/** --context-mode advisory\nquality|agent=pi|ctx=advisory|args=HEAD --base main --ignore generated/** --context-mode advisory'
 actual=$(cat "$TMP/phases-warning.log")
 if [ "$actual" = "$expected" ]; then
   echo "PASS: review-all runs security, delivery, quality with correct args"
@@ -96,6 +98,11 @@ assert.equal(result.kind, 'review-all');
 assert.equal(result.status, 'success-with-warning');
 assert.equal(result.exitCode, 0);
 assert.equal(result.reasonCode, 'success-with-warning');
+assert.equal(result.scope, 'differential');
+assert.equal(result.base, 'main');
+assert.equal(result.target, 'HEAD');
+assert.equal(result.dirtyTrackedIncluded, true);
+assert.equal(result.untrackedIncluded, false);
 assert.equal(result.phases.length, 3);
 assert.equal(result.phases.find((phase) => phase.phase === 'delivery').status, 'success-with-warning');
 assert.deepEqual(result.outputs, ['review-HEAD.md', 'delivery-review-HEAD.md', 'edc-context/reports/issues.md', 'edc-context/reports/complexity.md']);

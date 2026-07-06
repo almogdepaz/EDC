@@ -62,7 +62,7 @@ Menu actions:
 - review all changes — choose a scope, then run security review, delivery/architecture review, and quality review
 - security review — choose a scope, then start a background security-only review
 - delivery review — choose a scope, then start a background delivery/architecture review
-- quality review — starts the existing quality-review/audit orchestrator
+- quality review — choose a scope; changed-files scope audits only modules owning changed files, full scope audits all modules
 - job status — shows the current background job status
 - build context — starts a background context build
 - update context — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
@@ -81,7 +81,7 @@ edc update --agent pi --base <default-branch>
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope: changed files vs default branch, full current repo where supported, or custom refs where the UI provides text input. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope: changed files vs default branch, full current repo where supported, or custom refs where the UI provides text input. Quality-review changed-files scope audits only modules owning changed files; full scope audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state
 
@@ -94,7 +94,7 @@ Review, build, update, and quality-review/audit run in the background so the TUI
 
 Both paths are resolved with `git rev-parse --git-path`, so they work with normal repos and worktrees. They are under git metadata, not the worktree, so they are never tracked and need no `.gitignore` entry. Starting a new background job overwrites the previous status and that job kind's log.
 
-`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi job status/logs survive because they live under `.git/edc/`. If a background job fails, `/edc` → Job status reports a classified reason when EDC can determine one, e.g. HEAD changed during the run or context recovery did not produce a complete layout.
+`edc-context/` remains disposable generated context. Recovery may wipe and rebuild it; active pi job status/logs survive because they live under `.git/edc/`. If a background job fails, `/edc` → Job status reports structured result fields when available: status, code, scope/base/target, failed phase, outputs, reason, hint, and child result. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish; `failed` means durable outputs did not validate.
 
 ## Skills
 

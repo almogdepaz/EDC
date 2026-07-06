@@ -122,7 +122,7 @@ if [ "$result" -ne 0 ]; then
   echo "$out"; exit 1
 fi
 if grep -qx "build" "$EDC_T12_LOG" \
-  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "build" && j.exitCode === 0 && j.reasonCode === "success" ? 0 : 1)'; then
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "build" && j.exitCode === 0 && j.reasonCode === "success" && Array.isArray(j.outputs) && j.outputs.includes("edc-context/manifest.json") && Array.isArray(j.checks) && j.checks.some(c => c.name === "edc-doctor" && c.status === "success") ? 0 : 1)'; then
   echo "PASS: no edc-context/ → BUILD"
 else
   echo "FAIL (12a): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1

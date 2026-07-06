@@ -34,7 +34,7 @@ plugins/edc/
     edc                                # terminal CLI (build / update / review / quality-review / mode / doctor)
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
-    edc-audit.sh                       # quality review / maintainability orchestrator
+    edc-audit.sh                       # quality review / maintainability orchestrator (full or diff-scoped)
     edc-review.sh                      # security/adversarial review orchestrator
     edc-delivery-review.sh             # goal/spec delivery + architecture-fit review orchestrator
     edc-doctor.sh                      # context-tree validator
@@ -91,7 +91,7 @@ their outputs.
 - `adversarial.md` — attacker modeling methodology
 - `reporting.md` — security report contract
 
-`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting.
+`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting. Runtime result JSON uses `success`, `failed`, or `success-with-warning`; the warning state means durable reports/context validated despite transport/provider oddities.
 
 `skills/edc-delivery-review/` contains the delivery/architecture review bundle. It keeps goal/spec delivery and architecture fit as separate axes.
 

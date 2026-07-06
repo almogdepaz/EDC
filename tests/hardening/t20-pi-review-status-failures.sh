@@ -130,7 +130,7 @@ exit 0
 set -euo pipefail
 mkdir -p .git/edc
 cat > .git/edc/result.json <<'JSON'
-{"schemaVersion":1,"kind":"review-all","status":"success-with-warning","exitCode":0,"reasonCode":"success-with-warning","message":"review-all completed with warnings","hint":"inspect delivery phase log","phases":[{"phase":"security","status":"success"},{"phase":"delivery","status":"success-with-warning"},{"phase":"quality","status":"success"}],"outputs":["review-HEAD.md","delivery-review-HEAD.md"]}
+{"schemaVersion":1,"kind":"review-all","status":"success-with-warning","exitCode":0,"reasonCode":"success-with-warning","message":"review-all completed with warnings","hint":"inspect delivery phase log","scope":"differential","base":"main","target":"HEAD","dirtyTrackedIncluded":true,"untrackedIncluded":false,"phases":[{"phase":"security","status":"success"},{"phase":"delivery","status":"success-with-warning"},{"phase":"quality","status":"success"}],"outputs":["review-HEAD.md","delivery-review-HEAD.md"]}
 JSON
 echo 'review-all succeeded with warning'
 exit 0
@@ -146,6 +146,11 @@ exit 0
   assert.match(structuredWarningStatus.content, /reason: review-all completed with warnings/);
   assert.match(structuredWarningStatus.content, /hint: inspect delivery phase log/);
   assert.match(structuredWarningStatus.content, /outputs: review-HEAD\.md, delivery-review-HEAD\.md/);
+  assert.match(structuredWarningStatus.content, /scope: differential/);
+  assert.match(structuredWarningStatus.content, /base: main/);
+  assert.match(structuredWarningStatus.content, /target: HEAD/);
+  assert.match(structuredWarningStatus.content, /dirty tracked files: included/);
+  assert.match(structuredWarningStatus.content, /untracked files: excluded/);
 
   writeFileSync(reviewAllScript, `#!/usr/bin/env bash
 set -euo pipefail

@@ -32,6 +32,7 @@ EOF
 
 collect_audit_args() {
   AUDIT_ARGS=()
+  local target="" base=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --ignore|--context-mode)
@@ -45,13 +46,21 @@ collect_audit_args() {
         ;;
       --base)
         [ "$#" -ge 2 ] || { echo "ERROR: --base requires a value" >&2; return 2; }
+        base="$2"
         shift 2
         ;;
+      --*)
+        shift
+        ;;
       *)
+        if [ -z "$target" ]; then target="$1"; fi
         shift
         ;;
     esac
   done
+  if [ -n "$target" ] || [ -n "$base" ]; then
+    AUDIT_ARGS=("${target:-HEAD}" "--base" "$base" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"})
+  fi
 }
 
 PHASE_RESULT_SPECS=()
@@ -83,6 +92,7 @@ run_phase() {
 main() {
   edc_result_begin review-all
   trap edc_result_on_exit EXIT
+  edc_result_scope_from_args "$@"
 
   local security_script delivery_script audit_script
   security_script=$(find_phase_script edc-review.sh) || { echo "ERROR: edc-review.sh not found" >&2; exit 2; }

@@ -4,7 +4,7 @@
 #
 # Flow:
 #   1. dependency check (git/node via helpers)
-#   2. parse args (--ignore, --context-mode)
+#   2. parse args (optional target/--base diff scope, --ignore, --context-mode)
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
 #   4. spawn one scoped audit subprocess per manifest module
@@ -14,7 +14,7 @@
 #   7. exit 0 with paths printed, non-zero with reason
 #
 # Usage:
-#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 
 set -euo pipefail
 
@@ -50,6 +50,21 @@ safe_audit_name() {
 
 manifest_audit_modules() {
   node "$EDC_JSON_CLI" audit-modules "$MANIFEST"
+}
+
+changed_files_for_audit_scope() {
+  local target="$1" base="$2" files="" dirty_files=""
+  files=$(git diff --name-only --diff-filter=ACMRTUXB "$base...$target" 2>/dev/null || true)
+  dirty_files=$(git diff --name-only --diff-filter=ACMRTUXB 2>/dev/null || true)
+  if [ -n "$dirty_files" ]; then
+    printf '%s\n%s\n' "$files" "$dirty_files" | sed '/^$/d' | sort -u
+  else
+    printf '%s\n' "$files" | sed '/^$/d'
+  fi
+}
+
+manifest_audit_modules_for_files() {
+  node "$EDC_JSON_CLI" audit-modules-for-files "$MANIFEST"
 }
 
 assert_markdown_report_valid() {
@@ -119,7 +134,7 @@ EOF
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 EOF
   exit 2
 }
@@ -127,9 +142,15 @@ EOF
 audit_main() {
   edc_result_begin audit
   trap edc_result_on_exit EXIT
+  local target="" base=""
   local -a ignore_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --base)
+        [ "$#" -ge 2 ] || { echo "ERROR: --base requires a ref" >&2; usage; }
+        base="$2"
+        shift 2
+        ;;
       --ignore)
         [ "$#" -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; usage; }
         ignore_args+=("$1" "$2")
@@ -142,9 +163,28 @@ audit_main() {
         shift 2
         ;;
       --help|-h) usage ;;
-      *) echo "ERROR: unknown argument: $1" >&2; usage ;;
+      --*) echo "ERROR: unknown argument: $1" >&2; usage ;;
+      *)
+        if [ -n "$target" ]; then
+          echo "ERROR: audit accepts at most one target" >&2
+          usage
+        fi
+        target="$1"
+        shift
+        ;;
     esac
   done
+
+  if [ -n "$base" ] && [ -z "$target" ]; then
+    target="HEAD"
+  fi
+  if [ -n "$target" ] && [ -z "$base" ]; then
+    echo "ERROR: differential quality review requires --base <ref>" >&2
+    usage
+  fi
+  if [ -n "$target" ]; then
+    edc_result_scope_from_args "$target" --base "$base"
+  fi
 
   edc_require_agent_cli
 
@@ -157,6 +197,16 @@ audit_main() {
   echo "→ running per-module audit via $EDC_AGENT_CLI..."
   rm -rf "$AUDIT_TASKS_DIR"
   mkdir -p "$AUDIT_TASKS_DIR" "$EDC_REPORTS_DIR"
+
+  local changed_files=""
+  if [ -n "$target" ]; then
+    changed_files=$(changed_files_for_audit_scope "$target" "$base")
+    if [ -z "$changed_files" ]; then
+      echo "ERROR: no changed files found for quality review target: $target" >&2
+      edc_result_failure 1 "no-reviewable-files" "no changed files found for quality review" "choose another target/base or modify a tracked file"
+      exit 1
+    fi
+  fi
 
   local module module_doc safe report_path worker_prompt module_count=0 had_warning=0
   while IFS=$'\t' read -r module module_doc; do
@@ -184,10 +234,16 @@ audit_main() {
       echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
       echo "HINT: treating the validated module audit report as success; inspect the agent log for transport/provider diagnostics." >&2
     fi
-  done < <(manifest_audit_modules)
+  done < <(if [ -n "$target" ]; then printf '%s\n' "$changed_files" | manifest_audit_modules_for_files; else manifest_audit_modules; fi)
 
   if [ "$module_count" -eq 0 ]; then
-    echo "ERROR: no real modules found in $MANIFEST; cannot run per-module audit" >&2
+    if [ -n "$target" ]; then
+      echo "ERROR: no changed files map to auditable modules for quality review" >&2
+      edc_result_failure 1 "no-reviewable-files" "no changed files map to auditable modules for quality review" "choose another target/base or run full quality-review without --diff"
+    else
+      echo "ERROR: no real modules found in $MANIFEST; cannot run per-module audit" >&2
+      edc_result_failure 1 "audit-no-modules" "no real modules found in manifest" "run edc doctor, then rebuild edc-context if needed"
+    fi
     exit 1
   fi
 

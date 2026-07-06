@@ -373,7 +373,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     { selection: ["security review", "changed files vs default branch"], kind: "review", log: ".git/edc/review.log", expect: "review args: HEAD --base master" },
     { selection: "build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
     { selection: "update context", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
-    { selection: "quality review", kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
+    { selection: ["quality review", "changed files vs default branch"], kind: "audit", log: ".git/edc/audit.log", expect: "audit args: HEAD --base master agent=pi" },
     { selection: ["delivery review", "changed files vs default branch"], kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
   ];
   for (const testCase of backgroundCases) {

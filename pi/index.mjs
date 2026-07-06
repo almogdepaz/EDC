@@ -292,7 +292,7 @@ async function selectReviewScope(ctx, options = {}) {
       if (!supportsFull) {
         return { error: `full current repo scope is not supported for edc ${commandName} yet; use changed files or custom refs.` };
       }
-      return { args: ["--full"] };
+      return { args: options.fullArgs || ["--full"] };
     case EDC_SCOPE_MENU.CUSTOM_REFS: {
       if (typeof ctx.ui.input !== "function") {
         return { error: `custom refs require CLI for now: edc ${commandName} --agent pi --diff <base>...<target>` };
@@ -667,6 +667,11 @@ read_result_field() {
     else if (key === "hint") value = json.hint || json.failureHint || "";
     else if (key === "failedPhase") value = json.failedPhase || "";
     else if (key === "childResult") value = json.childResult || "";
+    else if (key === "scope") value = json.scope || "";
+    else if (key === "base") value = json.base || "";
+    else if (key === "target") value = json.target || "";
+    else if (key === "dirtyTrackedIncluded") value = typeof json.dirtyTrackedIncluded === "boolean" ? (json.dirtyTrackedIncluded ? "included" : "excluded") : "";
+    else if (key === "untrackedIncluded") value = typeof json.untrackedIncluded === "boolean" ? (json.untrackedIncluded ? "included" : "excluded") : "";
     else if (key === "finalReview") value = json.finalReview || "";
     else if (key === "outputs") value = Array.isArray(json.outputs) ? json.outputs.join(", ") : "";
     process.stdout.write(String(value || "").replace(/[\\r\\n]+/g, " "));
@@ -678,6 +683,11 @@ structured_message="$(read_result_field message)"
 structured_result_hint="$(read_result_field hint)"
 structured_failed_phase="$(read_result_field failedPhase)"
 structured_child_result="$(read_result_field childResult)"
+structured_scope="$(read_result_field scope)"
+structured_base="$(read_result_field base)"
+structured_target="$(read_result_field target)"
+structured_dirty_tracked="$(read_result_field dirtyTrackedIncluded)"
+structured_untracked="$(read_result_field untrackedIncluded)"
 structured_outputs="$(read_result_field outputs)"
 final_review=""
 if [ ${shellQuote(kind)} = "review" ]; then
@@ -710,6 +720,11 @@ fi
   [ -n "$structured_reason_code" ] && echo "reason_code=$structured_reason_code"
   [ -n "$structured_failed_phase" ] && echo "failed_phase=$structured_failed_phase"
   [ -n "$structured_child_result" ] && echo "child_result=$structured_child_result"
+  [ -n "$structured_scope" ] && echo "scope=$structured_scope"
+  [ -n "$structured_base" ] && echo "base=$structured_base"
+  [ -n "$structured_target" ] && echo "target=$structured_target"
+  [ -n "$structured_dirty_tracked" ] && echo "dirty_tracked_files=$structured_dirty_tracked"
+  [ -n "$structured_untracked" ] && echo "untracked_files=$structured_untracked"
   [ -n "$structured_outputs" ] && echo "outputs=$structured_outputs"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
   [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
@@ -814,6 +829,11 @@ function renderBackgroundJobStatus(args, cwd) {
   if (status.finished_head && status.finished_head !== status.started_head) lines.push(`finished HEAD: ${status.finished_head.slice(0, 8)}`);
   if (status.repo_changed) lines.push(`warning: ${status.repo_changed}`);
   if (status.failed_phase) lines.push(`failed phase: ${status.failed_phase}`);
+  if (status.scope) lines.push(`scope: ${status.scope}`);
+  if (status.base) lines.push(`base: ${status.base}`);
+  if (status.target) lines.push(`target: ${status.target}`);
+  if (status.dirty_tracked_files) lines.push(`dirty tracked files: ${status.dirty_tracked_files}`);
+  if (status.untracked_files) lines.push(`untracked files: ${status.untracked_files}`);
   if (status.outputs) lines.push(`outputs: ${status.outputs}`);
   if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
   if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
@@ -1060,7 +1080,7 @@ async function handleEdcMenu(pi, args, ctx) {
       runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
       break;
     case EDC_MENU.QUALITY_REVIEW:
-      runBackgroundAction(pi, ctx, "audit", "edc-audit.sh");
+      await runScopedReview(pi, ctx, "audit", "edc-audit.sh", { commandName: "quality-review", supportsFull: true, fullArgs: [] });
       break;
     case EDC_MENU.DOCTOR:
       await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");

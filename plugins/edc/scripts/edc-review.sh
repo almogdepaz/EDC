@@ -406,6 +406,7 @@ auto_mode() {
 
   local target="$1"; shift
   local extra_args=("$@")
+  edc_result_scope_from_args "$target" ${extra_args[@]+"${extra_args[@]}"}
   local -a build_args=() update_args=()
   local no_context_refresh=0
   local ignore_context=0

@@ -110,6 +110,52 @@ edc_result_on_exit() {
   return "$rc"
 }
 
+edc_result_scope_from_args() {
+  unset EDC_RESULT_SCOPE EDC_RESULT_BASE EDC_RESULT_TARGET EDC_RESULT_DIRTY_TRACKED_INCLUDED EDC_RESULT_UNTRACKED_INCLUDED
+  local target="" base="" full_scope=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --full)
+        full_scope=1
+        shift
+        ;;
+      --base)
+        if [ "$#" -ge 2 ]; then
+          base="$2"
+          shift 2
+        else
+          shift
+        fi
+        ;;
+      --ignore|--context-mode|--agent|--model|--pr)
+        if [ "$#" -ge 2 ]; then shift 2; else shift; fi
+        ;;
+      --*)
+        shift
+        ;;
+      *)
+        if [ -z "$target" ]; then target="$1"; fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ "$full_scope" -eq 1 ]; then
+    export EDC_RESULT_SCOPE="full"
+    export EDC_RESULT_TARGET="current working tree / HEAD"
+    export EDC_RESULT_DIRTY_TRACKED_INCLUDED="1"
+    export EDC_RESULT_UNTRACKED_INCLUDED="0"
+    return 0
+  fi
+  if [ -n "$base" ] || [ -n "$target" ]; then
+    export EDC_RESULT_SCOPE="differential"
+    export EDC_RESULT_BASE="$base"
+    export EDC_RESULT_TARGET="${target:-HEAD}"
+    export EDC_RESULT_DIRTY_TRACKED_INCLUDED="1"
+    export EDC_RESULT_UNTRACKED_INCLUDED="0"
+  fi
+}
+
 edc_is_generated_agents_file() {
   local file="$1"
   [ -f "$file" ] || return 1

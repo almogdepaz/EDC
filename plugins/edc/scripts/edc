@@ -9,10 +9,11 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review-all --agent claude|cursor|codex|pi [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-  edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-  edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review-all --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>|--full] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality-review --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
@@ -20,16 +21,17 @@ Usage:
 Commands:
   build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
   update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
-  review-all       Run security, delivery, and quality review phases
+  review           Run all review phases: security, delivery, and quality
+  review-all       Alias for review
   security-review  Run the security review pipeline (auto-builds/updates context if needed)
-  review           Backward-compatible alias for security-review
   delivery-review  Run the goal/spec delivery + architecture-fit review pipeline
-  audit            Run the code-quality audit pipeline (auto-builds/updates context if needed)
+  quality-review   Run the code-quality/maintainability review pipeline
+  audit            Deprecated alias for quality-review
   mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build, update, review-all, security-review, review, delivery-review, and audit.
+  --agent is required for build, update, review, review-all, security-review, delivery-review, quality-review, and audit.
   --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
@@ -125,6 +127,75 @@ option_in_list() {
     *" $needle "*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+normalize_scope_args() {
+  local command_name="$1" supports_full="$2"
+  shift 2
+
+  PARSED_SCOPE_ARGS=()
+  local diff_spec="" full_scope=0 has_base=0 positional_count=0
+  local -a other_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --diff)
+        [ "$#" -ge 2 ] || die "--diff requires a value like <base>...<target>"
+        [ -z "$diff_spec" ] || die "--diff may only be specified once"
+        diff_spec="$2"
+        shift 2
+        ;;
+      --full)
+        full_scope=1
+        shift
+        ;;
+      --base)
+        [ "$#" -ge 2 ] || die "--base requires a value"
+        has_base=1
+        other_args+=("$1" "$2")
+        shift 2
+        ;;
+      --ignore|--context-mode|--pr)
+        [ "$#" -ge 2 ] || die "$1 requires a value"
+        other_args+=("$1" "$2")
+        shift 2
+        ;;
+      --*)
+        other_args+=("$1")
+        shift
+        ;;
+      *)
+        positional_count=$((positional_count + 1))
+        other_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [ "$full_scope" -eq 1 ] && { [ -n "$diff_spec" ] || [ "$has_base" -ne 0 ] || [ "$positional_count" -ne 0 ]; }; then
+    die "--full cannot be combined with --diff, --base, or a positional target"
+  fi
+  if [ -n "$diff_spec" ] && { [ "$has_base" -ne 0 ] || [ "$positional_count" -ne 0 ]; }; then
+    die "--diff cannot be combined with --base or a positional target"
+  fi
+  if [ "$full_scope" -eq 1 ]; then
+    [ "$supports_full" -eq 1 ] || die "--full is not supported for $command_name yet; use --diff <base>...<target>"
+    PARSED_SCOPE_ARGS=("--full" ${other_args[@]+"${other_args[@]}"})
+    return 0
+  fi
+  if [ -n "$diff_spec" ]; then
+    case "$diff_spec" in
+      *...*) ;;
+      *) die "--diff must use <base>...<target>" ;;
+    esac
+    local base_ref="${diff_spec%%...*}"
+    local target_ref="${diff_spec#*...}"
+    [ -n "$base_ref" ] || die "--diff base ref is empty"
+    [ -n "$target_ref" ] || die "--diff target ref is empty"
+    PARSED_SCOPE_ARGS=("$target_ref" "--base" "$base_ref" ${other_args[@]+"${other_args[@]}"})
+    return 0
+  fi
+  PARSED_SCOPE_ARGS=(${other_args[@]+"${other_args[@]}"})
 }
 
 parse_agent_context_args() {
@@ -232,41 +303,44 @@ build_cmd() {
   )
 }
 
-review_cmd() {
-  parse_agent_context_args security-review 1 passthrough passthrough "" "--base" "$@"
+security_review_cmd() {
+  parse_agent_context_args security-review 1 passthrough passthrough "--no-context-refresh --ignore-context" "--base --diff --pr" "$@"
   finalize_agent_context 1
+  normalize_scope_args security-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 review_all_cmd() {
-  parse_agent_context_args review-all 1 passthrough passthrough "" "--base" "$@"
+  parse_agent_context_args review 1 passthrough passthrough "" "--base --diff" "$@"
   finalize_agent_context 1
+  normalize_scope_args review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local review_all_script
   review_all_script="$(find_script edc-review-all.sh)" \
     || die "edc-review-all.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review-all.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_all_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_all_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 delivery_review_cmd() {
-  parse_agent_context_args delivery-review 1 passthrough passthrough "" "--base" "$@"
+  parse_agent_context_args delivery-review 1 passthrough passthrough "--full" "--base --diff" "$@"
   finalize_agent_context 1
+  normalize_scope_args delivery-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local delivery_script
   delivery_script="$(find_script edc-delivery-review.sh)" \
     || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
-audit_cmd() {
-  parse_agent_context_args audit 1 none strict "" "" "$@"
+quality_review_cmd() {
+  parse_agent_context_args quality-review 1 none strict "" "" "$@"
   finalize_agent_context 1
 
   local audit_script
@@ -396,17 +470,17 @@ main() {
     build)
       build_cmd "$@"
       ;;
-    review-all)
+    review|review-all)
       review_all_cmd "$@"
       ;;
-    security-review|review)
-      review_cmd "$@"
+    security-review)
+      security_review_cmd "$@"
       ;;
     delivery-review)
       delivery_review_cmd "$@"
       ;;
-    audit)
-      audit_cmd "$@"
+    quality-review|audit)
+      quality_review_cmd "$@"
       ;;
     update)
       update_cmd "$@"

@@ -54,7 +54,7 @@ EOF
 }
 
 setup_repo
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude bash "$SCRIPT" HEAD --base HEAD~1 >/tmp/t40-good.out 2>/tmp/t40-good.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude bash "$SCRIPT" HEAD --base HEAD~1 >"$TMP/good.out" 2>"$TMP/good.err"
 node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -68,7 +68,7 @@ echo "PASS: delivery-review writes structured success result"
 
 setup_repo
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_T40_MISSING_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >/tmp/t40-bad.out 2>/tmp/t40-bad.err
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_T40_MISSING_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$TMP/bad.out" 2>"$TMP/bad.err"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
@@ -83,6 +83,6 @@ NODE
   echo "PASS: delivery-review writes structured failure result"
 else
   echo "FAIL: delivery-review missing report should fail"
-  cat /tmp/t40-bad.out /tmp/t40-bad.err
+  cat "$TMP/bad.out" "$TMP/bad.err"
   exit 1
 fi

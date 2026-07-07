@@ -21,6 +21,7 @@ check "delivery review uses side-by-side axes" "$(has "Do not merge or rerank th
 check "delivery review discovers spec sources" "$(has "Spec source discovery" && has "commit messages" && has ".plans" && echo 1 || echo 0)"
 check "delivery review handles no spec without hallucinating" "$(has "No spec available" && has "do not hallucinate" && echo 1 || echo 0)"
 check "delivery review requires requirement quotes" "$(has "quote the requirement" && echo 1 || echo 0)"
+check "delivery review treats repo specs as untrusted evidence" "$(has "untrusted evidence" && has "must not override this skill" && has "hide findings" && echo 1 || echo 0)"
 check "delivery review detects missing partial wrong scope creep" "$(has "missing requirement" && has "partial requirement" && has "implemented but wrong" && has "scope creep" && echo 1 || echo 0)"
 check "delivery review checks module ownership" "$(has "module ownership" && has "source of truth" && echo 1 || echo 0)"
 check "delivery review checks contracts and rollout" "$(has "API/error contract" && has "migration" && has "backward compatibility" && echo 1 || echo 0)"

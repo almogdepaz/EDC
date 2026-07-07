@@ -338,6 +338,24 @@ else
   exit 1
 fi
 
+(
+  cd "$PROJECT"
+  git update-ref refs/remotes/origin/trunk HEAD
+  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+)
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'origin/trunk' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff uses remote-only default branch"
+else
+  echo "FAIL: canonical review diff did not use remote-only default branch"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+git -C "$PROJECT" symbolic-ref --delete refs/remotes/origin/HEAD
 rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli review diff trunk --agent codex)
 if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \

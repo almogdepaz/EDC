@@ -162,8 +162,13 @@ function extractFilePathsFromBash(command) {
 
 export function normalizePath(p, projectRoot) {
   let normalized = p.replace(/^\.\//, "");
-  if (projectRoot && normalized.startsWith(projectRoot)) {
-    normalized = normalized.slice(projectRoot.length).replace(/^\//, "");
+  if (projectRoot) {
+    const root = projectRoot.replace(/\/+$/, "");
+    if (normalized === root) {
+      normalized = "";
+    } else if (normalized.startsWith(`${root}/`)) {
+      normalized = normalized.slice(root.length + 1);
+    }
   }
   return normalized;
 }

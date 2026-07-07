@@ -47,9 +47,12 @@ grep -n "memcpy\|memmove\|memset\|strcpy\|strcat\|sprintf\|snprintf" <file>
 grep -n "malloc\|realloc\|calloc\|alloc" <file>
 grep -n "free\|curl_free\|Curl_safefree\|safefree" <file>
 grep -n "atoi\|atol\|htons\|ntohs\|ntohl\|htonl\|strtol\|strtoul" <file>
+grep -n "parse\|decode\|visit\|walk\|recurse" <file>
 ```
 
-For each candidate, verify whether attacker/peer-controlled data reaches the size, pointer, or lifetime decision without a guard. Report only verified memory-safety risk.
+For recursive C/C++ parsers or tree/packet walkers, trace whether attacker-controlled nesting can drive unbounded recursion. Verify a depth counter, input-size bound, or iterative limit exists before dismissing stack-overflow risk.
+
+For each candidate, verify whether attacker/peer-controlled data reaches the size, pointer, lifetime, or recursion-depth decision without a guard. Report only verified memory-safety risk.
 
 If one issue is found, run a variant sweep for that pattern class across the changed file before continuing.
 

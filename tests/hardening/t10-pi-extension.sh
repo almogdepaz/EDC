@@ -628,7 +628,37 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 7. tool_call injects context for a routed file
+  // 7. detached background spawn failure marks status failed instead of crashing or staying running.
+  const spawnFailDir = `${cwd}/spawn-fail`;
+  fs.mkdirSync(spawnFailDir, { recursive: true });
+  childProcess.execFileSync("git", ["init", "-q"], { cwd: spawnFailDir });
+  childProcess.execFileSync("git", ["config", "user.email", "a@example.com"], { cwd: spawnFailDir });
+  childProcess.execFileSync("git", ["config", "user.name", "a"], { cwd: spawnFailDir });
+  fs.writeFileSync(`${spawnFailDir}/tracked.txt`, "tracked\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: spawnFailDir });
+  childProcess.execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: spawnFailDir });
+  fs.mkdirSync(`${spawnFailDir}/.edc/scripts`, { recursive: true });
+  fs.writeFileSync(`${spawnFailDir}/.edc/scripts/edc-review-all.sh`, "#!/usr/bin/env bash\necho should-not-run\n");
+  fs.chmodSync(`${spawnFailDir}/.edc/scripts/edc-review-all.sh`, 0o755);
+  const noBashDir = `${cwd}/no-bash-path`;
+  fs.mkdirSync(noBashDir, { recursive: true });
+  const realGit = childProcess.execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  fs.symlinkSync(realGit, `${noBashDir}/git`);
+  const previousSpawnPath = process.env.PATH;
+  process.env.PATH = noBashDir;
+  try {
+    await edcCmd.opts.handler("", { ...menuCtx(["full repo review", "combined review"]), cwd: spawnFailDir });
+  } finally {
+    process.env.PATH = previousSpawnPath;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const spawnFailStatus = fs.readFileSync(`${spawnFailDir}/.git/edc/status`, "utf8");
+  if (!spawnFailStatus.includes("status=failed") || !spawnFailStatus.includes("failed to start background review-all")) {
+    console.log("SPAWN_ERROR_STATUS_FAIL:" + spawnFailStatus);
+    process.exit(1);
+  }
+
+  // 8. tool_call injects context for a routed file
   const messagesBeforeToolCall = calls.messages.length;
   await tc.handler(
     { type: "tool_call", toolCallId: "x", toolName: "edit", input: { file_path: "src/foo.ts" } },
@@ -639,7 +669,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 8. duplicate tool_call for the same module → no second injection
+  // 9. duplicate tool_call for the same module → no second injection
   await tc.handler(
     { type: "tool_call", toolCallId: "y", toolName: "edit", input: { file_path: "src/bar.ts" } },
     fakeCtx

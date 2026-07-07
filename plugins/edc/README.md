@@ -13,7 +13,7 @@ the user-facing tour.
 |---------|--------------|
 | `/edc:edc-build` | Build the v2 context tree (`AGENTS.md`, `edc-context/index.md`, `edc-context/manifest.json`, `edc-context/modules/*`) |
 | `/edc:edc-update` | Incrementally refresh the v2 context tree from branch diff |
-| `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
+| `/edc:edc-run-review` | Run combined security, delivery, and quality review for `--full` or a git diff target/base |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
 Quality review, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.

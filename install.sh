@@ -261,7 +261,7 @@ write_cursor_commands() {
   mkdir -p "$target/commands"
   rm -f "$target/commands/edc-audit.md" "$target/commands/edc-review.md"
   local entry action script
-  for entry in build:build update:update run-review:review doctor:doctor; do
+  for entry in build:build update:update run-review:review-all doctor:doctor; do
     action="${entry%%:*}"
     script="${entry##*:}"
     cat > "$target/commands/edc-$action.md" <<EOF
@@ -298,7 +298,7 @@ EOF
 write_codex_skills() {
   local target="$1"
   local entry action script
-  for entry in build:build update:update run-review:review doctor:doctor; do
+  for entry in build:build update:update run-review:review-all doctor:doctor; do
     action="${entry%%:*}"
     script="${entry##*:}"
     mkdir -p "$target/edc-$action"

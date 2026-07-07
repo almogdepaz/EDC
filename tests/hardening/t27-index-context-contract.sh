@@ -10,8 +10,10 @@ check_init
 BUILD_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
 UPDATE_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
 MODULE_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
+MODULE_OUTPUT_REQUIREMENTS="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
 MANIFEST_SCHEMA="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
 BUILD_PLAN="$ROOT/plugins/edc/scripts/edc-build-plan.sh"
+JSON_CLI="$ROOT/plugins/edc/hooks/lib/json-cli.mjs"
 REVIEW_SKILL="$ROOT/plugins/edc/skills/edc-review/SKILL.md"
 REVIEW_METHODOLOGY="$ROOT/plugins/edc/skills/edc-review/methodology.md"
 
@@ -81,6 +83,10 @@ check "module prompt rejects size-only splitting" \
   "$(contains "$MODULE_PROMPT" "Do not split solely because LOC or file count is high" && contains "$MODULE_PROMPT" "Split or promote only when subareas have independent durable ownership contracts" && echo 1 || echo 0)"
 check "build-plan task asks subagents for distilled docs" \
   "$(contains "$BUILD_PLAN" "Write distilled high-signal context" && echo 1 || echo 0)"
+check "generated module task prompt forbids sibling source bodies" \
+  "$(contains "$JSON_CLI" "do not read sibling source bodies" && not_contains "$JSON_CLI" "You may read sibling-module source" && echo 1 || echo 0)"
+check "module output requirements are backend-neutral" \
+  "$(contains "$MODULE_OUTPUT_REQUIREMENTS" "the agent MUST" && not_contains "$MODULE_OUTPUT_REQUIREMENTS" "Claude MUST" && echo 1 || echo 0)"
 
 check "manifest schema documents contextless coverage" \
   "$(contains "$MANIFEST_SCHEMA" "contextless.entries" && contains "$MANIFEST_SCHEMA" "promotion-check" && contains "$MANIFEST_SCHEMA" "no-context-review" && echo 1 || echo 0)"

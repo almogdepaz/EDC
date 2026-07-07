@@ -34,6 +34,7 @@ check "review methodology is security-titled" "$(file_has "$METHODOLOGY" "Securi
 check "reporting is security-titled" "$(file_has "$REPORTING" "Security Report" && echo 1 || echo 0)"
 check "reporting requires exact Findings heading" "$(file_has "$REPORTING" "exact heading \`## Findings\`" && file_has "$REPORTING" "Do not replace" && echo 1 || echo 0)"
 check "adversarial reference remains present" "$(file_has "$ADVERSARIAL" "Attacker Model" && echo 1 || echo 0)"
+check "C/C++ fast path covers recursive stack exhaustion" "$(file_has "$METHODOLOGY" "unbounded recursion" && file_has "$METHODOLOGY" "stack-overflow risk" && file_has "$PATTERNS" "Recursive Parser / Walker Depth" && echo 1 || echo 0)"
 check "patterns reference remains vulnerability-focused" "$(file_has "$PATTERNS" "Common Issue Patterns" && file_has "$PATTERNS" "Access Control Bypass" && echo 1 || echo 0)"
 check "review no longer advertises generic code review" "$(not_has "Code review for PRs" && not_has "standard code review" && echo 1 || echo 0)"
 check "reporting no longer recommends technical debt bucket" "$(not_has "Technical Debt" && echo 1 || echo 0)"

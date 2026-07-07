@@ -89,6 +89,21 @@ else
   say_fail "classify-cli.mjs without shell router files" "got: $no_shell"
 fi
 
+boundary_check=$(node --input-type=module -e '
+  const { normalizePath } = await import("./plugins/edc/hooks/lib/route.mjs");
+  const root = "/tmp/repo";
+  const inRepo = normalizePath("/tmp/repo/src/app.ts", root);
+  const sibling = normalizePath("/tmp/repo-other/src/app.ts", root);
+  if (inRepo !== "src/app.ts") throw new Error(`in-repo normalized incorrectly: ${inRepo}`);
+  if (sibling !== "/tmp/repo-other/src/app.ts") throw new Error(`sibling path was relativized: ${sibling}`);
+  console.log("OK");
+' 2>&1)
+if [ "$boundary_check" = "OK" ]; then
+  say_pass "normalizePath only relativizes paths inside project root"
+else
+  say_fail "normalizePath project-root boundary" "$boundary_check"
+fi
+
 echo
 echo "t17-route-js-parity: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -21,6 +21,10 @@ if [[ "$prompt" == *"DELIVERY REVIEW TASK"* ]] || [[ "$prompt" == *"DELIVERY CUR
   if [ "$scenario" = "delivery-mutates" ]; then
     printf 'agent mutation\n' > src/app.ts
   fi
+  if [ "$scenario" = "delivery-git-hook-mutates" ]; then
+    mkdir -p .git/hooks
+    printf '#!/usr/bin/env bash\necho pwned\n' > .git/hooks/pre-commit
+  fi
   printf '# Delivery / Architecture Review\n\n## Summary\n**Delivery verdict:** delivered\n**Architecture fit:** fits\n' > "$report_path"
   exit 0
 fi
@@ -29,6 +33,10 @@ if [[ "$prompt" == *"AUDIT WORKER TASK"* ]]; then
   report_path=$(printf '%s\n' "$prompt" | awk -F': ' '/^AUDIT_REPORT_PATH: /{print $2; exit}')
   if [ "$scenario" = "audit-worker-mutates" ]; then
     printf 'agent mutation\n' > src/app.ts
+  fi
+  if [ "$scenario" = "audit-worker-git-hook-mutates" ]; then
+    mkdir -p .git/hooks
+    printf '#!/usr/bin/env bash\necho pwned\n' > .git/hooks/pre-commit
   fi
   printf '## Module Audit\n\nNo findings.\n' > "$report_path"
   exit 0
@@ -110,6 +118,19 @@ else
   echo "FAIL: delivery-review accepted forbidden write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
 
+setup_repo "$TMP/delivery-git-hook"
+export EDC_T45_SCENARIO=delivery-git-hook-mutates
+result=0
+out=$(bash "$ROOT/plugins/edc/scripts/edc-delivery-review.sh" HEAD --base HEAD~1 2>&1) || result=$?
+if [ "$result" -ne 0 ] \
+  && grep -q 'touched forbidden paths' <<<"$out" \
+  && grep -q '.git/hooks/pre-commit' <<<"$out" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.reasonCode === "delivery-write-containment" ? 0 : 1)'; then
+  echo "PASS: delivery-review blocks forbidden git hook writes"
+else
+  echo "FAIL: delivery-review accepted forbidden git hook write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
+fi
+
 setup_repo "$TMP/audit-worker"
 export EDC_T45_SCENARIO=audit-worker-mutates
 result=0
@@ -122,6 +143,19 @@ if [ "$result" -ne 0 ] \
   echo "PASS: audit worker blocks forbidden source writes"
 else
   echo "FAIL: audit worker accepted forbidden write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
+fi
+
+setup_repo "$TMP/audit-worker-git-hook"
+export EDC_T45_SCENARIO=audit-worker-git-hook-mutates
+result=0
+out=$(bash "$ROOT/plugins/edc/scripts/edc-audit.sh" 2>&1) || result=$?
+if [ "$result" -ne 0 ] \
+  && grep -q 'audit worker touched forbidden paths' <<<"$out" \
+  && grep -q '.git/hooks/pre-commit' <<<"$out" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.reasonCode === "audit-write-containment" ? 0 : 1)'; then
+  echo "PASS: audit worker blocks forbidden git hook writes"
+else
+  echo "FAIL: audit worker accepted forbidden git hook write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
 
 setup_repo "$TMP/audit-synthesis"

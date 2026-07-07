@@ -67,14 +67,17 @@ EOF
 # Exits non-zero with a v1 migration hint if v1 markers detected.
 decide_route() {
   local force="$1"
-  local rc=0
-  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  local rc=0 check_err
+  check_err=$(mktemp)
+  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     0)  # no context dir
+      rm -f "$check_err"
       echo "build"
       return 0
       ;;
     11) # healthy v2
+      rm -f "$check_err"
       if [ "$force" = "1" ]; then
         echo "wipe-and-build"
       else
@@ -83,16 +86,19 @@ decide_route() {
       return 0
       ;;
     10) # partial / malformed v2
+      rm -f "$check_err"
       echo "wipe-and-build"
       return 0
       ;;
     12) # v1 layout — refuse
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 12
       ;;
     *)
       echo "ERROR: edc-clean-slate.sh --check returned unexpected exit $rc" >&2
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
   esac

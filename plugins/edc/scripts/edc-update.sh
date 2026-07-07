@@ -61,13 +61,16 @@ EOF
 # Echoes nothing on success. Exits non-zero with a copy-pasteable hint when
 # the on-disk state cannot be safely updated.
 preflight_check() {
-  local rc=0
-  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  local rc=0 check_err
+  check_err=$(mktemp)
+  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     11) # healthy v2 — good to go
+      rm -f "$check_err"
       return 0
       ;;
     0)  # no context dir
+      rm -f "$check_err"
       cat >&2 <<EOF
 ERROR: no ${EDC_CONTEXT_DIR}/ to update.
 
@@ -78,6 +81,7 @@ EOF
       return 1
       ;;
     10) # partial / malformed v2
+      rm -f "$check_err"
       cat >&2 <<EOF
 ERROR: partial or malformed ${EDC_CONTEXT_DIR}/ layout detected.
 
@@ -89,12 +93,14 @@ EOF
       return 1
       ;;
     12) # v1 layout — clean-slate already printed the migration hint
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
     *)
       echo "ERROR: edc-clean-slate.sh --check returned unexpected exit $rc" >&2
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
   esac

@@ -10,21 +10,24 @@ PLUGIN_SCRIPT="plugins/edc/scripts/edc-review.sh"
 
 echo "=== T5: Portability + plugin install ==="
 
+TMPDIR_T5=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_T5"' EXIT
+
 # ── 5a: bash 3.2-compatible scripts do not require bash >=4 ────────────────
-if ! grep -R 'BASH_VERSINFO\[0\].*-ge 4\|brew install bash\|bash >=4' plugins/edc/scripts pi/README.md >/tmp/edc-t5-bash4.txt; then
+if ! grep -R 'BASH_VERSINFO\[0\].*-ge 4\|brew install bash\|bash >=4' plugins/edc/scripts pi/README.md >"$TMPDIR_T5/bash4.txt"; then
   echo "PASS: plugin runtime no longer requires bash >=4"
 else
   echo "FAIL: plugin runtime still requires bash >=4"
-  cat /tmp/edc-t5-bash4.txt
+  cat "$TMPDIR_T5/bash4.txt"
   exit 1
 fi
 
 # ── 5b: runtime no longer resolves or exports EDC_BASH ──────────────────────
-if ! grep -R 'EDC_BASH\|resolveBashExecutable' plugins/edc/scripts pi/index.mjs tests/hardening/run-all.sh >/tmp/edc-t5-edc-bash.txt; then
+if ! grep -R 'EDC_BASH\|resolveBashExecutable' plugins/edc/scripts pi/index.mjs tests/hardening/run-all.sh >"$TMPDIR_T5/edc-bash.txt"; then
   echo "PASS: runtime no longer carries EDC_BASH interpreter contract"
 else
   echo "FAIL: runtime still carries EDC_BASH interpreter contract"
-  cat /tmp/edc-t5-edc-bash.txt
+  cat "$TMPDIR_T5/edc-bash.txt"
   exit 1
 fi
 
@@ -33,11 +36,11 @@ jq_runtime_scan_paths=$(find plugins/edc/scripts -type f ! -name 'edc-spawn-anal
 if ! grep 'command -v jq\|jq is required\|jq required\|brew install jq\|apt install jq' \
   $jq_runtime_scan_paths \
   pi/README.md \
-  pi/install.sh >/tmp/edc-t5-jq.txt; then
+  pi/install.sh >"$TMPDIR_T5/jq.txt"; then
   echo "PASS: installed runtime no longer requires jq"
 else
   echo "FAIL: installed runtime still requires jq"
-  cat /tmp/edc-t5-jq.txt
+  cat "$TMPDIR_T5/jq.txt"
   exit 1
 fi
 
@@ -65,6 +68,31 @@ if [ -z "$bare_lines" ]; then
 else
   echo "FAIL: \$ARGUMENTS still used bare in bash invocations:"
   echo "$bare_lines"
+  exit 1
+fi
+
+if grep -q 'edc-review-all.sh' "$COMMAND" \
+  && ! grep -q 'edc-review.sh' "$COMMAND" \
+  && grep -q 'run-review:review-all' install.sh; then
+  echo "PASS: generic review wrappers delegate to combined review-all"
+else
+  echo "FAIL: generic review wrappers must delegate to edc-review-all.sh"
+  exit 1
+fi
+
+if node <<'NODE'
+const fs = require('fs');
+const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+const marketplace = JSON.parse(fs.readFileSync('.claude-plugin/marketplace.json', 'utf8'));
+const plugin = JSON.parse(fs.readFileSync('plugins/edc/.claude-plugin/plugin.json', 'utf8'));
+if (marketplace.metadata.version !== packageVersion) process.exit(1);
+if (!marketplace.plugins.every((entry) => entry.version === packageVersion)) process.exit(1);
+if (plugin.version !== packageVersion) process.exit(1);
+NODE
+then
+  echo "PASS: distribution metadata versions match package.json"
+else
+  echo "FAIL: distribution metadata versions drift from package.json"
   exit 1
 fi
 
@@ -162,14 +190,14 @@ chmod +x "$REMOTE_BIN/tar"
   SHELL=/bin/zsh \
   CI=0 \
   PATH="$REMOTE_BIN:$PATH" \
-  bash install.sh --agent claude --no-path >/tmp/edc-t5-remote-install.out 2>&1
+  bash install.sh --agent claude --no-path >"$TMPDIR_T5/remote-install.out" 2>&1
 )
 if grep -q 'archive/refs/tags/v' "$REMOTE_TMP/url.log" \
   && [ -x "$REMOTE_HOME/.edc/scripts/edc" ]; then
   echo "PASS: remote install uses tagged archive source tree"
 else
   echo "FAIL: remote install did not use tagged archive source tree"
-  cat /tmp/edc-t5-remote-install.out
+  cat "$TMPDIR_T5/remote-install.out"
   exit 1
 fi
 rm -rf "$REMOTE_TMP"
@@ -184,11 +212,11 @@ fi
 
 # ── 5e2: shell entrypoints share script-dir resolution ─────────────────────
 if grep -q '^edc_resolve_script_dir()' plugins/edc/scripts/edc-lib.sh \
-  && ! grep -R '^_edc_resolve_script_dir()' plugins/edc/scripts/edc*.sh >/tmp/edc-t5-script-dir.txt; then
+  && ! grep -R '^_edc_resolve_script_dir()' plugins/edc/scripts/edc*.sh >"$TMPDIR_T5/script-dir.txt"; then
   echo "PASS: shell entrypoints share script-dir resolution"
 else
   echo "FAIL: shell entrypoints still duplicate script-dir resolution"
-  cat /tmp/edc-t5-script-dir.txt 2>/dev/null || true
+  cat "$TMPDIR_T5/script-dir.txt" 2>/dev/null || true
   exit 1
 fi
 
@@ -244,9 +272,6 @@ else
 fi
 
 # ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
-TMPDIR_T5=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_T5"' EXIT
-
 # Simulate install: run the hook with a fake project root
 result=$(node -e "
 import { join } from 'path';

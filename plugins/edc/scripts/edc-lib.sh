@@ -1106,22 +1106,51 @@ edc_review_write_allowed_path() {
   esac
 }
 
+edc_hash_or_missing_path() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    shasum -a 256 "$path"
+  else
+    printf 'MISSING  %s\n' "$path"
+  fi
+}
+
+edc_emit_review_git_metadata_paths() {
+  local git_path hooks_dir refs_dir hook
+  for git_path in HEAD config packed-refs; do
+    git rev-parse --git-path "$git_path" 2>/dev/null || true
+  done
+  for hook in applypatch-msg commit-msg fsmonitor-watchman post-update pre-applypatch pre-commit pre-merge-commit prepare-commit-msg pre-push pre-rebase pre-receive push-to-checkout sendemail-validate update; do
+    git rev-parse --git-path "hooks/$hook" 2>/dev/null || true
+  done
+  hooks_dir=$(git rev-parse --git-path hooks 2>/dev/null || true)
+  if [ -n "$hooks_dir" ] && [ -d "$hooks_dir" ]; then
+    find "$hooks_dir" -type f -print 2>/dev/null || true
+  fi
+  refs_dir=$(git rev-parse --git-path refs 2>/dev/null || true)
+  if [ -n "$refs_dir" ] && [ -d "$refs_dir" ]; then
+    find "$refs_dir" -type f -print 2>/dev/null || true
+  fi
+}
+
 edc_snapshot_review_forbidden_paths() {
   local output="$1"
   shift
   : > "$output"
   {
-    edc_emit_dirty_tracked_paths
-    git ls-files --others --exclude-standard -z 2>/dev/null || true
-  } | while IFS= read -r -d '' path; do
-    [ -n "$path" ] || continue
-    edc_review_write_allowed_path "$path" "$@" && continue
-    if [ -f "$path" ]; then
-      shasum -a 256 "$path"
-    else
-      printf 'MISSING  %s\n' "$path"
-    fi
-  done | sort -u > "$output"
+    {
+      edc_emit_dirty_tracked_paths
+      git ls-files --others --exclude-standard -z 2>/dev/null || true
+    } | while IFS= read -r -d '' path; do
+      [ -n "$path" ] || continue
+      edc_review_write_allowed_path "$path" "$@" && continue
+      edc_hash_or_missing_path "$path"
+    done
+    edc_emit_review_git_metadata_paths | while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      edc_hash_or_missing_path "$path"
+    done
+  } | sort -u > "$output"
 }
 
 edc_diff_review_forbidden_paths() {

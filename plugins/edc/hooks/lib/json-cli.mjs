@@ -305,7 +305,7 @@ function command() {
           module: module.name,
           paths: module.paths,
           out: `${modulesDir}/${kebab(module.name)}.md`,
-          prompt: `Build deep architectural context for module \`${module.name}\`. Files in scope: \`${array(module.paths).join(", ")}\`. Invoke the \`edc-module-context-impl\` skill on these files. You may read sibling-module source if it materially improves this module's context. Write distilled high-signal context directly to \`${modulesDir}/${kebab(module.name)}.md\`; include decision-useful read boundaries and source-truth pointers for exact details, but do not dump scratch analysis, empty template sections, or obvious code inventory. Return a ≤500-token summary for the orchestrator.`,
+          prompt: `Build deep architectural context for module \`${module.name}\`. Files in scope: \`${array(module.paths).join(", ")}\`. Invoke the \`edc-module-context-impl\` skill on these files. Use sibling-module signatures/index context for cross-module boundaries; do not read sibling source bodies. Write distilled high-signal context directly to \`${modulesDir}/${kebab(module.name)}.md\`; include decision-useful read boundaries and source-truth pointers for exact details, but do not dump scratch analysis, empty template sections, or obvious code inventory. Return a ≤500-token summary for the orchestrator.`,
         })),
       });
       return;

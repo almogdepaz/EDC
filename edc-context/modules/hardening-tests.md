@@ -2,56 +2,71 @@
 # Module: hardening-tests
 
 ## Scope
-Owns shell/Node regression and hardening tests for the EDC runtime, plugins, Pi adapter, package metadata, CI execution, and orchestration contracts.
+Owns shell/Node regression and hardening tests, skill-eval fixtures, CI execution, package metadata checks, and orchestration contracts.
 
-**Primary paths:** `tests/hardening/`, `.github/workflows/ci.yml`.
+**Primary paths:** `tests/hardening/`, `tests/fixtures/skill-evals/`, `.github/workflows/ci.yml`, `.shellcheckrc`.
 
 ## Purpose
-This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background job UX, package publishing metadata, and runtime hooks.
+This module is the deterministic safety net for EDC's shell/JS/agent integration. Tests create temporary git repos, mock agent CLIs where needed, and assert contracts around routing, v2 layout validation, context recovery, prompt resolution, Bash compatibility, Pi integration, background job UX, package publishing metadata, skill boundaries, and runtime hooks.
 
-The current branch adds prompt-contract coverage for the routing-first index and distilled module-doc shape, alongside CI/package/Pi/runtime contracts. The tests intentionally assert exact phrases and section-order cues in prompt markdown because those prompts are product behavior, not comments.
+The current branch adds contract coverage for the separated workflow taxonomy and its new command composition: `review`/`review-all` runs security, delivery, and quality phases; `security-review` is security-only; `delivery-review` owns spec/architecture; `quality-review`/`audit` owns code quality. Audit tests expect per-module worker prompts plus a synthesis prompt and pin the simplification ladder, simplification tags, antipattern overlap, root-cause/smallest-check heuristics, accepted debt markers, and no-finding wording. Pi tests pin scope menus, default-branch behavior, combined review, quality/delivery jobs, and structured status fields. The new `tests/fixtures/skill-evals/` corpus is schema-only hardening data for future LLM evals; it intentionally contains realistic prompt/source/spec/context fixtures but is not executed by an LLM in CI.
 
 ## Test organization
 - `run-all.sh`: suite runner. It creates an isolated temporary HOME, copies public/private EDC skills into that HOME, exports it, then runs every `tests/hardening/t*.sh` in order.
 - `lib/check.sh`: shared PASS/FAIL helpers, including file-backed counters for tests that execute assertions in subshells.
 - `t1-*` through `t9-*`: early tool lockdown, stream filtering, content validation, timeouts, install portability, auto mode, CLI entrypoint, ignore rules, routing, and Pi background-status persistence.
-- `t2-pi-background-runs.sh`: asserts Pi background status/logs live under `.git/edc/`, survive `edc-context/` cleanup during recovery, and safely quote git-path display strings in worktrees.
-- `t10-pi-extension.sh`: broad fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit, session/tool injection works, menu actions route to scripts, context preflight prompts can be accepted/declined/bypassed, shared background job starts/statuses/blocks duplicates, status UI is only pinned while running, session shutdown clears UI, help is direct, and EDC Bash tool calls get longer timeouts.
-- `t11-audit-orchestrator.sh`: audit subprocess/freshness/report validation behavior.
+- `t2-pi-background-runs.sh`: asserts Pi background status/logs live under `.git/edc/`, survive `edc-context/` cleanup during recovery, safely quote git-path display strings in worktrees, and use the default-branch review menu label.
+- `t10-pi-extension.sh`: broad fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit/delivery, session/tool injection works, review-all/security/delivery/quality/build/update menu actions route to scripts, scope and default-base review/update/delivery args are detected, context preflight prompts can be accepted/declined/bypassed, structured background job status surfaces scope/outputs/failure fields, shared background jobs start/status/block duplicates, status UI is only pinned while running, session shutdown clears UI, help is direct, and EDC Bash tool calls get longer timeouts.
+- `t11-audit-orchestrator.sh`: audit/quality-review freshness/recovery plus full and diff-scoped per-module worker fanout, synthesis, warning-on-validated-output, and report validation behavior.
 - `t12-build-orchestrator.sh`: build route matrix (missing, healthy, force, partial, missing AGENTS, v1 refusal) and doctor validation.
 - `t13-update-orchestrator.sh`: update preflight and validation paths.
-- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; sources `edc-lib.sh` from an absolute path while running in a separate working directory.
-- `t15-review-routing.sh`: manifest-driven review task routing, unexpected unmapped handling, expected `unmapped.allowedGlobs` accounting through an `allowed-unmapped` report, ambiguity failure, ignore-context/no-context modes, plus `edc-review.sh -h` usage validation.
-- `t16-context-dir-source-of-truth.sh`: canonical path source-of-truth behavior.
+- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; also verifies audit prompt resolution embeds all audit reference files.
+- `t15-review-routing.sh`: manifest-driven security review task routing, dirty tracked file inclusion, unexpected unmapped behavior, deterministic contextless/`allowed-unmapped` accounting through prewritten reports, ambiguity failure, ignore-context/no-context modes, write containment, plus `edc-review.sh -h` usage validation.
+- `t16-context-dir-source-of-truth.sh`: canonical path source-of-truth behavior, including the delivery-review orchestrator in the source-list contract.
 - `t17-route-js-parity.sh`: JS router parity with shell router and no shell exec on hot path.
-- `t18-pi-backend.sh`: Pi JSON backend spawn behavior, model propagation, subprocess no-extension guard, and stream parsing.
-- `t19-bash-alignment.sh`: verifies nested orchestrator calls use `EDC_BASH` rather than ambient `bash`.
-- `t20-pi-review-status-failures.sh`: background review failure status/reason/hint classification.
+- `t18-pi-backend.sh`: Pi JSON backend spawn behavior, model propagation, subprocess no-extension guard, stream parsing, and audit worker/synthesis prompt handling.
+- `t19-bash-alignment.sh`: verifies review auto-mode runs without `EDC_BASH` indirection.
+- `t20-pi-review-status-failures.sh`: background review failure status/reason/hint classification and default-branch menu label coverage.
 - `t21-pi-review-status-report-validation.sh`: Pi background status behavior when review report validation fails.
 - `t22-pi-package-publish.sh`: package metadata and npm allowlist checks for scoped package name, Pi extension entry, gallery image, peer dependency namespace, docs/license inclusion, and benchmark/test/context exclusion.
+- `t23-pi-review-status-provider-failure.sh`: Pi background status classification for nested provider/websocket/transport failures.
+- `t24-pi-package-compat.sh` and `t25-pi-tarball-install-smoke.sh`: Pi package compatibility/smoke tests that now expect `edc-delivery-review` alongside review/audit skills.
 - `t27-index-context-contract.sh`: prompt/docs contract for the routing-first `index.md` shape, distilled module-doc signal filter, build-plan task wording, and review methodology's use of the route table.
+- `t34-audit-skill-contract.sh`: pins audit as scoped, read-only code-quality analysis with reference-file methodology, simplification ladder/tags, repo-helper/stdlib/native/dependency ordering, accepted debt markers, root-cause and smallest-runnable-check heuristics, antipattern overlap terms, ranking/removal-estimate guidance, and terse no-finding output.
+- `t35-security-review-skill-contract.sh`: pins `edc-review` as slim security/adversarial review, not generic code review.
+- `t36-delivery-review-skill-contract.sh`: pins delivery/spec and architecture-fit axes, calibration, reporting, and exclusions.
+- `t37-skill-eval-fixtures.sh`: validates fixture corpus coverage, expected JSON schema, evidence links, lens separation, and audit fixture coverage for simplification/antipattern signals.
+- `t38-delivery-review-orchestrator.sh`: mocked-agent delivery-review orchestrator success/failure contract, bundle embedding, `--full` current-repo mode, report validation, structured `last-run.json`, and SHA-only shell-context prompt construction for unsafe refs.
+- `t41-review-all-orchestrator.sh`: combined review orchestrator runs security, delivery, and quality with correct arg projection, aggregates child `EDC_RESULT_FILE`s, preserves warnings, and identifies failed phases/child result files.
+- `t42-phase-result-contract.sh`: structured phase result contract for result JSON status/reason/output/scope fields consumed by Pi and review-all aggregation.
+
+## Skill eval fixtures
+`tests/fixtures/skill-evals/` contains audit, security, and delivery fixture directories. Each fixture has `prompt.md`, small source/spec/context evidence, and `expected.json` assertions. Hardening validates schema/evidence and lens boundaries only; future eval runners can consume the corpus without making normal CI depend on LLM calls.
 
 ## CI flow
 `.github/workflows/ci.yml` runs on pushes to main/master/refactor and PRs to main/master. It checks out the repo, installs Node 20 and `jq`, runs `npm test`, then runs `npm run pack:check`. CI therefore exercises the same suite and package contents that prepublish uses.
 
 ## Invariants
 - Tests run from repo root and isolate mutation in temporary dirs unless explicitly checking installed paths.
-- `run-all.sh` must provide skill fixtures in a temp HOME so tests do not depend on the developer's real `~/.edc`.
-- Mock agents must key off unique prompt markers because full skill text can contain overlapping words.
+- `run-all.sh` must provide skill fixtures in a temp HOME so tests do not depend on the developer's real `~/.edc`, and it must include public skill reference subdirectories.
+- Mock agents must key off unique prompt markers because full skill text can contain overlapping words; phase-result tests should assert durable JSON, not only process exit codes.
 - v2 context completeness includes `AGENTS.md`; missing startup entrypoint makes a layout partial.
-- Manifest routing, not directory bucketing, determines review task modules.
-- Ambiguous routing is a hard error; unmapped files are warned/allowed only according to manifest policy and allowed globs.
+- Manifest routing, not directory bucketing, determines review task modules and context coverage.
+- Ambiguous routing is a hard error; unmapped files are warned/allowed only according to manifest policy and allowed/contextless globs.
 - Shell and JS routing implementations must agree for exact/prefix/glob, priority, and ambiguity.
-- Bash >=4 propagation is part of the public runtime contract and must be tested on macOS-like PATHs.
-- Pi completed/failed review state is retrievable by status command but should not remain pinned in live UI status widgets.
-- npm package contents are part of the public contract and must be regression-tested when layout changes.
-- Prompt markdown is a tested API surface; changing wording around routing-first index sections, signal filters, or review context loading can be a breaking behavior change.
+- Bash 3.2 compatibility and absence of `EDC_BASH` indirection are part of the public runtime contract and must stay tested on macOS-like PATHs.
+- Pi completed/failed job state is retrievable by status command but should not remain pinned in live UI status widgets.
+- Pi scope/default-branch detection tests should keep at least one non-`main` fixture branch so regressions do not collapse back to hard-coded `main` or skip custom/default scope argument rendering.
+- npm package contents and visible skills are part of the public contract and must be regression-tested when layout changes.
+- Prompt markdown is a tested API surface; changing wording around workflow boundaries, routing-first index sections, signal filters, simplification ladder/antipattern/debt-marker terms, no-finding wording, or review context loading can be a breaking behavior change.
+- Structured result JSON (`schemaVersion: 1`, `status`, `reasonCode`, `outputs`, scope fields, failed phase/child result) is now a wrapper/orchestrator contract, not just diagnostic output.
 
 ## Trust boundaries
 - Tests invoke real shell scripts and Node modules; temp repos and fake binaries prevent accidental mutation of the development checkout.
 - Tests that write generated context use minimal valid v2 stubs; they validate structure/control flow, not semantic context quality.
-- Environment variables (`PATH`, `HOME`, `EDC_AGENT_CLI`, `EDC_BASH`, model vars) are part of the tested API and must be scoped carefully.
+- Environment variables (`PATH`, `HOME`, `EDC_AGENT_CLI`, model vars) are part of the tested API and must be scoped carefully; `EDC_BASH` should remain unset.
 - Fake Pi APIs are behavioral approximations; production Pi lifecycle/API drift still needs manual attention.
+- Skill eval fixture source/spec/context files are intentionally synthetic; they are test data, not production examples or generated context.
 - CI is untrusted infrastructure input/output; tests should use explicit temp locations and not rely on developer-global state.
 
 ## Coupling
@@ -59,13 +74,15 @@ The current branch adds prompt-contract coverage for the routing-first index and
 - Imports `plugin-surface` JS helpers and route logic.
 - Pi tests import `agent-wrappers` from `pi/index.mjs` and model the Pi extension lifecycle.
 - Package tests pin `plugin-surface` distribution metadata and the `agent-wrappers` `pi/` layout.
-- Prompt-resolution and install-layout tests pin `canonical-skills` visibility and substitution behavior.
+- Prompt-resolution, skill-contract, fixture, and install-layout tests pin `canonical-skills` visibility, wording boundaries, reference-file completeness, and substitution behavior.
 - Benchmarking is not on the main test path but uses similar subprocess/model propagation assumptions.
 
 ## Fragility points
 - Several tests rely on `sed`, `bash`, `jq`, `git`, `node`, `python3`, temp-file semantics, and process detachment; portability is a first-class concern.
-- `t10-pi-extension.sh` is broad and can fail from timing around detached review completion; polling windows should stay conservative.
-- Long mocked scripts are sensitive to exact prompt wording and manifest schema evolution.
+- `t10-pi-extension.sh` is broad and can fail from timing around detached review-all/background job completion; polling windows should stay conservative.
+- Default-branch expectations require carefully shaped fake repos; a missing/incorrect branch rename can make the test assert the fallback rather than the intended detection path.
+- Long mocked scripts are sensitive to exact prompt wording, structured result-file schemas, scope argument normalization, and manifest schema evolution.
 - Prompt-contract tests trade semantic flexibility for regression protection; update tests and prompt docs together when intentionally renaming operational index concepts.
+- Skill eval fixtures add many small files; keep manifest routing pointed at the fixture root so coverage does not regress into uncovered test data.
 - File-backed counters are required because subshell assertions would otherwise undercount failures.
 - CI package checks can fail from npm metadata drift even when runtime code still works; treat packaging as a supported surface.

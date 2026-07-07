@@ -109,6 +109,25 @@ For every variable used as a size, length, count, or array index in a C/C++ file
 5. If flagged: check the 10 lines before the sink for a guard that rules out the dangerous value
 6. No guard → REPORT with the cast chain and the sink line number
 
+## Recursive Parser / Walker Depth (C/C++)
+
+For recursive parsers, decoders, visitors, or tree/packet walkers in C/C++, check whether untrusted input controls nesting depth. A missing depth guard can become stack exhaustion even when buffer sizes are checked.
+
+**Flag if:**
+- recursion follows attacker-controlled syntax, packet fields, serialized trees, or nested containers;
+- there is no explicit maximum depth, remaining-input bound that caps recursion, or iterative worklist limit;
+- the recursive call occurs before validating that the next level is within the allowed bound.
+
+**Detection greps (run on each C/C++ file):**
+```bash
+grep -n "parse\|decode\|visit\|walk\|recurse" <file>
+grep -n "depth\|level\|nest\|recurs" <file>
+```
+
+If a candidate parser lacks a guard, report the attacker-controlled nesting source, recursive call chain, and missing max-depth check.
+
+---
+
 **Detection greps (run on each C/C++ file):**
 ```bash
 # Signed variable used as size (catch signed→size_t promotion)

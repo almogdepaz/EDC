@@ -760,6 +760,23 @@ fi
     stdio: "ignore",
     env: piSubprocessEnv(ctx),
   });
+  child.on("error", (error) => {
+    markRunningBackgroundFailed(
+      ctx.cwd,
+      statusPath,
+      {
+        kind,
+        started_at: startedAt,
+        run_id: runId,
+        pid: "spawn-error",
+        args: renderedArgs,
+        log: logPath.display,
+        started_head: startedHead,
+      },
+      `failed to start background ${kind}: ${error.message}`,
+      "verify bash is available on PATH, then rerun the EDC job",
+    );
+  });
   child.unref();
 
   return { kind, runId, pid: child.pid, logFile: logPath.display, statusFile: statusPath.display };

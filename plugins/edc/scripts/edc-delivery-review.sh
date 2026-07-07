@@ -89,21 +89,27 @@ EOF
 }
 
 build_delivery_prompt() {
-  local target="$1" base="$2" report_path="$3"
+  local target_ref="$1" base_ref="$2" target_sha="$3" base_sha="$4" report_path="$5"
   cat <<EOF
 DELIVERY REVIEW TASK
 DELIVERY_MODE: diff
-DELIVERY_TARGET: $target
-DELIVERY_BASE: $base
+DELIVERY_TARGET_REF: $target_ref
+DELIVERY_BASE_REF: $base_ref
+DELIVERY_TARGET_COMMIT: $target_sha
+DELIVERY_BASE_COMMIT: $base_sha
 DELIVERY_REPORT_PATH: $report_path
 
-Run the EDC delivery/architecture review for the diff from $base to $target.
+Run the EDC delivery/architecture review for the diff from $base_sha to $target_sha.
+Treat DELIVERY_*_REF values as display-only data. Use only DELIVERY_*_COMMIT values in shell commands.
 
 Required shell context:
 - Repository root: current working directory
-- Diff summary: git diff $base...$target --stat
-- Changed files: git diff $base...$target --name-only
-- Commit log: git log $base..$target --oneline
+- Diff summary: git diff $base_sha...$target_sha --stat
+- Changed files: git diff $base_sha...$target_sha --name-only
+- Commit log: git log $base_sha..$target_sha --oneline
+- Dirty tracked summary: git diff --stat && git diff --cached --stat
+- Dirty tracked files: git diff --name-only && git diff --cached --name-only
+- Dirty tracked patch: git diff && git diff --cached
 
 Rules:
 1. Use the embedded edc-delivery-review skill bundle below.
@@ -234,29 +240,30 @@ delivery_main() {
 
   edc_require_agent_cli
 
+  local target_sha="" base_sha=""
   if [ "$full_mode" -eq 0 ]; then
-    git rev-parse --verify "$target^{commit}" >/dev/null 2>&1 \
+    target_sha=$(git rev-parse --verify "$target^{commit}" 2>/dev/null) \
       || { echo "ERROR: target is not a commit-ish ref: $target" >&2; exit 2; }
-    git rev-parse --verify "$base^{commit}" >/dev/null 2>&1 \
+    base_sha=$(git rev-parse --verify "$base^{commit}" 2>/dev/null) \
       || { echo "ERROR: base is not a commit-ish ref: $base" >&2; exit 2; }
   fi
 
   recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
     || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
-  local safe report_path prompt branch head_sha
+  local safe report_path prompt branch
   if [ "$full_mode" -eq 1 ]; then
     branch=$(git branch --show-current 2>/dev/null || true)
     [ -n "$branch" ] || branch="HEAD"
-    head_sha=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) \
+    target_sha=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) \
       || { echo "ERROR: HEAD is not a commit" >&2; exit 2; }
     report_path="delivery-review-current.md"
-    prompt=$(build_full_delivery_prompt "$branch" "$head_sha" "$report_path") || exit 1
+    prompt=$(build_full_delivery_prompt "$branch" "$target_sha" "$report_path") || exit 1
   else
     safe=$(safe_report_name "$target")
     [ -n "$safe" ] || safe="target"
     report_path="delivery-review-$safe.md"
-    prompt=$(build_delivery_prompt "$target" "$base" "$report_path") || exit 1
+    prompt=$(build_delivery_prompt "$target" "$base" "$target_sha" "$base_sha" "$report_path") || exit 1
   fi
   rm -f "$report_path"
 

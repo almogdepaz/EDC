@@ -179,13 +179,12 @@ edc security diff HEAD~5 --agent claude
 edc security-review --agent claude --pr 42
 edc security-review --agent claude path/to/changes.patch
 
-# Claude slash command equivalent
-/edc:edc-run-review --pr 42
+# Claude slash command equivalent for combined review
+/edc:edc-run-review --full
 /edc:edc-run-review HEAD --base main
-/edc:edc-run-review path/to/changes.patch
 ```
 
-Without `--base`, a git ref target uses its parent (`<target>^`) as the base, which reviews only that commit. To review a branch against `main`, pass `--base main`. For PR targets, EDC uses `gh pr diff <number-or-url> --name-only`, so `gh` must be installed and authenticated. Use `--ignore-context` for a pure direct review with no context build/update and no reads from existing `edc-context/`; use `--no-context-refresh` to skip creation/update while still allowing existing context if present.
+Without `--base`, a git ref target uses its parent (`<target>^`) as the base, which reviews only that commit. To review a branch against `main`, pass `--base main`. For PR numbers, PR URLs, or patch files, use the explicit security-only command (`edc security-review --agent <agent> ...`) because delivery and quality phases require a git diff scope. Use `--ignore-context` for a pure direct security review with no context build/update and no reads from existing `edc-context/`; use `--no-context-refresh` to skip creation/update while still allowing existing context if present.
 
 ## Runtime Modes
 

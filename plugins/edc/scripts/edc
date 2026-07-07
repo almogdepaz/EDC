@@ -129,11 +129,18 @@ option_in_list() {
 }
 
 detect_default_base_ref() {
-  local ref
-  ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
-  if [ -n "$ref" ] && git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
-    printf '%s\n' "$ref"
-    return 0
+  local ref stripped
+  ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$ref" ]; then
+    if git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+    stripped=${ref#origin/}
+    if [ "$stripped" != "$ref" ] && git rev-parse --verify "$stripped^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$stripped"
+      return 0
+    fi
   fi
   for ref in main master origin/main origin/master; do
     if git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then

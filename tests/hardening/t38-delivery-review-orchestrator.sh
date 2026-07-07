@@ -2,9 +2,6 @@
 # Task 38: delivery-review orchestrator with mocked agent.
 set -euo pipefail
 
-if [ -n "${EDC_BASH:-}" ]; then
-  export PATH="$(dirname "$EDC_BASH"):$PATH"
-fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/plugins/edc/scripts/edc-delivery-review.sh"
@@ -85,14 +82,21 @@ echo valid > "$TMPDIR_T38/scenario"
 export EDC_REVIEW_MODEL=review-test-model
 unset EDC_BUILD_MODEL
 result=0
-out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+head_sha=$(git rev-parse 'HEAD^{commit}')
+base_sha=$(git rev-parse 'HEAD~1^{commit}')
 if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q 'Delivery review report: delivery-review-HEAD.md' <<<"$out" \
-  && grep -q 'DELIVERY_BASE: HEAD~1' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'DELIVERY_BASE_REF: HEAD~1' "$TMPDIR_T38/last-prompt" \
+  && grep -q "DELIVERY_TARGET_COMMIT: $head_sha" "$TMPDIR_T38/last-prompt" \
+  && grep -q "DELIVERY_BASE_COMMIT: $base_sha" "$TMPDIR_T38/last-prompt" \
+  && grep -q 'Dirty tracked files: git diff --name-only && git diff --cached --name-only' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'Dirty tracked patch: git diff && git diff --cached' "$TMPDIR_T38/last-prompt" \
   && grep -q 'DELIVERY_SKILL_MARKER' "$TMPDIR_T38/last-prompt" \
   && grep -q 'SPEC_AXIS_MARKER' "$TMPDIR_T38/last-prompt" \
   && grep -q 'ARCH_AXIS_MARKER' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'REPORTING_MARKER' "$TMPDIR_T38/last-prompt"; then
+  && grep -q 'REPORTING_MARKER' "$TMPDIR_T38/last-prompt" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" && j.finalReview === "delivery-review-HEAD.md" ? 0 : 1)'; then
   echo "PASS: delivery-review writes report from embedded skill bundle"
 else
   echo "FAIL: delivery-review success path failed. exit=$result"
@@ -107,6 +111,30 @@ else
   exit 1
 fi
 unset EDC_REVIEW_MODEL
+
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+malicious_ref='evil$(touch${IFS}/tmp/edc-pwn)'
+git branch "$malicious_ref" HEAD
+target_sha=$(git rev-parse "$malicious_ref^{commit}")
+base_sha=$(git rev-parse 'HEAD~1^{commit}')
+rm -f /tmp/edc-pwn
+result=0
+out=$(bash "$SCRIPT" "$malicious_ref" --base HEAD~1 2>&1) || result=$?
+shell_context=$(awk '/^Required shell context:/{flag=1} /^Rules:/{flag=0} flag' "$TMPDIR_T38/last-prompt")
+if [ "$result" -eq 0 ] \
+  && grep -Fq "git diff $base_sha...$target_sha --stat" <<<"$shell_context" \
+  && grep -Fq "git diff $base_sha...$target_sha --name-only" <<<"$shell_context" \
+  && grep -Fq "git log $base_sha..$target_sha --oneline" <<<"$shell_context" \
+  && ! grep -Fq "$malicious_ref" <<<"$shell_context" \
+  && [ ! -e /tmp/edc-pwn ]; then
+  echo "PASS: delivery-review shell context uses resolved SHAs for unsafe refs"
+else
+  echo "FAIL: delivery-review shell context exposed unsafe ref. exit=$result"
+  echo "--- output ---"; echo "$out"
+  echo "--- shell context ---"; echo "$shell_context"; echo "--- end ---"
+  exit 1
+fi
 
 setup_repo
 git branch -M main
@@ -128,7 +156,7 @@ setup_repo
 git branch -M main
 echo valid > "$TMPDIR_T38/scenario"
 result=0
-out=$("${EDC_BASH:-bash}" "$SCRIPT" 2>&1) || result=$?
+out=$(bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-current.md ] \
   && grep -q 'DELIVERY_MODE: full' "$TMPDIR_T38/last-prompt"; then
   echo "PASS: delivery-review auto-selects full mode on clean main"
@@ -141,7 +169,7 @@ fi
 setup_repo
 echo valid-exit-fail > "$TMPDIR_T38/scenario"
 result=0
-out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q 'delivery-review subprocess reported failure, but report validation passed' <<<"$out" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
@@ -155,8 +183,9 @@ fi
 setup_repo
 echo missing-report > "$TMPDIR_T38/scenario"
 result=0
-out=$("${EDC_BASH:-bash}" "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
-if [ "$result" -ne 0 ] && grep -q 'delivery review report missing' <<<"$out"; then
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+if [ "$result" -ne 0 ] && grep -q 'delivery review report missing' <<<"$out" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 1 && j.reasonCode === "delivery-report-validation" ? 0 : 1)'; then
   echo "PASS: missing delivery report rejected"
 else
   echo "FAIL: expected missing report rejection. exit=$result"

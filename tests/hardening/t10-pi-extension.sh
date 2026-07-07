@@ -173,7 +173,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
 
   // 3. /edc menu primary review starts combined review-all against HEAD --base <detected default branch> with a compact colored command result.
   const messagesBeforeReviewStart = calls.messages.length;
-  await edcCmd.opts.handler("", menuCtx(["review all changes", "changed files vs default branch"]));
+  await edcCmd.opts.handler("", menuCtx(["changes vs default branch", "combined review"]));
   if (calls.userMessages.length !== 0) {
     console.log("DIRECT_COMMAND_USED_MODEL_FAIL:" + JSON.stringify(calls.userMessages));
     process.exit(1);
@@ -230,7 +230,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, 0o755);
   const maliciousMessagesBefore = calls.messages.length;
-  await edcCmd.opts.handler("", { ...menuCtx(["security review", "changed files vs default branch"]), cwd: maliciousDir });
+  await edcCmd.opts.handler("", { ...menuCtx(["changes vs default branch", "security review"]), cwd: maliciousDir });
   const maliciousStartMessage = calls.messages.slice(maliciousMessagesBefore).at(-1);
   if (calls.messages.length !== maliciousMessagesBefore + 1 || !maliciousStartMessage?.content?.includes("Background EDC review started.")) {
     console.log("MALICIOUS_REF_START_FAIL:" + JSON.stringify(calls.messages.slice(maliciousMessagesBefore)));
@@ -277,7 +277,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8")
     .replace("status=success", "status=running")
     .replace(/^pid=.*$/m, `pid=${process.pid}`));
-  await edcCmd.opts.handler("", menuCtx(["security review", "changed files vs default branch"]));
+  await edcCmd.opts.handler("", menuCtx(["changes vs default branch", "security review"]));
   const alreadyRunningMessage = calls.messages.at(-1)?.content || "";
   if (!alreadyRunningMessage.includes("already running") || !alreadyRunningMessage.includes("Check progress: `/edc` → Job status.")) {
     console.log("ALREADY_RUNNING_FAIL:" + JSON.stringify(alreadyRunningMessage));
@@ -308,8 +308,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   process.env.PATH = `${raceDir}/fake-bin:${previousPath || ""}`;
   const raceStartIndex = calls.messages.length;
   await Promise.all([
-    edcCmd.opts.handler("", { ...menuCtx(["security review", "changed files vs default branch"]), cwd: raceDir }),
-    edcCmd.opts.handler("", { ...menuCtx(["security review", "changed files vs default branch"]), cwd: raceDir }),
+    edcCmd.opts.handler("", { ...menuCtx(["changes vs default branch", "security review"]), cwd: raceDir }),
+    edcCmd.opts.handler("", { ...menuCtx(["changes vs default branch", "security review"]), cwd: raceDir }),
   ]);
   process.env.PATH = previousPath;
   const raceMessages = calls.messages.slice(raceStartIndex).map((message) => message.content || "");
@@ -355,7 +355,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.mkdirSync(`${stalePidDir}/.git/edc`, { recursive: true });
   fs.writeFileSync(`${stalePidDir}/.git/edc/status`, "status=running\nrun_id=dead\npid=999999\nstarted_at=2000-01-01T00:00:00Z\n");
   const stalePidMessagesBefore = calls.messages.length;
-  await edcCmd.opts.handler("", { ...menuCtx(["security review", "changed files vs default branch"]), cwd: stalePidDir });
+  await edcCmd.opts.handler("", { ...menuCtx(["changes vs default branch", "security review"]), cwd: stalePidDir });
   const stalePidStartMessage = calls.messages.slice(stalePidMessagesBefore).at(-1);
   if (calls.messages.length !== stalePidMessagesBefore + 1 || !stalePidStartMessage?.content?.includes("Background EDC review started.")) {
     console.log("STALE_PID_RECOVERY_START_MESSAGE_FAIL:" + JSON.stringify(calls.messages.slice(stalePidMessagesBefore)));
@@ -370,13 +370,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3f. build/update/audit run as background jobs using the shared status slot.
   fs.writeFileSync(statusFile, fs.readFileSync(statusFile, "utf-8").replace("status=running", "status=success"));
   const backgroundCases = [
-    { selection: ["security review", "changed files vs default branch"], kind: "review", log: ".git/edc/review.log", expect: "review args: HEAD --base master" },
+    { selection: ["changes vs default branch", "security review"], kind: "review", log: ".git/edc/review.log", expect: "review args: HEAD --base master" },
     { selection: "build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
     { selection: "update context", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
-    { selection: ["quality review", "changed files vs default branch"], kind: "audit", log: ".git/edc/audit.log", expect: "audit args: HEAD --base master agent=pi" },
-    { selection: ["delivery review", "changed files vs default branch"], kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
+    { selection: ["changes vs default branch", "quality review"], kind: "audit", log: ".git/edc/audit.log", expect: "audit args: HEAD --base master agent=pi" },
+    { selection: ["changes vs default branch", "delivery review"], kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
   ];
-  for (const testCase of backgroundCases) {
+  const runBackgroundCase = async (testCase) => {
     const beforeMessages = calls.messages.length;
     await edcCmd.opts.handler("", menuCtx(testCase.selection));
     const jobStartMessage = calls.messages.slice(beforeMessages).at(-1);
@@ -402,6 +402,20 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       console.log("BACKGROUND_JOB_LOG_FAIL:" + JSON.stringify({ kind: testCase.kind, log: fs.existsSync(`${cwd}/${testCase.log}`) ? fs.readFileSync(`${cwd}/${testCase.log}`, "utf-8") : "missing" }));
       process.exit(1);
     }
+  };
+
+  for (const testCase of backgroundCases) {
+    await runBackgroundCase(testCase);
+  }
+
+  const fullScopeCases = [
+    { selection: ["full repo review", "combined review"], kind: "review-all", log: ".git/edc/review-all.log", expect: "review-all args: --full" },
+    { selection: ["full repo review", "security review"], kind: "review", log: ".git/edc/review.log", expect: "review args: --full" },
+    { selection: ["full repo review", "delivery review"], kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: --full" },
+    { selection: ["full repo review", "quality review"], kind: "audit", log: ".git/edc/audit.log", expect: "audit args:  agent=pi" },
+  ];
+  for (const testCase of fullScopeCases) {
+    await runBackgroundCase(testCase);
   }
   await edcCmd.opts.handler("", menuCtx("doctor / validate context"));
   if (!calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
@@ -424,7 +438,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   // 3h. /edc is interactive-only; non-interactive contexts are told to use the CLI.
   await edcCmd.opts.handler("", { cwd, hasUI: false });
   const nonInteractiveMessage = calls.messages.at(-1)?.content || "";
-  if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review --agent pi --diff <default-branch>...HEAD") || !nonInteractiveMessage.includes("edc security-review --agent pi --diff <default-branch>...HEAD") || !nonInteractiveMessage.includes("edc quality-review --agent pi")) {
+  if (!nonInteractiveMessage.includes("/edc is interactive-only") || !nonInteractiveMessage.includes("edc review diff --agent pi") || !nonInteractiveMessage.includes("edc security full --agent pi") || !nonInteractiveMessage.includes("edc quality full --agent pi")) {
     console.log("NON_INTERACTIVE_FAIL:" + JSON.stringify(nonInteractiveMessage));
     process.exit(1);
   }
@@ -440,7 +454,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-all-args.txt\necho "Review-all complete"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, 0o755);
-  const missingSelections = ["review all changes", "changed files vs default branch"];
+  const missingSelections = ["changes vs default branch", "combined review"];
   const missingCtx = {
     cwd: missingDir,
     hasUI: true,
@@ -486,7 +500,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     sourceCommit,
     modules: [],
   }));
-  const staleSelections = ["review all changes", "changed files vs default branch"];
+  const staleSelections = ["changes vs default branch", "combined review"];
   await edcCmd.opts.handler("", {
     cwd: staleDir,
     hasUI: true,
@@ -507,7 +521,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
   const declineMessage = calls.messages.at(-1)?.content || "";
-  if (!declineMessage.includes("edc review --agent pi HEAD --base master --no-context-refresh") || !declineMessage.includes("--ignore-context")) {
+  if (!declineMessage.includes("edc review diff master --agent pi") || !declineMessage.includes("edc security diff master --agent pi --ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }

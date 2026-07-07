@@ -116,6 +116,36 @@ else
 fi
 
 setup_runtime
+(
+  cd "$TMP/work"
+  export EDC_AGENT_CLI=pi
+  export EDC_CONTEXT_MODE=advisory
+  export EDC_T41_LOG="$TMP/phases-full.log"
+  bash .edc/scripts/edc-review-all.sh --full --ignore 'generated/**' --context-mode advisory > "$TMP/full.out" 2>&1
+)
+
+expected_full=$'security|agent=pi|ctx=advisory|args=--full --ignore generated/** --context-mode advisory\ndelivery|agent=pi|ctx=advisory|args=--full --ignore generated/** --context-mode advisory\nquality|agent=pi|ctx=advisory|args=--ignore generated/** --context-mode advisory'
+actual_full=$(cat "$TMP/phases-full.log")
+if [ "$actual_full" = "$expected_full" ]; then
+  echo "PASS: review-all full runs security/delivery full and quality full"
+else
+  echo "FAIL: review-all full phase log mismatch"
+  printf 'expected:\n%s\nactual:\n%s\n' "$expected_full" "$actual_full"
+  exit 1
+fi
+
+node --input-type=module <<NODE
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('$TMP/work/edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review-all');
+assert.equal(result.status, 'success');
+assert.equal(result.scope, 'full');
+NODE
+
+echo "PASS: review-all full writes full-scope aggregate result"
+
+setup_runtime
 set +e
 (
   cd "$TMP/work"

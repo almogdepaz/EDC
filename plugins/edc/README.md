@@ -18,7 +18,7 @@ the user-facing tour.
 
 Quality review, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu (review all changes/security review/delivery review/quality review/status/build/update/doctor) registered by `pi/`.
+Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu: choose scope first (full repo, changes vs default branch, or custom base), then lens (combined/security/delivery/quality), plus status/build/update/doctor.
 
 ## Internal structure
 
@@ -31,7 +31,7 @@ plugins/edc/
     edc-doctor.md
 
   scripts/                             # everything that ships to ~/.edc/scripts/
-    edc                                # terminal CLI (build / update / review / quality-review / mode / doctor)
+    edc                                # terminal CLI (build / update / review/security/delivery/quality / mode / doctor)
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
     edc-audit.sh                       # quality review / maintainability orchestrator (full or diff-scoped)
@@ -125,12 +125,18 @@ resolution, pi JSON supervision, and codex-home isolation.
 ## Default invocation
 
 ```bash
-edc-review.sh --base main              # security review current branch vs main
-edc-review.sh feat-branch --base main  # security review branch vs main
-edc-review.sh --pr 42 --base main      # security review PR by number (uses gh)
-edc-review.sh https://github.com/...   # security review PR by URL (uses gh)
-edc-review.sh path/to/diff.patch       # security review diff file
-edc-delivery-review.sh HEAD --base main # delivery/architecture review current branch vs main
+edc review full --agent pi             # combined full repo review
+edc review diff main --agent pi        # combined current branch vs main
+edc security full --agent pi           # security full repo review
+edc security diff main --agent pi      # security current branch vs main
+edc delivery full --agent pi           # delivery/architecture full repo review
+edc quality diff main --agent pi       # quality review for modules changed vs main
+
+edc-review.sh --full                   # lower-level security full repo review
+edc-review.sh --base main              # lower-level security current branch vs main
+edc-review.sh --pr 42 --base main      # lower-level security PR by number (uses gh)
+edc-review.sh https://github.com/...   # lower-level security PR by URL (uses gh)
+edc-review.sh path/to/diff.patch       # lower-level security diff file
 ```
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.

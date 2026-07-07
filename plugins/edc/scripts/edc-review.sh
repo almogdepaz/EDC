@@ -494,7 +494,7 @@ auto_mode() {
     local failure_hint="inspect the log for task-generation output and rerun after fixing it"
     if grep -q 'ERROR: no changed files found for target:' <<< "$out"; then
       failure_reason="no changed files found for review"
-      failure_hint="review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base"
+      failure_hint="review diff found no committed or dirty tracked changes; run 'edc review full --agent <agent>' for a full repo review, or choose another base"
     elif grep -q 'ERROR: no reviewable files after filtering tool output and ignore rules' <<< "$out"; then
       failure_reason="no reviewable files after filtering"
       failure_hint="changed files are EDC scratch files or matched by --ignore/.edcignore; choose another target/base or adjust ignore rules"
@@ -593,10 +593,15 @@ build_mode() {
   local no_context_refresh=0
   local ignore_context=0
   local context_available=1
+  local full_scope=0
   local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --full)
+        full_scope=1
+        shift
+        ;;
       --base) baseline="$2"; shift 2 ;;
       --ignore)
         [ $# -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
@@ -663,9 +668,17 @@ build_mode() {
     fi
   fi
 
-  # Step 2: get changed files
+  if [ "$full_scope" -eq 1 ] && [ -n "$baseline" ]; then
+    echo "ERROR: --full cannot be combined with --base" >&2
+    exit 2
+  fi
+
+  # Step 2: get changed files, or all tracked files for full scope.
   local files
-  if [[ "$target" == https://* ]]; then
+  if [ "$full_scope" -eq 1 ]; then
+    target="HEAD"
+    files=$(git ls-files -z | tr '\0' '\n')
+  elif [[ "$target" == https://* ]]; then
     local gh_err
     gh_err=$(mktemp "${TMPDIR:-/tmp}/edc-gh-pr-diff-$$.XXXXXX") || exit 1
     if ! files=$(gh pr diff "$target" --name-only 2>"$gh_err"); then
@@ -698,8 +711,13 @@ build_mode() {
   fi
 
   if [ -z "$files" ]; then
-    echo "ERROR: no changed files found for target: $target" >&2
-    echo "HINT: review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base." >&2
+    if [ "$full_scope" -eq 1 ]; then
+      echo "ERROR: no tracked files found for full security review" >&2
+      echo "HINT: add tracked files or run review from the repository root." >&2
+    else
+      echo "ERROR: no changed files found for target: $target" >&2
+      echo "HINT: review diff found no committed or dirty tracked changes. run 'edc review full --agent <agent>' for a full repo review, or choose another base." >&2
+    fi
     exit 2
   fi
 
@@ -712,7 +730,11 @@ build_mode() {
 
   if [ -z "$files" ]; then
     echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
-    echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
+    if [ "$full_scope" -eq 1 ]; then
+      echo "HINT: full review found only EDC scratch files or files matched by --ignore/.edcignore." >&2
+    else
+      echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
+    fi
     exit 2
   fi
 
@@ -1105,7 +1127,9 @@ TASK
 review_usage() {
   cat <<EOF
 Usage: edc-review.sh [--agent <cli>] [--model <slug>] <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-                                                     full review pipeline (default)
+                                                     differential security review pipeline
+       edc-review.sh [--agent <cli>] [--model <slug>] --full [--ignore <glob>]... [--context-mode advisory|inject]
+                                                     full current-repo security review pipeline
        edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]
                                                      shorthand for HEAD --base <ref>
        edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]
@@ -1172,11 +1196,18 @@ case "${1:-}" in
       build_mode "pr:$pr_target" "$@"
       exit $?
     fi
+    if [ "${1:-}" = "--full" ]; then
+      build_mode HEAD --full "${@:2}"
+      exit $?
+    fi
     if [ -z "${1:-}" ]; then
       echo "ERROR: --build requires a target" >&2
       exit 2
     fi
     build_mode "$@"
+    ;;
+  --full)
+    auto_mode HEAD --full "${@:2}"
     ;;
   --base)
     # Shorthand: --base <ref> [extras...] → HEAD --base <ref> [extras...]

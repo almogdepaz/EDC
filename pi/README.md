@@ -46,7 +46,7 @@ Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool rep
 1. Start `pi` in a git repository.
 2. Run `/edc`.
 3. Choose **build context** once.
-4. Choose **review all changes** → **changed files vs default branch**.
+4. Choose **changes vs default branch** → **combined review**.
 5. Check progress with **job status**.
 
 ## Command
@@ -59,10 +59,10 @@ Pi exposes one interactive command:
 
 Menu actions:
 
-- review all changes — choose a scope, then run security review, delivery/architecture review, and quality review
-- security review — choose a scope, then start a background security-only review
-- delivery review — choose a scope, then start a background delivery/architecture review
-- quality review — choose a scope; changed-files scope audits only modules owning changed files, full scope audits all modules
+- full repo review — choose a lens, then review the current tracked repo
+- changes vs default branch — choose a lens, then review `HEAD` against the detected default branch
+- changes vs custom base — enter refs, choose a lens, then review that diff
+- lenses: combined, security, delivery, or quality
 - job status — shows the current background job status
 - build context — starts a background context build
 - update context — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
@@ -71,17 +71,18 @@ Menu actions:
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
 
 ```bash
-edc review --agent pi --diff <default-branch>...HEAD
-edc security-review --agent pi --diff <default-branch>...HEAD
-edc delivery-review --agent pi --diff <default-branch>...HEAD
-edc quality-review --agent pi
+edc review full --agent pi
+edc review diff --agent pi
+edc security full --agent pi
+edc delivery diff <base> --agent pi
+edc quality full --agent pi
 edc build --agent pi
 edc update --agent pi --base <default-branch>
 ```
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope: changed files vs default branch, full current repo where supported, or custom refs where the UI provides text input. Quality-review changed-files scope audits only modules owning changed files; full scope audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope, then lens. `diff` without a base uses the detected default branch. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state
 

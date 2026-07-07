@@ -42,6 +42,17 @@ FAKE_HOME="$TMPDIR_T7/home"
 PROJECT="$TMPDIR_T7/project"
 CAPTURE="$TMPDIR_T7/capture"
 mkdir -p "$FAKE_BIN" "$FAKE_HOME" "$PROJECT" "$CAPTURE"
+(
+  cd "$PROJECT"
+  git init -q
+  git config user.email test@test.com
+  git config user.name Test
+  git config commit.gpgsign false
+  printf 'fixture\n' > README.md
+  git add README.md
+  git commit -q -m init
+  git branch -f main HEAD
+)
 
 make_fake_agent() {
   local name="$1"
@@ -86,7 +97,10 @@ printf '%s\n' "${EDC_REVIEW_MODEL:-}" > "$out/review_model"
 printf '%s\n' "${EDC_PI_MODEL:-}" > "$out/pi_model"
 printf '%s\n' "$1" > "$out/script"
 shift
-printf '%s\n' "$@" > "$out/args"
+: > "$out/args"
+if [ "$#" -gt 0 ]; then
+  printf '%s\n' "$@" > "$out/args"
+fi
 EOF
 chmod +x "$FAKE_BIN/bash"
 
@@ -295,6 +309,89 @@ if [ "$(cat "$CAPTURE/review/agent")" = "codex" ] \
 else
   echo "FAIL: security-review did not delegate correctly"
   cat "$CAPTURE/review/agent" "$CAPTURE/review/script" "$CAPTURE/review/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1b2: canonical lens/scope commands delegate convenient args ───────────
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review full --agent codex --ignore generated/**)
+if [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review full delegates to combined full review"
+else
+  echo "FAIL: canonical review full did not delegate correctly"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff defaults to default branch"
+else
+  echo "FAIL: canonical review diff did not default to default branch"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff trunk --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'trunk' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff accepts custom base"
+else
+  echo "FAIL: canonical review diff custom base did not delegate correctly"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli security full --agent codex)
+if [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/review/args" >/dev/null; then
+  echo "PASS: canonical security full delegates to security full review"
+else
+  echo "FAIL: canonical security full did not delegate correctly"
+  cat "$CAPTURE/review/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/delivery"
+(cd "$PROJECT" && run_cli delivery full --agent codex)
+if [ "$(cat "$CAPTURE/delivery/script")" = "$SCRIPT_DIR/edc-delivery-review.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/delivery/args" >/dev/null; then
+  echo "PASS: canonical delivery full delegates to delivery full review"
+else
+  echo "FAIL: canonical delivery full did not delegate correctly"
+  cat "$CAPTURE/delivery/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality full --agent codex)
+if [ "$(cat "$CAPTURE/audit/script")" = "$SCRIPT_DIR/edc-audit.sh" ] \
+  && [ ! -s "$CAPTURE/audit/args" ]; then
+  echo "PASS: canonical quality full delegates to full quality review"
+else
+  echo "FAIL: canonical quality full did not delegate correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality diff main --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/audit/args" >/dev/null; then
+  echo "PASS: canonical quality diff delegates to diff-scoped quality review"
+else
+  echo "FAIL: canonical quality diff did not delegate correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
   exit 1
 fi
 

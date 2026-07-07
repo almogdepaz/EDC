@@ -9,29 +9,28 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review-all --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] review   full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] delivery full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality  full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target|--pr <number-or-url>|--full] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
   edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>|--full] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] quality-review --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
 Commands:
   build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
   update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
-  review           Run all review phases: security, delivery, and quality
-  review-all       Alias for review
-  security-review  Run the security review pipeline (auto-builds/updates context if needed)
-  delivery-review  Run the goal/spec delivery + architecture-fit review pipeline
-  quality-review   Run the code-quality/maintainability review pipeline
-  audit            Deprecated alias for quality-review
+  review    Run all review phases: security, delivery, and quality
+  security  Run the security review pipeline
+  delivery  Run the goal/spec delivery + architecture-fit review pipeline
+  quality   Run the code-quality/maintainability review pipeline
   mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build, update, review, review-all, security-review, delivery-review, quality-review, and audit.
+  --agent is required for build, update, review, security, delivery, and quality.
   --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
@@ -129,6 +128,51 @@ option_in_list() {
   esac
 }
 
+detect_default_base_ref() {
+  local ref
+  ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
+  if [ -n "$ref" ] && git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+  for ref in main master origin/main origin/master; do
+    if git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+  done
+  printf '%s\n' main
+}
+
+canonical_scope_dispatch() {
+  local lens="$1"
+  shift
+  local scope="${1:-}"
+  case "$scope" in
+    full)
+      shift
+      CANONICAL_SCOPE_ARGS=(--full ${@+"$@"})
+      ;;
+    diff)
+      shift
+      local base
+      if [ "${1:-}" != "" ] && [ "${1#-}" = "$1" ]; then
+        base="$1"
+        shift
+      else
+        base=$(detect_default_base_ref)
+      fi
+      CANONICAL_SCOPE_ARGS=(HEAD --base "$base" ${@+"$@"})
+      ;;
+    "")
+      die "edc $lens requires a scope: full or diff [base]"
+      ;;
+    *)
+      die "edc $lens scope must be 'full' or 'diff [base]' (got: $scope)"
+      ;;
+  esac
+}
+
 normalize_scope_args() {
   local command_name="$1" supports_full="$2"
   shift 2
@@ -180,7 +224,10 @@ normalize_scope_args() {
   fi
   if [ "$full_scope" -eq 1 ]; then
     [ "$supports_full" -eq 1 ] || die "--full is not supported for $command_name yet; use --diff <base>...<target>"
-    PARSED_SCOPE_ARGS=("--full" ${other_args[@]+"${other_args[@]}"})
+    PARSED_SCOPE_ARGS=("--full")
+    if [ "${#other_args[@]}" -gt 0 ]; then
+      PARSED_SCOPE_ARGS+=("${other_args[@]}")
+    fi
     return 0
   fi
   if [ -n "$diff_spec" ]; then
@@ -192,10 +239,16 @@ normalize_scope_args() {
     local target_ref="${diff_spec#*...}"
     [ -n "$base_ref" ] || die "--diff base ref is empty"
     [ -n "$target_ref" ] || die "--diff target ref is empty"
-    PARSED_SCOPE_ARGS=("$target_ref" "--base" "$base_ref" ${other_args[@]+"${other_args[@]}"})
+    PARSED_SCOPE_ARGS=("$target_ref" "--base" "$base_ref")
+    if [ "${#other_args[@]}" -gt 0 ]; then
+      PARSED_SCOPE_ARGS+=("${other_args[@]}")
+    fi
     return 0
   fi
-  PARSED_SCOPE_ARGS=(${other_args[@]+"${other_args[@]}"})
+  PARSED_SCOPE_ARGS=()
+  if [ "${#other_args[@]}" -gt 0 ]; then
+    PARSED_SCOPE_ARGS=("${other_args[@]}")
+  fi
 }
 
 parse_agent_context_args() {
@@ -304,9 +357,9 @@ build_cmd() {
 }
 
 security_review_cmd() {
-  parse_agent_context_args security-review 1 passthrough passthrough "--no-context-refresh --ignore-context" "--base --diff --pr" "$@"
+  parse_agent_context_args security-review 1 passthrough passthrough "--no-context-refresh --ignore-context --full" "--base --diff --pr" "$@"
   finalize_agent_context 1
-  normalize_scope_args security-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  normalize_scope_args security-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
@@ -316,9 +369,9 @@ security_review_cmd() {
 }
 
 review_all_cmd() {
-  parse_agent_context_args review 1 passthrough passthrough "" "--base --diff" "$@"
+  parse_agent_context_args review 1 passthrough passthrough "--full" "--base --diff" "$@"
   finalize_agent_context 1
-  normalize_scope_args review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  normalize_scope_args review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local review_all_script
   review_all_script="$(find_script edc-review-all.sh)" \
@@ -348,7 +401,11 @@ quality_review_cmd() {
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+  if [ "${#PARSED_SCOPE_ARGS[@]}" -gt 0 ]; then
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" "${PARSED_SCOPE_ARGS[@]}"
+  else
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script"
+  fi
 }
 
 update_cmd() {
@@ -471,7 +528,33 @@ main() {
     build)
       build_cmd "$@"
       ;;
-    review|review-all)
+    review)
+      if [ "${1:-}" = "full" ] || [ "${1:-}" = "diff" ]; then
+        canonical_scope_dispatch review "$@"
+        review_all_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      else
+        review_all_cmd "$@"
+      fi
+      ;;
+    security)
+      canonical_scope_dispatch security "$@"
+      security_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      ;;
+    delivery)
+      canonical_scope_dispatch delivery "$@"
+      delivery_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      ;;
+    quality)
+      canonical_scope_dispatch quality "$@"
+      if [ "${CANONICAL_SCOPE_ARGS[0]:-}" = "--full" ]; then
+        # Full quality review is the audit orchestrator without target/base args;
+        # keep only non-scope passthrough flags after the scope token.
+        quality_review_cmd "${CANONICAL_SCOPE_ARGS[@]:1}"
+      else
+        quality_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      fi
+      ;;
+    review-all)
       review_all_cmd "$@"
       ;;
     security-review)

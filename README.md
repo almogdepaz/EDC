@@ -12,7 +12,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 pi install npm:@sgtbeatdown/edc
 cd your-repo
 pi
-# run /edc, choose build context, then review all changes
+# run /edc, choose build context, then choose scope + review lens
 ```
 
 First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
@@ -41,12 +41,11 @@ The generated context lives in the target repository under `edc-context/`: an ov
 | Command | When to run it |
 |---------|----------------|
 | **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
-| **update** | Before review/delivery-review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
-| **review** | On a branch diff. Runs all lenses: security, delivery/architecture, and quality review. |
-| **security-review** | On a PR, branch, commit, or diff file. Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
-| **delivery-review** | On a branch or commit diff. Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
-| **quality-review** | Full repo by default, or scoped with `--diff <base>...<target>`. Compares context expectations against actual code to flag code-quality and maintainability risks. |
-| **audit** | Deprecated alias for `quality-review`. |
+| **update** | Before review if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
+| **review full\|diff [base]** | Runs all lenses: security, delivery/architecture, and quality review. |
+| **security full\|diff [base]** | Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
+| **delivery full\|diff [base]** | Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
+| **quality full\|diff [base]** | Code-quality and maintainability review. Full audits all modules; diff audits modules owning changed files. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
 
@@ -65,29 +64,22 @@ edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
 # run all review lenses in the current repo: security, delivery, then quality
-edc review --agent claude --diff main...HEAD
-edc review --agent pi --diff main...HEAD
-# legacy alias during transition
-edc review-all --agent pi --diff main...HEAD
+edc review full --agent claude
+edc review diff --agent pi          # diff vs detected default branch
+edc review diff main --agent pi     # diff vs explicit base
 
 # run the security-only review pipeline in the current repo
-edc security-review --agent claude --base main
-edc security-review --agent cursor HEAD --base main
-edc security-review --agent codex --pr 42
-edc security-review --agent pi HEAD --base main
-edc security-review --agent codex https://github.com/owner/repo/pull/42
-edc security-review --agent codex HEAD --base main --ignore 'generated/**'
+edc security full --agent claude
+edc security diff main --agent cursor
+edc security diff origin/main --agent codex --ignore 'generated/**'
 
 # goal/spec delivery + architecture-fit review
-edc delivery-review --agent claude HEAD --base main
-edc delivery-review --agent pi HEAD --base main
+edc delivery full --agent claude
+edc delivery diff main --agent pi
 
 # code quality / maintainability review
-edc quality-review --agent claude
-edc quality-review --agent pi
-edc quality-review --agent pi --diff main...HEAD
-# deprecated alias
-edc audit --agent pi
+edc quality full --agent claude
+edc quality diff main --agent pi
 
 # runtime-mode toggle (used by Claude Code and pi inject/advisory hooks)
 edc mode                # show current mode
@@ -98,7 +90,7 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security-review`, `delivery-review`, and `quality-review` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Differential scope can be written as `--diff <base>...<target>` or legacy `target --base <ref>`. Security review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality review uses the same diff scope to audit only modules owning changed files; without a diff it audits all modules. Structured result files include scope/base/target plus dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target plus dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ## Install
 
@@ -173,19 +165,19 @@ Claude, Cursor, and Codex expose thin wrappers for the same deterministic orches
 | Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 | Cursor | `/edc-build`, `/edc-update`, `/edc-run-review`, `/edc-doctor`; public methodology skills |
 | Codex | `$edc-build`, `$edc-update`, `$edc-run-review`, `$edc-doctor`; public methodology skills |
-| pi | `/edc` interactive menu: review all changes/security review/delivery review/quality review/status/build/update/doctor; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
+| pi | `/edc` interactive menu: choose scope first (full repo, changes vs default branch, changes vs custom base), then lens (combined/security/delivery/quality); methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 
 ### Review invocation examples
 
 ```bash
 # terminal CLI
+edc review full --agent pi
+edc review diff main --agent pi
+edc security full --agent claude
+edc security diff HEAD~5 --agent claude
+# advanced legacy security forms still support PRs, single commits, and patch files:
 edc security-review --agent claude --pr 42
-edc security-review --agent codex https://github.com/owner/repo/pull/42
-edc security-review --agent pi HEAD --base main
-edc security-review --agent claude abc1234                 # single commit; base defaults to abc1234^
-edc security-review --agent claude HEAD --base HEAD~5      # commit range
-edc security-review --agent claude path/to/changes.patch   # pre-generated diff file
-edc security-review --agent claude --pr 42 --base main --ignore-context
+edc security-review --agent claude path/to/changes.patch
 
 # Claude slash command equivalent
 /edc:edc-run-review --pr 42

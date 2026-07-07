@@ -661,7 +661,7 @@ TMPDIR_T15R=$(mktemp -d)
   set -e
   if [ "$rc" -eq 2 ] \
      && echo "$out" | grep -q 'no changed files found for target: HEAD' \
-     && echo "$out" | grep -q 'dirty tracked files'; then
+     && echo "$out" | grep -q 'edc review full --agent <agent>'; then
     check "15.18: no-change review failure explains dirty tracked-file fallback" 1
   else
     check "15.18: no-change review failure explains dirty tracked-file fallback" 0

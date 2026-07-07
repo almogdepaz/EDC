@@ -355,22 +355,24 @@ print_cli_hint() {
     pi)
       echo "  edc build  --agent pi             # build or update edc-context/"
       echo "  edc update --agent pi --base main # force incremental update"
-      echo "  edc review-all --agent pi HEAD --base main # security + delivery + quality review"
-      echo "  edc security-review --agent pi HEAD --base main # security-only review"
-      echo "  edc delivery-review --agent pi HEAD --base main # delivery/architecture review"
-      echo "  edc audit  --agent pi             # code quality audit"
+      echo "  edc review full --agent pi        # security + delivery + quality full repo review"
+      echo "  edc review diff --agent pi        # security + delivery + quality vs default branch"
+      echo "  edc security full --agent pi      # security-only full repo review"
+      echo "  edc delivery diff main --agent pi # delivery/architecture review vs main"
+      echo "  edc quality full --agent pi       # code quality full repo audit"
       echo "  edc doctor                        # validate context"
       echo "  edc mode advisory|inject          # toggle runtime mode"
       echo
-      echo "Inside pi, use /edc for the interactive menu (review/delivery-review/status/build/update/audit/doctor)."
+      echo "Inside pi, use /edc for the interactive menu (choose scope, then combined/security/delivery/quality lens)."
       ;;
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
       echo "  edc update --agent $agent             # force incremental update"
-      echo "  edc review-all --agent $agent HEAD --base main # security + delivery + quality review"
-      echo "  edc security-review --agent $agent --base main # security-only review"
-      echo "  edc delivery-review --agent $agent HEAD --base main # delivery/architecture review"
-      echo "  edc audit  --agent $agent             # code quality audit"
+      echo "  edc review full --agent $agent        # security + delivery + quality full repo review"
+      echo "  edc review diff main --agent $agent   # security + delivery + quality vs main"
+      echo "  edc security full --agent $agent      # security-only full repo review"
+      echo "  edc delivery diff main --agent $agent # delivery/architecture review vs main"
+      echo "  edc quality full --agent $agent       # code quality full repo audit"
       echo "  edc doctor                            # validate context"
       echo "  edc mode advisory|inject              # toggle runtime mode"
       ;;

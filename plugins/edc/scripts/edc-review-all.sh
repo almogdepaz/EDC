@@ -25,6 +25,7 @@ find_phase_script() {
 usage() {
   cat <<'EOF'
 Usage: edc-review-all.sh [target] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+       edc-review-all.sh --full [--ignore <glob>]... [--context-mode advisory|inject]
 
 Runs security review, delivery/architecture review, then quality audit.
 EOF

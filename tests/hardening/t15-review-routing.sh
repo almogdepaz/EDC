@@ -17,7 +17,8 @@ BASH_BIN="${BASH_BIN:-bash}"
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
-trap 'check_cleanup' EXIT
+TMPDIR_T15A=""
+trap 'rm -rf "${TMPDIR_T15A:-}"; check_cleanup' EXIT
 
 # ── 15.0: review orchestrator help flag ─────────────────────────────────────
 out=$("$BASH_BIN" "$SCRIPT" -h 2>&1)
@@ -72,7 +73,6 @@ write_minimal_context() {
 # wolfpack-style: src/broker/* and src/server/* should route to different
 # modules, NOT both lumped under "src".
 TMPDIR_T15A=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_T15A"' EXIT
 (
   setup_repo "$TMPDIR_T15A"
   write_minimal_context

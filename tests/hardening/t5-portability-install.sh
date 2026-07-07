@@ -46,8 +46,11 @@ fi
 
 # ── 5c2: shellcheck is wired in package scripts and CI ─────────────────────
 if grep -q '"lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/\*.sh"' package.json \
-  && grep -q 'shellcheck' .github/workflows/ci.yml; then
-  echo "PASS: shellcheck is wired into package scripts and CI"
+  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh"' package.json \
+  && grep -q '"test": "npm run lint:hardening && bash tests/hardening/run-all.sh"' package.json \
+  && grep -q 'npm run lint:shell' .github/workflows/ci.yml \
+  && grep -q 'npm test' .github/workflows/ci.yml; then
+  echo "PASS: shellcheck is wired into runtime and hardening scripts in CI"
 else
   echo "FAIL: shellcheck package script or CI wiring missing"
   exit 1

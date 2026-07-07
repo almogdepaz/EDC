@@ -679,6 +679,18 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
+  // 10. bash commands can provide explicit context path hints for complex shell syntax.
+  const hintSession = `${sid}-hint`;
+  const messagesBeforeHint = calls.messages.length;
+  await tc.handler(
+    { type: "tool_call", toolCallId: "hint", toolName: "bash", input: { command: "printf ok\n# edc-context-path: src/path with spaces.ts" } },
+    { ...fakeCtx, sessionManager: { getSessionId: () => hintSession } }
+  );
+  if (calls.messages.length !== messagesBeforeHint + 1 || !calls.messages.at(-1).content.includes("touching src/path with spaces.ts")) {
+    console.log("BASH_HINT_INJECT_FAIL:" + JSON.stringify(calls.messages.slice(messagesBeforeHint)));
+    process.exit(1);
+  }
+
   console.log("OK");
 ' 2>&1)
 

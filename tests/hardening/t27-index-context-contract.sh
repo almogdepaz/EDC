@@ -16,6 +16,7 @@ BUILD_PLAN="$ROOT/plugins/edc/scripts/edc-build-plan.sh"
 JSON_CLI="$ROOT/plugins/edc/hooks/lib/json-cli.mjs"
 REVIEW_SKILL="$ROOT/plugins/edc/skills/edc-review/SKILL.md"
 REVIEW_METHODOLOGY="$ROOT/plugins/edc/skills/edc-review/methodology.md"
+BENCHMARK_RUN="$ROOT/benchmark/run.sh"
 
 contains() {
   local file="$1" text="$2"
@@ -99,5 +100,7 @@ check "review skill loads index for routing/coupling/blast-radius guidance" \
   "$(contains "$REVIEW_SKILL" "routing/coupling/blast-radius guidance" && echo 1 || echo 0)"
 check "review methodology uses routing index rather than module map table" \
   "$(contains "$REVIEW_METHODOLOGY" "Route by path/task" && not_contains "$REVIEW_METHODOLOGY" "Map changed files to modules using the Module Map table" && echo 1 || echo 0)"
+check "benchmark prompt does not request legacy full-context path" \
+  "$(not_contains "$BENCHMARK_RUN" "edc-context/full-context.md" && contains "$BENCHMARK_RUN" "edc-context/modules/security-benchmark.md" && echo 1 || echo 0)"
 
 check_summary "T27"

@@ -164,12 +164,6 @@ edc_is_generated_agents_file() {
     && grep -Fq 'edc-context/manifest.json' "$file"
 }
 
-edc_file_references_alt_agents() {
-  local file="$1"
-  [ -f "$file" ] || return 1
-  grep -Fq "$EDC_ALT_AGENTS" "$file"
-}
-
 edc_entrypoint_valid() {
   if edc_is_generated_agents_file "$EDC_ROOT_AGENTS"; then
     return 0
@@ -312,79 +306,6 @@ edc_require_agent_cli() {
 }
 
 # ── stream filter ────────────────────────────────────────────────────────────
-
-edc_is_codex_auth_failure_text() {
-  case "$1" in
-    *401\ Unauthorized*|*Missing\ bearer*|*authentication\ token\ has\ been\ invalidated*|*token_invalidated*|*session\ has\ ended*|*app_session_terminated*|*Failed\ to\ refresh\ token*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-edc_print_codex_auth_failure() {
-  printf '%s\n' "ERROR: Codex authentication failed. Run 'codex logout && codex login' for ChatGPT OAuth, or pipe an API key with 'codex login --with-api-key'." >&2
-}
-
-edc_is_model_rejection_text() {
-  local text
-  text=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-  case "$text" in
-    *model*not\ found*|*model*not\ supported*|*unsupported\ model*|*unknown\ model*|*invalid\ model*|*model_not_found*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-edc_print_agent_model_list_hint() {
-  local agent="$1" model="$2" output=""
-  case "$agent" in
-    pi)
-      if command -v pi >/dev/null 2>&1; then
-        if [ -n "$TIMEOUT_BIN" ]; then
-          output=$("$TIMEOUT_BIN" 10 pi --list-models "$model" 2>&1 || true)
-          [ -n "$output" ] || output=$("$TIMEOUT_BIN" 10 pi --list-models 2>&1 || true)
-        else
-          output=$(pi --list-models "$model" 2>&1 || true)
-          [ -n "$output" ] || output=$(pi --list-models 2>&1 || true)
-        fi
-        if [ -n "$output" ]; then
-          printf '%s\n' "available pi models matching '$model' (or all models if no exact search result):" >&2
-          printf '%s\n' "$output" | sed -n '1,80p' >&2
-          return 0
-        fi
-      fi
-      printf '%s\n' "could not fetch pi models. run: pi --list-models" >&2
-      ;;
-    codex)
-      printf '%s\n' "Codex CLI does not expose a stable model-list command in this version. Run 'codex --help', omit --model to use the backend default, or choose a model supported by your Codex auth mode." >&2
-      ;;
-    claude)
-      printf '%s\n' "Claude CLI does not expose a stable model-list command in this version. Run 'claude --help', omit --model to use the backend default, or use a supported alias/full model name." >&2
-      ;;
-    *)
-      printf '%s\n' "omit --model to use the backend default, or choose a model supported by '$agent'." >&2
-      ;;
-  esac
-}
-
-edc_print_model_rejection() {
-  local agent="${STREAM_FILTER_AGENT:-${EDC_AGENT_CLI:-agent}}"
-  local model="${STREAM_FILTER_MODEL:-}"
-  local message="$1"
-  if [ -n "$model" ]; then
-    printf '%s\n' "ERROR: model '$model' was rejected by $agent: $message" >&2
-    edc_print_agent_model_list_hint "$agent" "$model"
-  else
-    printf '%s\n' "ERROR: model was rejected by $agent: $message" >&2
-    printf '%s\n' "hint: omit --model to use the backend default, or set EDC_BUILD_MODEL / EDC_REVIEW_MODEL to a supported model." >&2
-  fi
-}
 
 # stream_filter: read NDJSON from agent CLI output and print human-readable
 # progress lines. Handles Claude, Cursor, Pi, and Codex formats.

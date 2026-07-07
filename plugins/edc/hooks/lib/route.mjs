@@ -71,10 +71,6 @@ function loadManifest(projectRoot) {
   }
 }
 
-function manifestPath(projectRoot) {
-  return join(projectRoot, EDC_MANIFEST_REL);
-}
-
 // --- staleness ---
 
 function checkStaleness(projectRoot, manifest) {
@@ -150,10 +146,19 @@ function extractFilePaths(toolName, toolInput) {
 
 function extractFilePathsFromBash(command) {
   const paths = new Set();
+
+  // Deterministic escape hatch for complex shell syntax that regex tokenization
+  // cannot parse safely: one explicit path per comment line.
+  const hintPattern = /(?:^|\n)\s*#\s*edc-context-path:\s*(.+?)(?=\r?\n|$)/g;
+  let match;
+  while ((match = hintPattern.exec(command)) !== null) {
+    const hintedPath = match[1].trim();
+    if (hintedPath) paths.add(hintedPath);
+  }
+
   // Catch any path-shaped token: optional ./ or /, then at least one
   // dir/segment pair (extensionless OK). Routing filters non-matches.
   const pathPattern = /(?:^|[\s=:'"`])(\.{0,2}\/?[\w.-]+(?:\/[\w.-]+)+)/g;
-  let match;
   while ((match = pathPattern.exec(command)) !== null) {
     paths.add(match[1]);
   }
@@ -332,24 +337,6 @@ export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
 export function routeFileSync(manifest, filePath) {
   const state = routeFileStateSync(manifest, filePath);
   return state.state === "context-module" ? state.module : null;
-}
-
-/**
- * Legacy signature kept for any external caller. Loads the manifest from disk
- * and dispatches to routeFileSync. New code should call routeFileSync directly
- * with an already-parsed manifest to avoid the file read.
- *
- * The third param (pluginRoot) is unused — routing is pure JS.
- */
-function routeFile(manifestPathArg, filePath, _pluginRoot) {
-  if (!existsSync(manifestPathArg)) return null;
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(manifestPathArg, "utf-8"));
-  } catch {
-    return null;
-  }
-  return routeFileSync(manifest, filePath);
 }
 
 function moduleDocPath(manifest, moduleName) {
@@ -589,7 +576,6 @@ export function buildToolCallInjection({
   projectRoot,
   toolName,
   toolInput,
-  pluginRoot,
   sessionId,
 }) {
   const manifest = loadManifest(projectRoot);

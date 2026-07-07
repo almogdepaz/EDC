@@ -144,10 +144,6 @@ function sendInfo(pi, customType, content) {
   pi.sendMessage({ customType, content, display: true });
 }
 
-function reviewArgsWithDefaultTarget(args) {
-  return renderArgs(args) || "HEAD";
-}
-
 function reviewSkipsContextPrompt(args) {
   const tokens = argTokens(args);
   return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
@@ -1263,7 +1259,6 @@ export default async function edcExtension(pi) {
       projectRoot: ctx.cwd,
       toolName: t,
       toolInput: event.input || {},
-      pluginRoot: PLUGIN_ROOT,
       sessionId,
     });
     if (!injection) return;

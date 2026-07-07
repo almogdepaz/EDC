@@ -76,31 +76,17 @@ done
   exit 1
 }
 
-SKILLS=(
+PRIVATE_SKILLS=(
   "plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/COMPLETENESS_CHECKLIST.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/skills/edc-review/SKILL.md"
-  "plugins/edc/skills/edc-review/methodology.md"
-  "plugins/edc/skills/edc-review/adversarial.md"
-  "plugins/edc/skills/edc-review/reporting.md"
-  "plugins/edc/skills/edc-review/patterns.md"
   "plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
   "plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
   "plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-context-curator-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-context-curator-edit-impl/SKILL.md"
-  "plugins/edc/skills/edc-audit/SKILL.md"
-  "plugins/edc/skills/edc-audit/references/scope-and-standards.md"
-  "plugins/edc/skills/edc-audit/references/smell-baseline.md"
-  "plugins/edc/skills/edc-audit/references/quality-checks.md"
-  "plugins/edc/skills/edc-audit/references/reporting.md"
-  "plugins/edc/skills/edc-delivery-review/SKILL.md"
-  "plugins/edc/skills/edc-delivery-review/references/spec-axis.md"
-  "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
-  "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
 
 PUBLIC_SKILLS=(
@@ -119,6 +105,8 @@ PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
   "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
+
+SKILLS=("${PRIVATE_SKILLS[@]}" "${PUBLIC_SKILLS[@]}")
 
 cleanup_install_tmp() {
   if [ -n "$EDC_INSTALL_TMP" ]; then

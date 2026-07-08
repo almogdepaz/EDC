@@ -28,12 +28,7 @@
 #   10  --check: partial / malformed v2 (caller should wipe + rebuild)
 #   11  --check: layout is healthy v2
 #   12  --check or auto: v1 layout detected; user must manually wipe
-#   2   bash version too low / usage error
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "edc-clean-slate: requires bash >= 4.0" >&2
-  exit 2
-}
-
+#   2   usage error
 set -uo pipefail
 
 _edc_clean_slate_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -86,16 +81,13 @@ has_partial_v2() {
     fi
     return 1
   fi
-  if command -v jq >/dev/null 2>&1; then
-    jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 0
-  fi
+  node "$EDC_JSON_CLI" schema-version-is-2 "$MANIFEST" >/dev/null 2>&1 || return 0
   return 1
 }
 
 is_healthy_v2() {
   [ -f "$MANIFEST" ] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 || return 1
+  node "$EDC_JSON_CLI" schema-version-is-2 "$MANIFEST" >/dev/null 2>&1 || return 1
   # The EDC entrypoint is part of the v2 layout. It can be either a generated
   # AGENTS.md, or a generated EDC_AGENTS.md referenced from AGENTS.md/CLAUDE.md
   # when a repo already owns its AGENTS.md.

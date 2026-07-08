@@ -11,27 +11,14 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-review.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
-resolve_bash4() {
-  local candidate
-  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-BASH_BIN="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
-export EDC_BASH="$BASH_BIN"
+BASH_BIN="${BASH_BIN:-bash}"
 
 # Counters live in temp files so subshell-scoped checks aggregate correctly.
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
-trap 'check_cleanup' EXIT
+TMPDIR_T15A=""
+trap 'rm -rf "${TMPDIR_T15A:-}"; check_cleanup' EXIT
 
 # ── 15.0: review orchestrator help flag ─────────────────────────────────────
 out=$("$BASH_BIN" "$SCRIPT" -h 2>&1)
@@ -86,7 +73,6 @@ write_minimal_context() {
 # wolfpack-style: src/broker/* and src/server/* should route to different
 # modules, NOT both lumped under "src".
 TMPDIR_T15A=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_T15A"' EXIT
 (
   setup_repo "$TMPDIR_T15A"
   write_minimal_context
@@ -585,6 +571,136 @@ EOF
     cat gh-args.txt 2>/dev/null || true
   fi
   rm -rf "$TMPDIR_T15M"
+)
+
+# ── 15.15: branch reviews use merge-base diff, not snapshot diff ───────────
+TMPDIR_T15N=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15N"
+  git checkout -q -b feature
+  echo "branch" > branch-only.ts
+  git add branch-only.ts
+  git commit -q -m "branch change"
+  git checkout -q master
+  echo "main" > main-only.ts
+  git add main-only.ts
+  git commit -q -m "main change"
+
+  out=$("$BASH_BIN" "$SCRIPT" --build feature --base master --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && grep -q 'branch-only.ts' edc-context/review-tasks/ignore-context.md \
+     && ! grep -q 'main-only.ts' edc-context/review-tasks/ignore-context.md; then
+    check "15.15: branch review excludes base-side changes after branch point" 1
+  else
+    check "15.15: branch review excludes base-side changes after branch point" 0
+    echo "$out"
+    cat edc-context/review-tasks/ignore-context.md 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15N"
+)
+
+# ── 15.16: changed paths are JSON escaped in review-task manifests ─────────
+TMPDIR_T15O=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15O"
+  printf 'weird\n' > 'weird"name.txt'
+  git add 'weird"name.txt'
+  git commit -q -m "add weird path"
+
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && jq -e . edc-context/review-tasks/manifest.json >/dev/null \
+     && jq -e '.modules[0].files[] == "weird\"name.txt"' edc-context/review-tasks/manifest.json >/dev/null; then
+    check "15.16: review-task manifest escapes quote-containing paths" 1
+  else
+    check "15.16: review-task manifest escapes quote-containing paths" 0
+    echo "$out"
+    cat edc-context/review-tasks/manifest.json 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15O"
+)
+
+# ── 15.17: dirty tracked worktree files are review inputs ─────────────────
+TMPDIR_T15Q=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15Q"
+  write_minimal_context
+  mkdir -p src
+  echo "original" > src/dirty.ts
+  git add src edc-context
+  git commit -q -m "add tracked source"
+  head=$(git rev-parse HEAD)
+  write_manifest edc-context/manifest.json "$head" "warn-allow" '[
+    {"name":"core","doc":"edc-context/modules/core.md","priority":100,"match":{"prefixes":["src/"]}}
+  ]'
+  echo "dirty" > src/dirty.ts
+
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+     && [ -f edc-context/review-tasks/core.md ] \
+     && grep -q 'src/dirty.ts' edc-context/review-tasks/core.md; then
+    check "15.17: dirty tracked worktree files are included in review tasks" 1
+  else
+    check "15.17: dirty tracked worktree files are included in review tasks" 0
+    echo "$out"
+    cat edc-context/review-tasks/core.md 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15Q"
+)
+
+# ── 15.18: no committed or dirty tracked changes gives actionable error ───
+TMPDIR_T15R=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15R"
+  set +e
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD --ignore-context 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] \
+     && echo "$out" | grep -q 'no changed files found for target: HEAD' \
+     && echo "$out" | grep -q 'edc review full --agent <agent>'; then
+    check "15.18: no-change review failure explains dirty tracked-file fallback" 1
+  else
+    check "15.18: no-change review failure explains dirty tracked-file fallback" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15R"
+)
+
+# ── 15.19: review auto-mode does not use build output as IPC ──────────────
+if ! grep -q 'bash "$0" --build' "$SCRIPT" \
+   && ! grep -q 'grep -q "\^Review tasks ready"' "$SCRIPT" \
+   && grep -q 'find "$EDC_REVIEW_TASKS_DIR"' "$SCRIPT"; then
+  check "15.19: review auto-mode derives task files without shell/log IPC" 1
+else
+  check "15.19: review auto-mode derives task files without shell/log IPC" 0
+fi
+
+# ── 15.20: gh PR diff failures surface stderr ──────────────────────────────
+TMPDIR_T15P=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15P"
+  mkdir -p fake-bin
+  cat > fake-bin/gh <<'EOF'
+#!/usr/bin/env bash
+echo "gh auth failed: login required" >&2
+exit 2
+EOF
+  chmod +x fake-bin/gh
+  set +e
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  rc=$?
+  set -e
+  if [ "$rc" -eq 2 ] && echo "$out" | grep -q "gh pr diff failed" && echo "$out" | grep -q "gh auth failed"; then
+    check "15.20: gh PR diff failure reports gh stderr" 1
+  else
+    check "15.20: gh PR diff failure reports gh stderr" 0
+    echo "$out"
+  fi
+  rm -rf "$TMPDIR_T15P"
 )
 
 cd "$ORIG_DIR"

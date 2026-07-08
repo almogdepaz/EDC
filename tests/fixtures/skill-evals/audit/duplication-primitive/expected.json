@@ -1,0 +1,13 @@
+{
+  "skill": "edc-audit",
+  "fixture": "duplication-primitive",
+  "requiredFindings": [
+    { "category": "duplication", "evidence": "parseJobStatus" },
+    { "category": "type/contract weakness", "evidence": "RawStatus" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "delivery" }
+  ],
+  "requiredEvidence": ["src/status.ts", "parseWorkerStatus", "isTerminalStatus"]
+}

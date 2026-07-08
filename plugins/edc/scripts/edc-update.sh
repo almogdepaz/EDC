@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# bash >= 4 required
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-update orchestrator.
 # Deterministic control plane for /edc:edc-update.
 #
 # Flow:
-#   1. dep check (jq, git)
+#   1. dep check (git/node via helpers)
 #   2. parse args (--base, --ignore, --context-mode)
 #   3. preflight gate via edc-clean-slate.sh --check:
 #        11 (healthy v2)            → proceed
@@ -17,7 +12,7 @@
 #        12 (v1 layout)             → already printed migration hint, exit
 #   4. auto-detect base if --base not given (git merge-base with main/master)
 #   5. spawn ONE update subprocess via edc_spawn (claude/cursor/codex/pi).
-#      Skill internally re-runs git diff + edc-route.sh against the same
+#      Skill internally re-runs git diff + classify-cli.mjs against the same
 #      base, refreshes affected modules + reports + manifest.
 #   6. validate via edc-doctor.sh — non-zero doctor → update failed
 #
@@ -28,28 +23,15 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
 if ! command -v git > /dev/null 2>&1; then
   echo "ERROR: git is required" >&2
   exit 2
 fi
 
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
@@ -79,13 +61,16 @@ EOF
 # Echoes nothing on success. Exits non-zero with a copy-pasteable hint when
 # the on-disk state cannot be safely updated.
 preflight_check() {
-  local rc=0
-  "$EDC_BASH" "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  local rc=0 check_err
+  check_err=$(mktemp)
+  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     11) # healthy v2 — good to go
+      rm -f "$check_err"
       return 0
       ;;
     0)  # no context dir
+      rm -f "$check_err"
       cat >&2 <<EOF
 ERROR: no ${EDC_CONTEXT_DIR}/ to update.
 
@@ -96,6 +81,7 @@ EOF
       return 1
       ;;
     10) # partial / malformed v2
+      rm -f "$check_err"
       cat >&2 <<EOF
 ERROR: partial or malformed ${EDC_CONTEXT_DIR}/ layout detected.
 
@@ -107,12 +93,14 @@ EOF
       return 1
       ;;
     12) # v1 layout — clean-slate already printed the migration hint
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
     *)
       echo "ERROR: edc-clean-slate.sh --check returned unexpected exit $rc" >&2
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
   esac
@@ -128,6 +116,8 @@ auto_detect_base() {
 # ── main ─────────────────────────────────────────────────────────────────────
 
 update_main() {
+  edc_result_begin update
+  trap edc_result_on_exit EXIT
   local base=""
   local -a passthrough=()
 
@@ -158,7 +148,14 @@ update_main() {
   edc_require_agent_cli
 
   # Preflight: shell decides whether the on-disk state is updateable.
-  preflight_check || exit 1
+  if ! preflight_check; then
+    if [ -f "$EDC_CONTEXT_DIR/.meta.json" ]; then
+      edc_result_failure 1 "legacy-v1-layout" "legacy v1 edc-context layout detected" "remove edc-context and run edc build again"
+    else
+      edc_result_failure 1 "update-preflight-failed" "edc-context is not updateable" "run edc build --force to rebuild context"
+    fi
+    exit 1
+  fi
 
   # Auto-detect base if not given. Pass through to skill so its git-diff
   # call sees the same base. Empty base = "skill auto-detects" (existing
@@ -175,16 +172,16 @@ update_main() {
 
   echo "→ spawning $EDC_AGENT_CLI for edc-update..."
   local prompt
-  prompt=$(resolve_prompt update "${passthrough[@]}") || exit 1
+  prompt=$(resolve_prompt update ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$prompt" \
-    || { echo "ERROR: edc-update invocation failed" >&2; exit 1; }
+    || { echo "ERROR: edc-update invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-update agent invocation failed" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI --base $base"; exit 1; }
 
   # Validate via doctor.
   if [ ! -f "$DOCTOR_SH" ]; then
     echo "ERROR: edc-doctor.sh not found at $DOCTOR_SH" >&2
     exit 1
   fi
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: update produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi
@@ -192,12 +189,13 @@ update_main() {
   edc_run_context_curator || exit 1
   edc_run_context_curator_edit || exit 1
 
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: context curator edit produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi
   edc_remove_context_curator_report
 
+  edc_result_success
   echo "Update OK. Layout validated by edc-doctor; context curator report/edit pass completed."
   exit 0
 }

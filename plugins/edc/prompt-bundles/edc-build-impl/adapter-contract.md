@@ -26,7 +26,7 @@ This document defines the runtime contract every EDC adapter must implement agai
 ## Routing Rules
 
 - Adapters MUST treat `edc-context/manifest.json` as the only routing contract.
-- Target file resolution uses `plugins/edc/scripts/edc-route.sh`.
+- Target file resolution uses the shared JS classifier (`plugins/edc/hooks/lib/classify-cli.mjs` / `route.mjs`).
 - Ambiguous matches are hard failures.
 - Unmatched files follow `policy.unmatchedPathPolicy`.
 

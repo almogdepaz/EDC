@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required: uses declare -A (assoc arrays) and set -u with empty arrays
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-review orchestrator
 # All deterministic control flow for edc-review lives here.
 #
@@ -34,32 +29,13 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
-
-# Resolve SCRIPT_DIR through symlinks so sibling helpers (edc-assert-fresh.sh,
-# edc-clean-slate.sh) are found relative to the real script location, not the
-# invocation path. Defensive - the installer copies (not symlinks) into
-# ~/.edc/scripts/, but users may symlink manually.
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
-ROUTE_SH="$SCRIPT_DIR/edc-route.sh"
-CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
+CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"
 
 # ── agent CLI configuration ──────────────────────────────────────────────────
 #
@@ -78,6 +54,65 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
+tracked_dirty_files() {
+  {
+    git diff --name-only
+    git diff --cached --name-only
+  } | sed '/^$/d' | sort -u
+}
+
+append_current_head_dirty_files() {
+  local target="$1" files="$2"
+  local target_sha head_sha dirty_files
+  target_sha=$(git rev-parse --verify "$target^{commit}" 2>/dev/null || true)
+  head_sha=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)
+  if [ -z "$target_sha" ] || [ -z "$head_sha" ] || [ "$target_sha" != "$head_sha" ]; then
+    printf '%s\n' "$files" | sed '/^$/d'
+    return 0
+  fi
+
+  dirty_files=$(tracked_dirty_files)
+  if [ -z "$dirty_files" ]; then
+    printf '%s\n' "$files" | sed '/^$/d'
+    return 0
+  fi
+
+  printf '%s\n%s\n' "$files" "$dirty_files" | sed '/^$/d' | sort -u
+}
+
+EDC_REVIEW_RESULT_ACTIVE=0
+EDC_REVIEW_RESULT_WRITTEN=0
+EDC_REVIEW_RESULT_STARTED_HEAD=""
+
+edc_review_result_path() {
+  if [ -n "${EDC_RESULT_FILE:-}" ]; then
+    echo "$EDC_RESULT_FILE"
+  else
+    echo "$EDC_BUILD_DIR/last-run.json"
+  fi
+}
+
+edc_write_review_result() {
+  [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ] || return 0
+  local exit_code="$1" reason_code="$2" failure_reason="${3:-}" failure_hint="${4:-}" failed_module="${5:-}" final_review="${6:-}"
+  local result_file finished_head
+  result_file=$(edc_review_result_path)
+  finished_head=$(git rev-parse HEAD 2>/dev/null || true)
+  if ! node "$EDC_JSON_CLI" result-write "$result_file" review "$exit_code" "$reason_code" "$failure_reason" "$failure_hint" "$failed_module" "$final_review" "$EDC_REVIEW_RESULT_STARTED_HEAD" "$finished_head"; then
+    echo "WARNING: failed to write EDC result file: $result_file" >&2
+  fi
+  EDC_REVIEW_RESULT_WRITTEN=1
+}
+
+edc_review_result_on_exit() {
+  local rc=$?
+  if [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_REVIEW_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then
+    edc_write_review_result "$rc" "review-pipeline-failed" "review pipeline failed" "inspect the log for the subprocess error and rerun after fixing it" "" ""
+  fi
+  return "$rc"
+}
+trap edc_review_result_on_exit EXIT
+
 # read_manifest_source_commit + assert_context_fresh come from edc-assert-fresh.sh.
 # recover_context_if_needed (freshness gate + spawn build/update + force-retry)
 # comes from edc-recover-context.sh. Both sourced (not exec'd) so functions
@@ -90,7 +125,7 @@ final_review_filename() {
 
 manifest_target() {
   local val
-  val=$(jq -r '.target // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
+  val=$(node "$EDC_JSON_CLI" review-target "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read target from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
@@ -101,7 +136,7 @@ manifest_target() {
 manifest_modules() {
   # one module name per line
   local val
-  val=$(jq -r '.modules[]?.name // empty' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
+  val=$(node "$EDC_JSON_CLI" review-modules "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || true)
   if [ -z "$val" ]; then
     echo "ERROR: could not read modules from $EDC_REVIEW_TASKS_MANIFEST" >&2
     return 1
@@ -110,7 +145,7 @@ manifest_modules() {
 }
 
 manifest_context_mode() {
-  jq -r '.contextMode // "context"' "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
+  node "$EDC_JSON_CLI" review-context-mode "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
 }
 
 load_ignore_patterns() {
@@ -142,6 +177,7 @@ path_matches_ignore() {
     return
   fi
 
+  # shellcheck disable=SC2053 # intentional glob match for .edcignore patterns
   [[ "$path" == "$pattern" ]] \
     || [[ "$path" == "$pattern/"* ]] \
     || [[ "$path" == $pattern ]]
@@ -176,7 +212,20 @@ filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
-# assert_report_valid <module>: require report with at least one ## heading
+normalize_review_report_headings() {
+  local report="$1"
+  if grep -q '^## Findings\b' "$report" || ! grep -q '^## Critical Findings\b' "$report"; then
+    return 0
+  fi
+
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/edc-report-normalize-$$.XXXXXX") || return 1
+  awk '{ if ($0 == "## Critical Findings" || $0 ~ /^## Critical Findings[[:space:]]/) print "## Findings"; else print }' "$report" > "$tmp" \
+    && cat "$tmp" > "$report"
+  rm -f "$tmp"
+}
+
+# assert_report_valid <module>: require the reporting contract's Findings section.
 # (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
 assert_report_valid() {
   local module="$1"
@@ -188,6 +237,41 @@ assert_report_valid() {
   if ! grep -q '^##' "$report"; then
     echo "ERROR: $report has no '## ' headings (module: $module) - expected sections like ## What Changed, ## Findings" >&2
     echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
+    return 1
+  fi
+  normalize_review_report_headings "$report"
+  if ! grep -q '^## Findings\b' "$report"; then
+    echo "ERROR: $report missing required section: ## Findings (module: $module)" >&2
+    echo "HINT: this usually means the edc-review skill wrote an incomplete report. check the subprocess output above." >&2
+    return 1
+  fi
+}
+
+assert_report_complete_after_failed_subprocess() {
+  local module="$1"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+  local missing=0 heading
+  for heading in \
+    '## What Changed' \
+    '## Findings' \
+    '## Security Test Confidence' \
+    '## Blast Radius' \
+    '## Historical Context' \
+    '## Limitations' \
+    '## Recommendation'
+  do
+    if ! grep -q "^${heading}\\b" "$report"; then
+      echo "ERROR: $report missing required section after failed subprocess: $heading (module: $module)" >&2
+      missing=1
+    fi
+  done
+  if ! grep -Eq '^(APPROVE|CONDITIONAL|BLOCK)([[:space:]]|$)' "$report"; then
+    echo "ERROR: $report missing explicit APPROVE | CONDITIONAL | BLOCK recommendation after failed subprocess (module: $module)" >&2
+    missing=1
+  fi
+  if [ "$missing" -ne 0 ]; then
+    echo "ERROR: review subprocess for module $module reported failure and wrote an incomplete security report." >&2
+    echo "HINT: failed subprocesses are trusted only when the durable report satisfies the full security report contract." >&2
     return 1
   fi
 }
@@ -345,9 +429,13 @@ verify_mode() {
 
 auto_mode() {
   edc_require_agent_cli
+  EDC_REVIEW_RESULT_ACTIVE=1
+  EDC_REVIEW_RESULT_WRITTEN=0
+  EDC_REVIEW_RESULT_STARTED_HEAD=$(git rev-parse HEAD 2>/dev/null || true)
 
   local target="$1"; shift
   local extra_args=("$@")
+  edc_result_scope_from_args "$target" ${extra_args[@]+"${extra_args[@]}"}
   local -a build_args=() update_args=()
   local no_context_refresh=0
   local ignore_context=0
@@ -388,24 +476,37 @@ auto_mode() {
   # existing context; it just refuses to create/update it. --ignore-context is
   # the stronger pure-baseline mode.
   if [ "$no_context_refresh" -ne 1 ] && [ "$ignore_context" -ne 1 ]; then
-    recover_context_if_needed "${build_args[@]}" -- "${update_args[@]}" \
-      || exit 1
+    recover_context_if_needed ${build_args[@]+"${build_args[@]}"} -- ${update_args[@]+"${update_args[@]}"} \
+      || { edc_write_review_result 1 "context-recovery-failed" "context recovery failed before security review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force" "" ""; exit 1; }
   fi
 
-  # Build review tasks now that context is fresh.
-  local out
-  out=$("$EDC_BASH" "$0" --build "$target" "${extra_args[@]}" 2>&1) || true
+  # Build review tasks now that context is fresh. Run the function in-process
+  # instead of shelling out to `$0 --build`; build_mode still exits, but command
+  # substitution confines that exit to the subshell while preserving filesystem
+  # outputs under $EDC_REVIEW_TASKS_DIR.
+  local out build_rc=0
+  out=$(build_mode "$target" ${extra_args[@]+"${extra_args[@]}"} 2>&1) || build_rc=$?
 
-  if ! echo "$out" | grep -q "^Review tasks ready"; then
+  if [ "$build_rc" -ne 0 ] || [ ! -f "$EDC_REVIEW_TASKS_MANIFEST" ]; then
     echo "ERROR: script did not produce review tasks. Output:" >&2
     echo "$out" >&2
+    local failure_reason="review task generation failed"
+    local failure_hint="inspect the log for task-generation output and rerun after fixing it"
+    if grep -q 'ERROR: no changed files found for target:' <<< "$out"; then
+      failure_reason="no changed files found for review"
+      failure_hint="review diff found no committed or dirty tracked changes; run 'edc review full --agent <agent>' for a full repo review, or choose another base"
+    elif grep -q 'ERROR: no reviewable files after filtering tool output and ignore rules' <<< "$out"; then
+      failure_reason="no reviewable files after filtering"
+      failure_hint="changed files are EDC scratch files or matched by --ignore/.edcignore; choose another target/base or adjust ignore rules"
+    fi
+    edc_write_review_result 1 "review-task-build-failed" "$failure_reason" "$failure_hint" "" ""
     exit 1
   fi
 
-  # Parse TASK lines. allowed-unmapped is satisfied by a deterministic
-  # prewritten report and intentionally emits no subprocess task.
+  # allowed-unmapped/account-only paths are satisfied by deterministic
+  # prewritten reports and intentionally have no subprocess task file.
   local tasks
-  tasks=$(echo "$out" | grep '^TASK ' | sed 's/^TASK //' || true)
+  tasks=$(find "$EDC_REVIEW_TASKS_DIR" -maxdepth 1 -type f -name '*.md' ! -name 'report-*.md' -print | sort)
   if [ -z "$tasks" ]; then
     local module prewritten_missing=0
     while IFS= read -r module; do
@@ -414,9 +515,12 @@ auto_mode() {
     done <<< "$(manifest_modules)"
     if [ "$prewritten_missing" -ne 0 ]; then
       echo "ERROR: no TASK lines in script output and no complete prewritten reports" >&2
+      edc_write_review_result 1 "report-validation" "review report validation failed" "inspect the reviewer output in the log; a prewritten report is incomplete" "" ""
       exit 1
     fi
   fi
+
+  local had_warning=0
 
   # Spawn one agent subprocess per module.
   # The here-string on each spawn provides the prompt via stdin, overriding
@@ -426,17 +530,40 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    local review_prompt
-    review_prompt=$(resolve_prompt review "$task_path") || exit 1
-    edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt" \
-      || { echo "ERROR: review invocation failed for module $module" >&2; exit 1; }
+    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report spawn_rc
+    allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+    before_snapshot=$(mktemp)
+    after_snapshot=$(mktemp)
+    edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report"
+    review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
+    if edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt"; then
+      spawn_rc=0
+    else
+      spawn_rc=$?
+    fi
+    edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report"
+    changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+    rm -f "$before_snapshot" "$after_snapshot"
+    if [ -n "$changed_forbidden" ]; then
+      echo "ERROR: review subagent touched forbidden paths for module $module:" >&2
+      echo "$changed_forbidden" | sed 's/^/  /' >&2
+      edc_write_review_result 1 "review-write-containment" "review subagent touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module" ""
+      exit 1
+    fi
     assert_report_valid "$module" \
-      || { echo "ERROR: report validation failed for module $module" >&2; exit 1; }
+      || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
+    if [ "$spawn_rc" -ne 0 ]; then
+      assert_report_complete_after_failed_subprocess "$module" \
+        || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the module reviewer output in the log; failed subprocesses must produce the full security report contract before being accepted as warnings" "$module" ""; exit 1; }
+      had_warning=1
+      echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
+      echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
+    fi
   done <<< "$tasks"
 
   # Consolidate + verify
-  "$EDC_BASH" "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; exit 1; }
-  "$EDC_BASH" "$0" --verify     || { echo "ERROR: verification failed" >&2; exit 1; }
+  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; edc_write_review_result 1 "consolidation-failed" "review consolidation failed" "inspect the log for report validation errors and rerun after fixing them" "" ""; exit 1; }
+  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; edc_write_review_result 1 "verification-failed" "review verification failed" "inspect the log for missing or stale review artifacts" "" ""; exit 1; }
 
   # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
   # review-<target>.md at the repo root is the durable artifact. On success,
@@ -445,6 +572,12 @@ auto_mode() {
   # Override with EDC_KEEP_REVIEW_TASKS=1 to keep the dir on success too.
   if [ "${EDC_KEEP_REVIEW_TASKS:-0}" != "1" ]; then
     rm -rf "$EDC_REVIEW_TASKS_DIR"
+  fi
+
+  if [ "$had_warning" -ne 0 ]; then
+    edc_write_review_result 0 "success-with-warning" "review validated reports after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics" "" "$(final_review_filename "$target")"
+  else
+    edc_write_review_result 0 "success" "" "" "" "$(final_review_filename "$target")"
   fi
 
   # Explicit exit so any late-arriving subprocess output can't poison our
@@ -460,10 +593,15 @@ build_mode() {
   local no_context_refresh=0
   local ignore_context=0
   local context_available=1
+  local full_scope=0
   local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --full)
+        full_scope=1
+        shift
+        ;;
       --base) baseline="$2"; shift 2 ;;
       --ignore)
         [ $# -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; exit 2; }
@@ -530,12 +668,36 @@ build_mode() {
     fi
   fi
 
-  # Step 2: get changed files
+  if [ "$full_scope" -eq 1 ] && [ -n "$baseline" ]; then
+    echo "ERROR: --full cannot be combined with --base" >&2
+    exit 2
+  fi
+
+  # Step 2: get changed files, or all tracked files for full scope.
   local files
-  if [[ "$target" == https://* ]]; then
-    files=$(gh pr diff "$target" --name-only 2>/dev/null)
+  if [ "$full_scope" -eq 1 ]; then
+    target="HEAD"
+    files=$(git ls-files -z | tr '\0' '\n')
+  elif [[ "$target" == https://* ]]; then
+    local gh_err
+    gh_err=$(mktemp "${TMPDIR:-/tmp}/edc-gh-pr-diff-$$.XXXXXX") || exit 1
+    if ! files=$(gh pr diff "$target" --name-only 2>"$gh_err"); then
+      echo "ERROR: gh pr diff failed for target: $target" >&2
+      sed 's/^/gh: /' "$gh_err" >&2
+      rm -f "$gh_err"
+      exit 2
+    fi
+    rm -f "$gh_err"
   elif [[ "$target" == pr:* ]]; then
-    files=$(gh pr diff "${target#pr:}" --name-only 2>/dev/null)
+    local gh_err
+    gh_err=$(mktemp "${TMPDIR:-/tmp}/edc-gh-pr-diff-$$.XXXXXX") || exit 1
+    if ! files=$(gh pr diff "${target#pr:}" --name-only 2>"$gh_err"); then
+      echo "ERROR: gh pr diff failed for target: $target" >&2
+      sed 's/^/gh: /' "$gh_err" >&2
+      rm -f "$gh_err"
+      exit 2
+    fi
+    rm -f "$gh_err"
   elif [ -f "$target" ]; then
     files=$(grep '^+++ b/' "$target" | sed 's|^+++ b/||' || true)
     if [ -z "$files" ]; then
@@ -544,11 +706,18 @@ build_mode() {
     fi
   else
     local base="${baseline:-${target}^}"
-    files=$(git diff "${base}..${target}" --name-only)
+    files=$(git diff -z "${base}...${target}" --name-only | tr '\0' '\n')
+    files=$(append_current_head_dirty_files "$target" "$files")
   fi
 
   if [ -z "$files" ]; then
-    echo "ERROR: no changed files found for target: $target" >&2
+    if [ "$full_scope" -eq 1 ]; then
+      echo "ERROR: no tracked files found for full security review" >&2
+      echo "HINT: add tracked files or run review from the repository root." >&2
+    else
+      echo "ERROR: no changed files found for target: $target" >&2
+      echo "HINT: review diff found no committed or dirty tracked changes. run 'edc review full --agent <agent>' for a full repo review, or choose another base." >&2
+    fi
     exit 2
   fi
 
@@ -557,11 +726,15 @@ build_mode() {
   # $EDC_REVIEW_TASKS_DIR/ - itself under $EDC_CONTEXT_DIR/ - or prior
   # review-*.md files as if they were source).
   files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
-  files=$(filter_ignored_files "$files" "${ignore_patterns[@]}")
+  files=$(filter_ignored_files "$files" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
 
   if [ -z "$files" ]; then
     echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
-    echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
+    if [ "$full_scope" -eq 1 ]; then
+      echo "HINT: full review found only EDC scratch files or files matched by --ignore/.edcignore." >&2
+    else
+      echo "HINT: target may contain only edc scratch files or files matched by --ignore/.edcignore." >&2
+    fi
     exit 2
   fi
 
@@ -569,12 +742,7 @@ build_mode() {
     rm -rf "$EDC_REVIEW_TASKS_DIR"
     mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
-    local file_json file_list context_mode direct_module instruction_1 extra_instruction
-    file_json=$(echo "$files" \
-      | grep -v '^$' \
-      | sed 's/^/"/;s/$/"/' \
-      | tr '\n' ',' \
-      | sed 's/,$//')
+    local file_list context_mode direct_module instruction_1 extra_instruction
     file_list=$(echo "$files" | grep -v '^$' | sed 's/^/- /')
 
     if [ "$ignore_context" -eq 1 ]; then
@@ -589,17 +757,8 @@ build_mode() {
       extra_instruction=""
     fi
 
-    cat > "$EDC_REVIEW_TASKS_MANIFEST" <<TASK_MANIFEST
-{
-  "target": "$target",
-  "baseline": "$baseline",
-  "head": "$head",
-  "contextMode": "$context_mode",
-  "modules": [
-    { "name": "$direct_module", "doc": "", "files": [$file_json] }
-  ]
-}
-TASK_MANIFEST
+    printf '%s\n' "$files" | grep -v '^$' | node "$EDC_JSON_CLI" review-direct-manifest "$target" "$baseline" "$head" "$context_mode" "$direct_module" \
+      > "$EDC_REVIEW_TASKS_MANIFEST"
 
     cat > "$EDC_REVIEW_TASKS_DIR/${direct_module}.md" <<TASK
 # Review Task: \`${direct_module}\`
@@ -629,16 +788,20 @@ TASK
     return 0
   fi
 
-  # Step 3: classify changed files through the shared coverage classifier.
+  # Step 3: classify changed files through the shared batch coverage classifier.
   # Real modules get normal module-review tasks. Contextless paths follow their
   # deterministic reviewPolicy and never load fake module docs.
-  if [ ! -f "$CLASSIFY_SH" ]; then
-    echo "ERROR: edc-classify-path.sh not found at $CLASSIFY_SH" >&2
+  if [ ! -f "$CLASSIFY_CLI" ]; then
+    echo "ERROR: classify-cli.mjs not found at $CLASSIFY_CLI" >&2
+    exit 2
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    echo "ERROR: node is required for review path classification" >&2
     exit 2
   fi
 
   local unmatched_policy
-  unmatched_policy=$(jq -r '.policy.unmatchedPathPolicy // "warn-allow"' "$MANIFEST")
+  unmatched_policy=$(node "$EDC_JSON_CLI" unmatched-policy "$MANIFEST")
   case "$unmatched_policy" in
     warn-allow|allow|fail) ;;
     *)
@@ -648,13 +811,59 @@ TASK
       ;;
   esac
 
-  declare -A MODULE_FILES MODULE_TYPE MODULE_POLICY MODULE_CONTEXTLESS_ID
   local ambiguous_count=0 uncovered_count=0 mapped_count=0 contextless_count=0 allowed_unmapped_count=0
   local -a unmapped_unexpected=()
   local -a ambiguous_lines=()
+  local -a module_names=()
+  local -a module_files=()
+  local -a module_types=()
+  local -a module_policies=()
+  local -a module_contextless_ids=()
+
+  local module_index_result=""
+
+  _module_index() {
+    local needle="$1" i
+    i=0
+    while [ "$i" -lt "${#module_names[@]}" ]; do
+      if [ "${module_names[$i]}" = "$needle" ]; then
+        module_index_result="$i"
+        return 0
+      fi
+      i=$((i + 1))
+    done
+    module_index_result=""
+    return 1
+  }
+
+  _ensure_module() {
+    local module="$1" type="${2:-module}" policy="${3:-}" contextless_id="${4:-}" idx
+    if _module_index "$module"; then
+      idx="$module_index_result"
+      module_types[$idx]="$type"
+      module_policies[$idx]="$policy"
+      module_contextless_ids[$idx]="$contextless_id"
+    else
+      idx=${#module_names[@]}
+      module_names[$idx]="$module"
+      module_files[$idx]=""
+      module_types[$idx]="$type"
+      module_policies[$idx]="$policy"
+      module_contextless_ids[$idx]="$contextless_id"
+    fi
+    module_index_result="$idx"
+  }
+
+  _append_module_file() {
+    local module="$1" file="$2" type="${3:-module}" policy="${4:-}" contextless_id="${5:-}" idx
+    _ensure_module "$module" "$type" "$policy" "$contextless_id"
+    idx="$module_index_result"
+    module_files[$idx]="${module_files[$idx]}${file}"$'\n'
+  }
 
   _record_contextless() {
-    local id="$1" policy="$2" file="$3" module
+    local id="$1" policy="$2" file="$3" module contextless_id
+    contextless_id="$id"
     case "$policy" in
       account-only)
         if [ "$id" = "legacy-unmapped" ]; then
@@ -663,43 +872,35 @@ TASK
         else
           module="contextless-${id}"
         fi
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="account-only"
-        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
       promotion-check)
         module="contextless-promotion-check"
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="promotion-check"
-        MODULE_CONTEXTLESS_ID["$module"]="promotion-check"
+        contextless_id="promotion-check"
         ;;
       no-context-review)
         module="contextless-${id}"
-        MODULE_TYPE["$module"]="contextless"
-        MODULE_POLICY["$module"]="no-context-review"
-        MODULE_CONTEXTLESS_ID["$module"]="$id"
         ;;
       *)
         echo "ERROR: invalid contextless reviewPolicy from classifier: $policy" >&2
         exit 2
         ;;
     esac
-    MODULE_FILES["$module"]+="${file}"$'\n'
+    _append_module_file "$module" "$file" "contextless" "$policy" "$contextless_id"
   }
 
-  while IFS= read -r file; do
+  local classifications
+  classifications=$(printf '%s\n' "$files" | node "$CLASSIFY_CLI" "$MANIFEST") || {
+    echo "ERROR: classify-cli.mjs failed" >&2
+    exit 2
+  }
+
+  while IFS=$'\t' read -r file state; do
     [ -z "$file" ] && continue
-    local state
-    state=$("$EDC_BASH" "$CLASSIFY_SH" "$MANIFEST" "$file") || {
-      echo "ERROR: edc-classify-path.sh failed for path: $file" >&2
-      exit 2
-    }
 
     case "$state" in
       context-module:*)
         module="${state#context-module:}"
-        MODULE_FILES["$module"]+="${file}"$'\n'
-        MODULE_TYPE["$module"]="module"
+        _append_module_file "$module" "$file" "module"
         mapped_count=$((mapped_count + 1))
         ;;
       contextless:*)
@@ -711,8 +912,7 @@ TASK
         ;;
       uncovered)
         uncovered_count=$((uncovered_count + 1))
-        MODULE_FILES["unmapped"]+="${file}"$'\n'
-        MODULE_TYPE["unmapped"]="unmapped"
+        _append_module_file "unmapped" "$file" "unmapped"
         unmapped_unexpected+=("$file")
         ;;
       ambiguous)
@@ -726,12 +926,12 @@ TASK
         exit 2
         ;;
     esac
-  done <<< "$files"
+  done <<< "$classifications"
 
   if [ "$ambiguous_count" -gt 0 ]; then
     echo "ERROR: $ambiguous_count file(s) match multiple modules or contextless entries:" >&2
     local line
-    for line in "${ambiguous_lines[@]}"; do
+    for line in ${ambiguous_lines[@]+"${ambiguous_lines[@]}"}; do
       echo "  $line" >&2
     done
     echo "HINT: edit $MANIFEST - bump priority, tighten match rules, or remove overlapping contextless globs" >&2
@@ -743,7 +943,7 @@ TASK
       fail)
         echo "ERROR: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (policy=fail):" >&2
         local f
-        for f in "${unmapped_unexpected[@]}"; do
+        for f in ${unmapped_unexpected[@]+"${unmapped_unexpected[@]}"}; do
           echo "  $f" >&2
         done
         echo "HINT: add a module rule or contextless.entries coverage in $MANIFEST, then re-run." >&2
@@ -752,7 +952,7 @@ TASK
       warn-allow)
         echo "WARNING: ${#unmapped_unexpected[@]} changed file(s) not mapped to any module or contextless entry (will review under 'unmapped'):" >&2
         local f
-        for f in "${unmapped_unexpected[@]}"; do
+        for f in ${unmapped_unexpected[@]+"${unmapped_unexpected[@]}"}; do
           echo "  $f" >&2
         done
         ;;
@@ -762,76 +962,74 @@ TASK
     esac
   fi
 
-  echo "routing summary: mapped=$mapped_count contextless=$contextless_count uncovered=$uncovered_count allowed-unmapped=$allowed_unmapped_count modules=${#MODULE_FILES[@]}" >&2
+  echo "routing summary: mapped=$mapped_count contextless=$contextless_count uncovered=$uncovered_count allowed-unmapped=$allowed_unmapped_count modules=${#module_names[@]}" >&2
 
   # Step 4: write $EDC_REVIEW_TASKS_DIR/
   rm -rf "$EDC_REVIEW_TASKS_DIR"
   mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
   local sorted_modules
-  sorted_modules=$(printf '%s\n' "${!MODULE_FILES[@]}" | sort)
+  sorted_modules=$(printf '%s\n' ${module_names[@]+"${module_names[@]}"} | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
-  {
-    echo "{"
-    echo "  \"target\": \"$target\","
-    echo "  \"baseline\": \"$baseline\","
-    echo "  \"head\": \"$head\","
-    if [ "$no_context_refresh" -eq 1 ]; then
-      echo "  \"contextMode\": \"no-refresh\","
-    else
-      echo "  \"contextMode\": \"context\","
+  local context_mode
+  if [ "$no_context_refresh" -eq 1 ]; then
+    context_mode="no-refresh"
+  else
+    context_mode="context"
+  fi
+
+  local manifest_meta_dir manifest_meta
+  manifest_meta_dir="$EDC_REVIEW_TASKS_DIR/.manifest-files"
+  manifest_meta="$manifest_meta_dir/modules.tsv"
+  mkdir -p "$manifest_meta_dir"
+  : > "$manifest_meta"
+
+  while IFS= read -r module; do
+    local module_doc="${EDC_MODULES_DIR}/${module}.md"
+    local module_idx module_type module_policy module_contextless_id module_file_blob
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    module_contextless_id="${module_contextless_ids[$module_idx]:-}"
+    module_file_blob="${module_files[$module_idx]}"
+    if [ "$module_type" != "module" ]; then
+      module_doc=""
     fi
-    echo "  \"modules\": ["
-    local first=1
-    while IFS= read -r module; do
-      [ "$first" -eq 0 ] && echo "    ,"
-      local module_doc="${EDC_MODULES_DIR}/${module}.md"
-      local module_type="${MODULE_TYPE[$module]:-module}"
-      if [ "$module_type" != "module" ]; then
-        module_doc=""
-      fi
-      echo -n "    { \"name\": \"$module\", \"doc\": \"${module_doc}\", \"files\": ["
-      local file_json
-      file_json=$(echo "${MODULE_FILES[$module]}" \
-        | grep -v '^$' \
-        | sed 's/^/"/;s/$/"/' \
-        | tr '\n' ',' \
-        | sed 's/,$//')
-      echo -n "$file_json"
-      if [ "$module_type" = "contextless" ]; then
-        echo -n "], \"type\": \"contextless\", \"contextlessId\": \"${MODULE_CONTEXTLESS_ID[$module]}\", \"reviewPolicy\": \"${MODULE_POLICY[$module]}\" }"
-      elif [ "$module_type" = "unmapped" ]; then
-        echo -n "], \"type\": \"uncovered\" }"
-      else
-        echo -n "] }"
-      fi
-      first=0
-    done <<< "$sorted_modules"
-    echo ""
-    echo "  ]"
-    echo "}"
-  } > "$EDC_REVIEW_TASKS_MANIFEST"
+    printf '%s' "$module_file_blob" > "$manifest_meta_dir/$module_idx.files"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$module_idx" "$module" "$module_type" "$module_policy" "$module_contextless_id" "$module_doc" >> "$manifest_meta"
+  done <<< "$sorted_modules"
+
+  node "$EDC_JSON_CLI" review-routed-manifest "$target" "$baseline" "$head" "$context_mode" "$manifest_meta" "$manifest_meta_dir" \
+    > "$EDC_REVIEW_TASKS_MANIFEST"
+  rm -rf "$manifest_meta_dir"
 
   # per-module task files
   while IFS= read -r module; do
-    local file_list baseline_line module_context_line
-    file_list=$(echo "${MODULE_FILES[$module]}" | grep -v '^$' | sed 's/^/- /')
+    local file_list baseline_line module_context_line module_idx module_type module_policy module_contextless_id module_file_blob
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    module_contextless_id="${module_contextless_ids[$module_idx]:-}"
+    module_file_blob="${module_files[$module_idx]}"
+    file_list=$(echo "$module_file_blob" | grep -v '^$' | sed 's/^/- /')
 
     if [ "$module" = "allowed-unmapped" ]; then
-      write_allowed_unmapped_report "${MODULE_FILES[$module]}"
+      write_allowed_unmapped_report "$module_file_blob"
       continue
     fi
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "account-only" ]; then
-      write_contextless_account_report "$module" "${MODULE_CONTEXTLESS_ID[$module]}" "${MODULE_FILES[$module]}"
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "account-only" ]; then
+      write_contextless_account_report "$module" "$module_contextless_id" "$module_file_blob"
       continue
     fi
 
     baseline_line=""
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "promotion-check" ]; then
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "promotion-check" ]; then
       cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
@@ -855,7 +1053,7 @@ TASK
       continue
     fi
 
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]}" = "no-context-review" ]; then
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "no-context-review" ]; then
       cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
 # Review Task: \`${module}\`
 
@@ -914,7 +1112,12 @@ TASK
   echo "Review tasks ready."
   echo ""
   while IFS= read -r module; do
-    if [ "${MODULE_TYPE[$module]:-module}" = "contextless" ] && [ "${MODULE_POLICY[$module]:-}" = "account-only" ]; then
+    local module_idx module_type module_policy
+    _module_index "$module"
+    module_idx="$module_index_result"
+    module_type="${module_types[$module_idx]:-module}"
+    module_policy="${module_policies[$module_idx]:-}"
+    if [ "$module_type" = "contextless" ] && [ "$module_policy" = "account-only" ]; then
       continue
     fi
     echo "TASK $EDC_REVIEW_TASKS_DIR/${module}.md"
@@ -924,7 +1127,9 @@ TASK
 review_usage() {
   cat <<EOF
 Usage: edc-review.sh [--agent <cli>] [--model <slug>] <target> [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-                                                     full review pipeline (default)
+                                                     differential security review pipeline
+       edc-review.sh [--agent <cli>] [--model <slug>] --full [--ignore <glob>]... [--context-mode advisory|inject]
+                                                     full current-repo security review pipeline
        edc-review.sh --base <ref> [--no-context-refresh|--ignore-context]
                                                      shorthand for HEAD --base <ref>
        edc-review.sh --pr <number-or-url> [--base <ref>] [--no-context-refresh|--ignore-context]
@@ -991,11 +1196,18 @@ case "${1:-}" in
       build_mode "pr:$pr_target" "$@"
       exit $?
     fi
+    if [ "${1:-}" = "--full" ]; then
+      build_mode HEAD --full "${@:2}"
+      exit $?
+    fi
     if [ -z "${1:-}" ]; then
       echo "ERROR: --build requires a target" >&2
       exit 2
     fi
     build_mode "$@"
+    ;;
+  --full)
+    auto_mode HEAD --full "${@:2}"
     ;;
   --base)
     # Shorthand: --base <ref> [extras...] → HEAD --base <ref> [extras...]

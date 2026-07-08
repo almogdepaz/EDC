@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "edc-doctor: requires bash >= 4.0" >&2
-  exit 2
-}
 
 set -euo pipefail
 
@@ -13,11 +9,13 @@ MANIFEST="$EDC_MANIFEST"
 INDEX="$EDC_INDEX"
 ROOT_AGENTS="$EDC_ROOT_AGENTS"
 ALT_AGENTS="$EDC_ALT_AGENTS"
-CLASSIFY_SH="$SCRIPT_DIR/edc-classify-path.sh"
+CLASSIFY_CLI="$SCRIPT_DIR/../hooks/lib/classify-cli.mjs"
 
-command -v jq >/dev/null 2>&1 || { echo "edc-doctor: jq required" >&2; exit 2; }
+JSON_CLI="$SCRIPT_DIR/../hooks/lib/json-cli.mjs"
 command -v git >/dev/null 2>&1 || { echo "edc-doctor: git required" >&2; exit 2; }
-[ -f "$CLASSIFY_SH" ] || { echo "edc-doctor: missing $CLASSIFY_SH" >&2; exit 2; }
+command -v node >/dev/null 2>&1 || { echo "edc-doctor: node required" >&2; exit 2; }
+[ -f "$CLASSIFY_CLI" ] || { echo "edc-doctor: missing $CLASSIFY_CLI" >&2; exit 2; }
+[ -f "$JSON_CLI" ] || { echo "edc-doctor: missing $JSON_CLI" >&2; exit 2; }
 
 failures=0
 
@@ -35,53 +33,55 @@ if [ -f "$INDEX" ] && ! grep -q '^##' "$INDEX"; then
 fi
 
 if [ -f "$MANIFEST" ]; then
-  if ! jq -e . "$MANIFEST" >/dev/null 2>&1; then
+  if ! node "$JSON_CLI" valid-json "$MANIFEST" >/dev/null 2>&1; then
     fail "$MANIFEST is not valid JSON"
   else
-    jq -e '.schemaVersion == 2' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "$MANIFEST schemaVersion must equal 2"
-    jq -e '.policy.defaultMode | IN("advisory","inject")' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "policy.defaultMode must be advisory or inject"
-    jq -e '.policy.unmatchedPathPolicy == "warn-allow"' "$MANIFEST" >/dev/null 2>&1 \
-      || fail "policy.unmatchedPathPolicy must equal warn-allow"
-    while IFS= read -r doc; do
-      [ -n "$doc" ] || continue
-      [ -f "$doc" ] || fail "missing module doc: $doc"
-    done < <(jq -r '.modules[].doc // empty' "$MANIFEST")
+    while IFS=$'\t' read -r kind value; do
+      case "$kind" in
+        FAIL) fail "$value" ;;
+        DOC) [ -f "$value" ] || fail "missing module doc: $value" ;;
+      esac
+    done < <(node "$JSON_CLI" doctor "$MANIFEST")
   fi
 fi
 
 if [ "$failures" -eq 0 ]; then
   ignore_args=()
-  while IFS= read -r glob; do
-    [ -n "$glob" ] || continue
-    ignore_args+=(--ignore "$glob")
-  done < <(jq -r '.coverage.ignoreGlobs[]? // empty' "$MANIFEST")
+  while IFS=$'\t' read -r kind value; do
+    [ "$kind" = "IGNORE" ] || continue
+    [ -n "$value" ] || continue
+    ignore_args+=(--ignore "$value")
+  done < <(node "$JSON_CLI" doctor "$MANIFEST")
 
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    set +e
-    state=$("$EDC_BASH" "$CLASSIFY_SH" "${ignore_args[@]}" "$MANIFEST" "$path" 2>&1)
-    rc=$?
-    set -e
-    if [ "$rc" -ne 0 ]; then
-      fail "classifier failed for $path (rc=$rc): $state"
-      continue
-    fi
-    case "$state" in
-      ignored|context-module:*|contextless:*)
-        ;;
-      uncovered)
-        fail "uncovered tracked path not covered by manifest modules or contextless.entries: $path"
-        ;;
-      ambiguous)
-        fail "ambiguous routing for $path"
-        ;;
-      *)
-        fail "classifier returned invalid state for $path: $state"
-        ;;
-    esac
-  done < <(git ls-files)
+  tmp_dir=$(mktemp -d)
+  paths_file="$tmp_dir/paths.txt"
+  states_file="$tmp_dir/states.tsv"
+  git ls-files > "$paths_file"
+  set +e
+  node "$CLASSIFY_CLI" ${ignore_args[@]+"${ignore_args[@]}"} "$MANIFEST" < "$paths_file" > "$states_file" 2> "$tmp_dir/classify.err"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    fail "classifier failed (rc=$rc): $(cat "$tmp_dir/classify.err")"
+  else
+    while IFS=$'\t' read -r path state; do
+      [ -n "$path" ] || continue
+      case "$state" in
+        ignored|context-module:*|contextless:*)
+          ;;
+        uncovered)
+          fail "uncovered tracked path not covered by manifest modules or contextless.entries: $path"
+          ;;
+        ambiguous)
+          fail "ambiguous routing for $path"
+          ;;
+        *)
+          fail "classifier returned invalid state for $path: $state"
+          ;;
+      esac
+    done < "$states_file"
+  fi
+  rm -rf "$tmp_dir"
 fi
 
 if [ "$failures" -gt 0 ]; then

@@ -28,12 +28,12 @@ EOF
 printf 'plain text with no headings at all\n' > edc-context/index.md
 
 result=0
-bash "$(cd - > /dev/null && pwd)/$SCRIPT" --check-context 2>/tmp/t3-stderr.txt || result=$?
-if [ "$result" -ne 0 ] && grep -q "no '## ' headings" /tmp/t3-stderr.txt; then
+bash "$(cd - > /dev/null && pwd)/$SCRIPT" --check-context 2>"$TMPDIR_T3/stderr.txt" || result=$?
+if [ "$result" -ne 0 ] && grep -q "no '## ' headings" "$TMPDIR_T3/stderr.txt"; then
   echo "PASS: index.md without ## headings rejected with descriptive error"
 else
   echo "FAIL: expected rejection of index.md without headings, got exit $result"
-  cat /tmp/t3-stderr.txt
+  cat "$TMPDIR_T3/stderr.txt"
   exit 1
 fi
 
@@ -57,29 +57,56 @@ printf 'just plain text with zero markdown structure\n' > edc-context/review-tas
 
 ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0
-bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?
-if [ "$result" -ne 0 ] && grep -q "no '## ' headings" /tmp/t3-stderr.txt; then
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
+if [ "$result" -ne 0 ] && grep -q "no '## ' headings" "$TMPDIR_T3/stderr.txt"; then
   echo "PASS: --consolidate rejects report without ## headings with descriptive error"
 else
   echo "FAIL: expected --consolidate to reject report without headings, got exit $result"
-  cat /tmp/t3-stderr.txt
+  cat "$TMPDIR_T3/stderr.txt"
   exit 1
 fi
 
-# ── 3c: valid report passes consolidate ───────────────────────────────────────
-printf '## Summary\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
+# ── 3c: consolidate rejects report with headings but no Findings ─────────────
+printf '## Summary\n\nstructured but no findings section\n' > edc-context/review-tasks/report-foo.md
 
 result=0
-bash "$ORIG_DIR/$SCRIPT" --consolidate 2>/tmp/t3-stderr.txt || result=$?
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
+if [ "$result" -ne 0 ] && grep -q "missing required section: ## Findings" "$TMPDIR_T3/stderr.txt"; then
+  echo "PASS: --consolidate rejects report without ## Findings"
+else
+  echo "FAIL: expected --consolidate to reject report without ## Findings, got exit $result"
+  cat "$TMPDIR_T3/stderr.txt"
+  exit 1
+fi
+
+# ── 3d: consolidate normalizes common Critical Findings heading drift ────────
+printf '## What Changed\n\nscoped diff\n\n## Critical Findings\n\nNo security findings.\n' > edc-context/review-tasks/report-foo.md
+
+result=0
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
+if [ "$result" -eq 0 ] && grep -q '^## Findings$' edc-context/review-tasks/report-foo.md; then
+  echo "PASS: --consolidate normalizes ## Critical Findings to ## Findings"
+else
+  echo "FAIL: expected --consolidate to normalize ## Critical Findings, got exit $result"
+  cat "$TMPDIR_T3/stderr.txt"
+  cat edc-context/review-tasks/report-foo.md
+  exit 1
+fi
+
+# ── 3e: valid report passes consolidate ───────────────────────────────────────
+printf '## Findings\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
+
+result=0
+bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
 if [ "$result" -eq 0 ]; then
   echo "PASS: valid report passes --consolidate (exit 0)"
 else
   echo "FAIL: valid report rejected by --consolidate (exit $result)"
-  cat /tmp/t3-stderr.txt
+  cat "$TMPDIR_T3/stderr.txt"
   exit 1
 fi
 
-# ── 3d: manifest declares v2 schema ───────────────────────────────────────────
+# ── 3f: manifest declares v2 schema ───────────────────────────────────────────
 if jq -e '.schemaVersion == 2' edc-context/manifest.json > /dev/null; then
   echo "PASS: edc-context/manifest.json schemaVersion == 2"
 else

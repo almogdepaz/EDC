@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# t9-routing: pin edc-route.sh contract — exit codes, tier order, longest-prefix
-# tie-break, priority tie-break, ambiguity, no-match.
+# t9-routing: pin classifier routing tier order, longest-prefix tie-break,
+# priority tie-break, ambiguity, no-match, and EDC glob dialect.
 set -uo pipefail
 
-if [ -n "${EDC_BASH:-}" ]; then
-  export PATH="$(dirname "$EDC_BASH"):$PATH"
-fi
-
-SCRIPT="plugins/edc/scripts/edc-route.sh"
+SCRIPT="plugins/edc/hooks/lib/classify-cli.mjs"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
 TMP="$(mktemp -d)"
@@ -18,24 +14,21 @@ PASS=0
 FAIL=0
 
 check() {
-  local desc="$1" expected_rc="$2" expected_out="$3" actual_rc="$4" actual_out="$5"
-  if [ "$actual_rc" = "$expected_rc" ] && [ "$actual_out" = "$expected_out" ]; then
+  local desc="$1" expected="$2" actual="$3"
+  if [ "$actual" = "$expected" ]; then
     PASS=$((PASS + 1))
     echo "PASS: $desc"
   else
     FAIL=$((FAIL + 1))
     echo "FAIL: $desc"
-    echo "  expected: rc=$expected_rc out='$expected_out'"
-    echo "  actual:   rc=$actual_rc out='$actual_out'"
+    echo "  expected: '$expected'"
+    echo "  actual:   '$actual'"
   fi
 }
 
-run_route() {
+classify() {
   local file="$1"
-  local out rc
-  out=$("${EDC_BASH:-bash}" "$SCRIPT" "$MANIFEST" "$file" 2>/dev/null)
-  rc=$?
-  printf '%s\t%s' "$rc" "$out"
+  printf '%s\n' "$file" | node "$SCRIPT" "$MANIFEST" 2>/dev/null | awk -F '\t' 'NR == 1 {print $2}'
 }
 
 # --- Test 1: exactFiles wins over prefix/glob ---
@@ -48,8 +41,7 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "scripts/edc")
-check "exactFiles beats prefixes regardless of priority" 0 "exact-mod" "${result%%	*}" "${result#*	}"
+check "exactFiles beats prefixes regardless of priority" "context-module:exact-mod" "$(classify "scripts/edc")"
 
 # --- Test 2: longest prefix wins ---
 cat > "$MANIFEST" <<'EOF'
@@ -61,8 +53,7 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "a/b/c/file.txt")
-check "longest prefix wins" 0 "long" "${result%%	*}" "${result#*	}"
+check "longest prefix wins" "context-module:long" "$(classify "a/b/c/file.txt")"
 
 # --- Test 3: priority breaks tie at same prefix length ---
 cat > "$MANIFEST" <<'EOF'
@@ -74,8 +65,7 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "x/y.txt")
-check "priority breaks tie when prefix lengths equal" 0 "high" "${result%%	*}" "${result#*	}"
+check "priority breaks tie when prefix lengths equal" "context-module:high" "$(classify "x/y.txt")"
 
 # --- Test 4: glob match (extensionless path) ---
 cat > "$MANIFEST" <<'EOF'
@@ -86,10 +76,10 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "bin/run")
-check "glob matches extensionless path" 0 "globmod" "${result%%	*}" "${result#*	}"
+check "glob matches extensionless path" "context-module:globmod" "$(classify "bin/run")"
+check "single-star glob does not cross slash" "uncovered" "$(classify "bin/nested/run")"
 
-# --- Test 5: no match → exit 1 ---
+# --- Test 5: no match ---
 cat > "$MANIFEST" <<'EOF'
 {
   "schemaVersion": 2,
@@ -98,10 +88,9 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "no/such/path.xyz")
-check "no match returns exit 1 with empty stdout" 1 "" "${result%%	*}" "${result#*	}"
+check "no match returns uncovered" "uncovered" "$(classify "no/such/path.xyz")"
 
-# --- Test 6: ambiguity (same tier, same priority, different modules) → exit 2 ---
+# --- Test 6: ambiguity (same tier, same priority, different modules) ---
 cat > "$MANIFEST" <<'EOF'
 {
   "schemaVersion": 2,
@@ -111,8 +100,7 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "dup.txt")
-check "tied top-priority candidates → exit 2 with empty stdout" 2 "" "${result%%	*}" "${result#*	}"
+check "tied top-priority candidates return ambiguous" "ambiguous" "$(classify "dup.txt")"
 
 # --- Test 7: tier order — prefix beats glob ---
 cat > "$MANIFEST" <<'EOF'
@@ -124,8 +112,7 @@ cat > "$MANIFEST" <<'EOF'
   ]
 }
 EOF
-result=$(run_route "src/lib/foo.ts")
-check "prefix tier wins over glob tier even with lower priority" 0 "prefer-prefix" "${result%%	*}" "${result#*	}"
+check "prefix tier wins over glob tier even with lower priority" "context-module:prefer-prefix" "$(classify "src/lib/foo.ts")"
 
 echo
 echo "t9-routing: $PASS passed, $FAIL failed"

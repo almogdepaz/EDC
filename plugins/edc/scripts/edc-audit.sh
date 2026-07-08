@@ -1,49 +1,29 @@
 #!/usr/bin/env bash
-# bash >= 4 required: uses set -u with empty arrays
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-audit orchestrator.
 # Deterministic control plane for terminal/orchestrated edc audit runs.
 #
 # Flow:
-#   1. dependency check (jq, git)
-#   2. parse args (--ignore, --context-mode)
+#   1. dependency check (git/node via helpers)
+#   2. parse args (optional target/--base diff scope, --ignore, --context-mode)
 #   3. freshness gate via assert_context_fresh; auto-recover (build/update +
 #      force-retry) if stale or missing — same recovery path review uses
-#   4. spawn ONE audit subprocess via edc_spawn (claude/cursor/codex/pi)
-#   5. validate output: <reports-dir>/{complexity,issues}.md must exist
+#   4. spawn one scoped audit subprocess per manifest module
+#   5. spawn one synthesis subprocess to write canonical reports
+#   6. validate output: <reports-dir>/{complexity,issues}.md must exist
 #      and contain at least one ## heading
-#   6. exit 0 with paths printed, non-zero with reason
+#   7. exit 0 with paths printed, non-zero with reason
 #
 # Usage:
-#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-audit.sh [target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 
 set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
-
-# Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
-# real script location, not the invocation path.
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 
@@ -60,25 +40,93 @@ CODEX_EXEC_HOME_OWNED=0
 # shellcheck source=edc-recover-context.sh
 . "$SCRIPT_DIR/edc-recover-context.sh"
 
-# ── validate audit output ────────────────────────────────────────────────────
+# ── audit task helpers ───────────────────────────────────────────────────────
+
+AUDIT_TASKS_DIR="$EDC_CONTEXT_DIR/audit-tasks"
+
+safe_audit_name() {
+  printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_'
+}
+
+manifest_audit_modules() {
+  node "$EDC_JSON_CLI" audit-modules "$MANIFEST"
+}
+
+changed_files_for_audit_scope() {
+  local target="$1" base="$2" files="" dirty_files=""
+  files=$(git diff --name-only --diff-filter=ACMRTUXB "$base...$target" 2>/dev/null || true)
+  dirty_files=$(git diff --name-only --diff-filter=ACMRTUXB 2>/dev/null || true)
+  if [ -n "$dirty_files" ]; then
+    printf '%s\n%s\n' "$files" "$dirty_files" | sed '/^$/d' | sort -u
+  else
+    printf '%s\n' "$files" | sed '/^$/d'
+  fi
+}
+
+manifest_audit_modules_for_files() {
+  node "$EDC_JSON_CLI" audit-modules-for-files "$MANIFEST"
+}
+
+assert_markdown_report_valid() {
+  local f="$1" label="$2"
+  if [ ! -f "$f" ]; then
+    echo "ERROR: audit report missing: $f ($label)" >&2
+    return 1
+  fi
+  if ! grep -q '^##' "$f"; then
+    echo "ERROR: $f has no '## ' headings — expected sections like ## Summary" >&2
+    echo "HINT: subprocess produced a stub. check the agent output above." >&2
+    return 1
+  fi
+}
 
 assert_audit_reports_valid() {
-  local complexity="$EDC_COMPLEXITY"
-  local issues="$EDC_ISSUES"
   local rc=0
-  for f in "$complexity" "$issues"; do
-    if [ ! -f "$f" ]; then
-      echo "ERROR: audit report missing: $f" >&2
-      rc=1
-      continue
-    fi
-    if ! grep -q '^##' "$f"; then
-      echo "ERROR: $f has no '## ' headings — expected sections like ## Summary, ## LOC Estimates" >&2
-      echo "HINT: subprocess produced a stub. check the agent output above." >&2
-      rc=1
-    fi
-  done
+  assert_markdown_report_valid "$EDC_COMPLEXITY" "complexity" || rc=1
+  assert_markdown_report_valid "$EDC_ISSUES" "issues" || rc=1
   return $rc
+}
+
+build_audit_worker_prompt() {
+  local module="$1" module_doc="$2" report_path="$3"
+  cat <<EOF
+AUDIT WORKER TASK
+AUDIT_MODULE: $module
+AUDIT_MODULE_DOC: $module_doc
+AUDIT_REPORT_PATH: $report_path
+
+Run a scoped code quality audit for this one module only.
+
+Rules:
+1. Read $EDC_INDEX, $MANIFEST, and $module_doc for this module's documented ownership, invariants, and file scope.
+2. Inspect only this module plus the smallest supporting references needed to verify a local code-quality finding.
+3. Write exactly one markdown report to $report_path.
+4. Do not write $EDC_COMPLEXITY or $EDC_ISSUES; synthesis owns canonical reports.
+5. Use the embedded edc-audit skill bundle below.
+
+$(_emit_audit_prompt)
+EOF
+}
+
+build_audit_synthesis_prompt() {
+  cat <<EOF
+AUDIT SYNTHESIS TASK
+AUDIT_WORKER_REPORTS_DIR: $AUDIT_TASKS_DIR
+CANONICAL_COMPLEXITY_REPORT: $EDC_COMPLEXITY
+CANONICAL_ISSUES_REPORT: $EDC_ISSUES
+
+Synthesize the scoped module audit reports into the canonical EDC audit reports.
+
+Rules:
+1. Read every markdown report under $AUDIT_TASKS_DIR.
+2. Do not re-audit source code unless a worker report is ambiguous and a small verification read is necessary.
+3. Write $EDC_COMPLEXITY for maintainability/code-quality findings.
+4. Write $EDC_ISSUES only for concrete correctness risks surfaced by worker reports.
+5. Preserve module names and evidence from worker reports so findings remain traceable.
+6. Use the embedded edc-audit reporting contract below.
+
+$(_emit_audit_prompt)
+EOF
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -86,15 +134,23 @@ assert_audit_reports_valid() {
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
 EOF
   exit 2
 }
 
 audit_main() {
+  edc_result_begin audit
+  trap edc_result_on_exit EXIT
+  local target="" base=""
   local -a ignore_args=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --base)
+        [ "$#" -ge 2 ] || { echo "ERROR: --base requires a ref" >&2; usage; }
+        base="$2"
+        shift 2
+        ;;
       --ignore)
         [ "$#" -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; usage; }
         ignore_args+=("$1" "$2")
@@ -107,26 +163,142 @@ audit_main() {
         shift 2
         ;;
       --help|-h) usage ;;
-      *) echo "ERROR: unknown argument: $1" >&2; usage ;;
+      --*) echo "ERROR: unknown argument: $1" >&2; usage ;;
+      *)
+        if [ -n "$target" ]; then
+          echo "ERROR: audit accepts at most one target" >&2
+          usage
+        fi
+        target="$1"
+        shift
+        ;;
     esac
   done
+
+  if [ -n "$base" ] && [ -z "$target" ]; then
+    target="HEAD"
+  fi
+  if [ -n "$target" ] && [ -z "$base" ]; then
+    echo "ERROR: differential quality review requires --base <ref>" >&2
+    usage
+  fi
+  if [ -n "$target" ]; then
+    edc_result_scope_from_args "$target" --base "$base"
+  fi
 
   edc_require_agent_cli
 
   # Gate on freshness; recover if needed. After this returns, $EDC_CONTEXT_DIR is fresh.
-  recover_context_if_needed "${ignore_args[@]}" \
-    || exit 1
+  recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
+    || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
-  # Spawn the audit subprocess.
-  echo "→ running audit via $EDC_AGENT_CLI..."
-  local audit_prompt
-  audit_prompt=$(resolve_prompt audit) || exit 1
-  edc_spawn "edc-audit" "${EDC_AUDIT_TIMEOUT:-1800}" "$audit_prompt" \
-    || { echo "ERROR: edc-audit invocation failed" >&2; exit 1; }
+  # Spawn one scoped audit subprocess per real module, then synthesize the
+  # worker outputs into the canonical reports.
+  echo "→ running per-module audit via $EDC_AGENT_CLI..."
+  rm -rf "$AUDIT_TASKS_DIR"
+  mkdir -p "$AUDIT_TASKS_DIR" "$EDC_REPORTS_DIR"
+
+  local changed_files=""
+  if [ -n "$target" ]; then
+    changed_files=$(changed_files_for_audit_scope "$target" "$base")
+    if [ -z "$changed_files" ]; then
+      echo "ERROR: no changed files found for quality review target: $target" >&2
+      edc_result_failure 1 "no-reviewable-files" "no changed files found for quality review" "choose another target/base or modify a tracked file"
+      exit 1
+    fi
+  fi
+
+  local module module_doc safe report_path worker_prompt module_count=0 had_warning=0
+  while IFS=$'\t' read -r module module_doc; do
+    [ -n "${module:-}" ] || continue
+    module_count=$((module_count + 1))
+    if [ -z "${module_doc:-}" ] || [ ! -f "$module_doc" ]; then
+      echo "ERROR: manifest module '$module' has missing doc: ${module_doc:-<empty>}" >&2
+      exit 1
+    fi
+    safe=$(safe_audit_name "$module")
+    [ -n "$safe" ] || safe="module_$module_count"
+    report_path="$AUDIT_TASKS_DIR/$safe.md"
+    echo "→ auditing module: $module"
+    worker_prompt=$(build_audit_worker_prompt "$module" "$module_doc" "$report_path") || exit 1
+    local worker_rc before_snapshot after_snapshot changed_forbidden
+    before_snapshot=$(mktemp)
+    after_snapshot=$(mktemp)
+    edc_snapshot_review_forbidden_paths "$before_snapshot" "$report_path"
+    if edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt"; then
+      worker_rc=0
+    else
+      worker_rc=$?
+    fi
+    edc_snapshot_review_forbidden_paths "$after_snapshot" "$report_path"
+    changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+    rm -f "$before_snapshot" "$after_snapshot"
+    if [ -n "$changed_forbidden" ]; then
+      echo "ERROR: audit worker touched forbidden paths for module $module:" >&2
+      echo "$changed_forbidden" | sed 's/^/  /' >&2
+      edc_result_failure 1 "audit-write-containment" "audit worker touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module"
+      exit 1
+    fi
+    assert_markdown_report_valid "$report_path" "module $module" \
+      || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
+    if [ "$worker_rc" -ne 0 ]; then
+      had_warning=1
+      echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
+      echo "HINT: treating the validated module audit report as success; inspect the agent log for transport/provider diagnostics." >&2
+    fi
+  done < <(if [ -n "$target" ]; then printf '%s\n' "$changed_files" | manifest_audit_modules_for_files; else manifest_audit_modules; fi)
+
+  if [ "$module_count" -eq 0 ]; then
+    if [ -n "$target" ]; then
+      echo "ERROR: no changed files map to auditable modules for quality review" >&2
+      edc_result_failure 1 "no-reviewable-files" "no changed files map to auditable modules for quality review" "choose another target/base or run full quality-review without --diff"
+    else
+      echo "ERROR: no real modules found in $MANIFEST; cannot run per-module audit" >&2
+      edc_result_failure 1 "audit-no-modules" "no real modules found in manifest" "run edc doctor, then rebuild edc-context if needed"
+    fi
+    exit 1
+  fi
+
+  rm -f "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  echo "→ synthesizing audit reports..."
+  local synthesis_prompt
+  synthesis_prompt=$(build_audit_synthesis_prompt) || exit 1
+  local synthesis_rc before_snapshot after_snapshot changed_forbidden
+  before_snapshot=$(mktemp)
+  after_snapshot=$(mktemp)
+  edc_snapshot_review_forbidden_paths "$before_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  if edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt"; then
+    synthesis_rc=0
+  else
+    synthesis_rc=$?
+  fi
+  edc_snapshot_review_forbidden_paths "$after_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+  rm -f "$before_snapshot" "$after_snapshot"
+  if [ -n "$changed_forbidden" ]; then
+    echo "ERROR: audit synthesis touched forbidden paths:" >&2
+    echo "$changed_forbidden" | sed 's/^/  /' >&2
+    edc_result_failure 1 "audit-write-containment" "audit synthesis touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input"
+    exit 1
+  fi
 
   # Validate reports.
-  assert_audit_reports_valid || exit 1
+  assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output in the log; canonical reports are missing or incomplete"; exit 1; }
+  if [ "$synthesis_rc" -ne 0 ]; then
+    had_warning=1
+    echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but report validation passed." >&2
+    echo "HINT: treating the validated audit reports as success; inspect the agent log for transport/provider diagnostics." >&2
+  fi
 
+  if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
+    rm -rf "$AUDIT_TASKS_DIR"
+  fi
+
+  if [ "$had_warning" -ne 0 ]; then
+    edc_result_success_with_warning "audit validated outputs after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics"
+  else
+    edc_result_success
+  fi
   echo "Audit reports:"
   echo "  $EDC_COMPLEXITY"
   echo "  $EDC_ISSUES"

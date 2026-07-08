@@ -1,0 +1,15 @@
+{
+  "skill": "edc-delivery-review",
+  "fixture": "wrong-owner",
+  "deliveryVerdict": "delivered",
+  "architectureFit": "violates boundary",
+  "requiredFindings": [
+    { "category": "module ownership", "evidence": "billing-domain owns retry policy" },
+    { "category": "API/error contract", "evidence": "timeout" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "duplication" }
+  ],
+  "requiredEvidence": ["spec.md", "src/webhook.ts", "edc-context/index.md"]
+}

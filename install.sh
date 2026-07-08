@@ -12,10 +12,11 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-BRANCH="main"
-BASE="https://raw.githubusercontent.com/$REPO/$BRANCH"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.1}"
+INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
+ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOCAL_PLUGIN_ROOT="$SCRIPT_DIR/plugins/edc"
+EDC_INSTALL_TMP=""
 
 AGENT=""
 ADD_PATH=1
@@ -23,7 +24,7 @@ ADD_PATH=1
 usage() {
   cat <<EOF
 Usage:
-  curl -fsSL $BASE/install.sh | bash -s <agent>
+  curl -fsSL $INSTALL_URL | bash -s <agent>
   bash install.sh --agent <agent> [--no-path]
 
 Agents: claude, cursor, codex, pi
@@ -75,23 +76,17 @@ done
   exit 1
 }
 
-SKILLS=(
+PRIVATE_SKILLS=(
   "plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/COMPLETENESS_CHECKLIST.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
   "plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/skills/edc-review/SKILL.md"
-  "plugins/edc/skills/edc-review/methodology.md"
-  "plugins/edc/skills/edc-review/adversarial.md"
-  "plugins/edc/skills/edc-review/reporting.md"
-  "plugins/edc/skills/edc-review/patterns.md"
   "plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
   "plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
   "plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-context-curator-impl/SKILL.md"
   "plugins/edc/prompt-bundles/edc-context-curator-edit-impl/SKILL.md"
-  "plugins/edc/skills/edc-audit/SKILL.md"
 )
 
 PUBLIC_SKILLS=(
@@ -101,22 +96,51 @@ PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-review/reporting.md"
   "plugins/edc/skills/edc-review/patterns.md"
   "plugins/edc/skills/edc-audit/SKILL.md"
+  "plugins/edc/skills/edc-audit/references/scope-and-standards.md"
+  "plugins/edc/skills/edc-audit/references/smell-baseline.md"
+  "plugins/edc/skills/edc-audit/references/quality-checks.md"
+  "plugins/edc/skills/edc-audit/references/reporting.md"
+  "plugins/edc/skills/edc-delivery-review/SKILL.md"
+  "plugins/edc/skills/edc-delivery-review/references/spec-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
+  "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
 
-download() {
-  local src="$1" dst="$2"
-  mkdir -p "$(dirname "$dst")"
-  curl -fsSL "$BASE/$src" -o "$dst"
+SKILLS=("${PRIVATE_SKILLS[@]}" "${PUBLIC_SKILLS[@]}")
+
+cleanup_install_tmp() {
+  if [ -n "$EDC_INSTALL_TMP" ]; then
+    rm -rf "$EDC_INSTALL_TMP"
+  fi
+}
+trap cleanup_install_tmp EXIT
+
+prepare_source_tree() {
+  if [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ]; then
+    return 0
+  fi
+
+  command -v curl >/dev/null 2>&1 || die "curl is required for remote install"
+  command -v tar >/dev/null 2>&1 || die "tar is required for remote install"
+
+  EDC_INSTALL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-install.XXXXXX")"
+  local archive="$EDC_INSTALL_TMP/edc.tar.gz"
+  local source_dir="$EDC_INSTALL_TMP/source"
+  mkdir -p "$source_dir"
+
+  curl -fsSL "$ARCHIVE_URL" -o "$archive"
+  tar -xzf "$archive" -C "$source_dir" --strip-components=1
+  SCRIPT_DIR="$source_dir"
+
+  [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ] \
+    || die "downloaded archive does not contain EDC plugin runtime: $ARCHIVE_URL"
 }
 
-copy_or_download() {
+copy_from_source() {
   local src="$1" dst="$2"
   mkdir -p "$(dirname "$dst")"
-  if [ -f "$SCRIPT_DIR/$src" ]; then
-    cp "$SCRIPT_DIR/$src" "$dst"
-  else
-    download "$src" "$dst"
-  fi
+  [ -f "$SCRIPT_DIR/$src" ] || die "installer source missing: $src"
+  cp "$SCRIPT_DIR/$src" "$dst"
 }
 
 skill_rel() {
@@ -129,38 +153,39 @@ skill_rel() {
 
 install_terminal_cli() {
   local scripts_target="$HOME/.edc/scripts"
-  mkdir -p "$scripts_target"
-  copy_or_download "plugins/edc/scripts/edc"                 "$scripts_target/edc"
-  copy_or_download "plugins/edc/scripts/edc-review.sh"        "$scripts_target/edc-review.sh"
-  copy_or_download "plugins/edc/scripts/edc-build.sh"         "$scripts_target/edc-build.sh"
-  copy_or_download "plugins/edc/scripts/edc-update.sh"        "$scripts_target/edc-update.sh"
-  copy_or_download "plugins/edc/scripts/edc-audit.sh"         "$scripts_target/edc-audit.sh"
-  copy_or_download "plugins/edc/scripts/edc-doctor.sh"        "$scripts_target/edc-doctor.sh"
-  copy_or_download "plugins/edc/scripts/edc-route.sh"         "$scripts_target/edc-route.sh"
-  copy_or_download "plugins/edc/scripts/edc-classify-path.sh" "$scripts_target/edc-classify-path.sh"
-  copy_or_download "plugins/edc/scripts/edc-manifest.sh"      "$scripts_target/edc-manifest.sh"
-  copy_or_download "plugins/edc/scripts/edc-clean-slate.sh"   "$scripts_target/edc-clean-slate.sh"
-  copy_or_download "plugins/edc/scripts/edc-lib.sh"           "$scripts_target/edc-lib.sh"
-  copy_or_download "plugins/edc/scripts/edc-assert-fresh.sh"  "$scripts_target/edc-assert-fresh.sh"
-  copy_or_download "plugins/edc/scripts/edc-recover-context.sh" "$scripts_target/edc-recover-context.sh"
-  copy_or_download "plugins/edc/scripts/edc-build-plan.sh"    "$scripts_target/edc-build-plan.sh"
-  copy_or_download "plugins/edc/scripts/edc-spawn-analyze.sh" "$scripts_target/edc-spawn-analyze.sh"
-  chmod +x \
-    "$scripts_target/edc" \
-    "$scripts_target/edc-review.sh" \
-    "$scripts_target/edc-build.sh" \
-    "$scripts_target/edc-update.sh" \
-    "$scripts_target/edc-audit.sh" \
-    "$scripts_target/edc-doctor.sh" \
-    "$scripts_target/edc-route.sh" \
-    "$scripts_target/edc-classify-path.sh" \
-    "$scripts_target/edc-manifest.sh" \
-    "$scripts_target/edc-clean-slate.sh" \
-    "$scripts_target/edc-assert-fresh.sh" \
-    "$scripts_target/edc-recover-context.sh" \
-    "$scripts_target/edc-build-plan.sh" \
-    "$scripts_target/edc-spawn-analyze.sh"
-  # edc-lib.sh is sourced, not exec'd — no chmod needed
+  local hooks_target="$HOME/.edc/hooks/lib"
+  mkdir -p "$scripts_target" "$hooks_target"
+
+  local runtime_install_entries=(
+    "plugins/edc/scripts/edc|$scripts_target/edc|x"
+    "plugins/edc/scripts/edc-review.sh|$scripts_target/edc-review.sh|x"
+    "plugins/edc/scripts/edc-review-all.sh|$scripts_target/edc-review-all.sh|x"
+    "plugins/edc/scripts/edc-delivery-review.sh|$scripts_target/edc-delivery-review.sh|x"
+    "plugins/edc/scripts/edc-build.sh|$scripts_target/edc-build.sh|x"
+    "plugins/edc/scripts/edc-update.sh|$scripts_target/edc-update.sh|x"
+    "plugins/edc/scripts/edc-audit.sh|$scripts_target/edc-audit.sh|x"
+    "plugins/edc/scripts/edc-doctor.sh|$scripts_target/edc-doctor.sh|x"
+    "plugins/edc/scripts/edc-manifest.sh|$scripts_target/edc-manifest.sh|x"
+    "plugins/edc/hooks/lib/classify-cli.mjs|$hooks_target/classify-cli.mjs|x"
+    "plugins/edc/hooks/lib/json-cli.mjs|$hooks_target/json-cli.mjs|x"
+    "plugins/edc/hooks/lib/pi-supervisor.mjs|$hooks_target/pi-supervisor.mjs|x"
+    "plugins/edc/hooks/lib/stream-filter.mjs|$hooks_target/stream-filter.mjs|x"
+    "plugins/edc/hooks/lib/route.mjs|$hooks_target/route.mjs|"
+    "plugins/edc/hooks/lib/paths.mjs|$hooks_target/paths.mjs|"
+    "plugins/edc/scripts/edc-clean-slate.sh|$scripts_target/edc-clean-slate.sh|x"
+    "plugins/edc/scripts/edc-lib.sh|$scripts_target/edc-lib.sh|"
+    "plugins/edc/scripts/edc-assert-fresh.sh|$scripts_target/edc-assert-fresh.sh|x"
+    "plugins/edc/scripts/edc-recover-context.sh|$scripts_target/edc-recover-context.sh|x"
+    "plugins/edc/scripts/edc-build-plan.sh|$scripts_target/edc-build-plan.sh|x"
+  )
+
+  local entry src dst executable
+  for entry in "${runtime_install_entries[@]}"; do
+    IFS='|' read -r src dst executable <<< "$entry"
+    copy_from_source "$src" "$dst"
+    [ "$executable" = "x" ] && chmod +x "$dst"
+  done
+
   install_shell_path
 }
 
@@ -214,7 +239,7 @@ EOF
 }
 
 # write_cursor_commands <cursor-target>
-# Generates four thin slash-command wrappers under <target>/commands/. Each
+# Generates thin slash-command wrappers under <target>/commands/. Each
 # wrapper is a Bash-only shim that exports EDC_AGENT_CLI=cursor and shells to
 # the matching ~/.edc/scripts/edc-*.sh orchestrator. No source-file checked
 # into the repo — the wrapper template lives here, the only place it can
@@ -224,7 +249,7 @@ write_cursor_commands() {
   mkdir -p "$target/commands"
   rm -f "$target/commands/edc-audit.md" "$target/commands/edc-review.md"
   local entry action script
-  for entry in build:build update:update run-review:review doctor:doctor; do
+  for entry in build:build update:update run-review:review-all doctor:doctor; do
     action="${entry%%:*}"
     script="${entry##*:}"
     cat > "$target/commands/edc-$action.md" <<EOF
@@ -261,7 +286,7 @@ EOF
 write_codex_skills() {
   local target="$1"
   local entry action script
-  for entry in build:build update:update run-review:review doctor:doctor; do
+  for entry in build:build update:update run-review:review-all doctor:doctor; do
     action="${entry%%:*}"
     script="${entry##*:}"
     mkdir -p "$target/edc-$action"
@@ -318,18 +343,24 @@ print_cli_hint() {
     pi)
       echo "  edc build  --agent pi             # build or update edc-context/"
       echo "  edc update --agent pi --base main # force incremental update"
-      echo "  edc review --agent pi HEAD --base main # differential review of current branch"
-      echo "  edc audit  --agent pi             # complexity / bloat audit"
+      echo "  edc review full --agent pi        # security + delivery + quality full repo review"
+      echo "  edc review diff --agent pi        # security + delivery + quality vs default branch"
+      echo "  edc security full --agent pi      # security-only full repo review"
+      echo "  edc delivery diff main --agent pi # delivery/architecture review vs main"
+      echo "  edc quality full --agent pi       # code quality full repo audit"
       echo "  edc doctor                        # validate context"
       echo "  edc mode advisory|inject          # toggle runtime mode"
       echo
-      echo "Inside pi, use /edc for the interactive menu (review/status/build/update/audit/doctor)."
+      echo "Inside pi, use /edc for the interactive menu (choose scope, then combined/security/delivery/quality lens)."
       ;;
     *)
       echo "  edc build  --agent $agent             # build or update edc-context/"
       echo "  edc update --agent $agent             # force incremental update"
-      echo "  edc review --agent $agent --base main # differential review of current branch"
-      echo "  edc audit  --agent $agent             # complexity / bloat audit"
+      echo "  edc review full --agent $agent        # security + delivery + quality full repo review"
+      echo "  edc review diff main --agent $agent   # security + delivery + quality vs main"
+      echo "  edc security full --agent $agent      # security-only full repo review"
+      echo "  edc delivery diff main --agent $agent # delivery/architecture review vs main"
+      echo "  edc quality full --agent $agent       # code quality full repo audit"
       echo "  edc doctor                            # validate context"
       echo "  edc mode advisory|inject              # toggle runtime mode"
       ;;
@@ -349,7 +380,7 @@ install_edc_skills() {
     "$target/edc-context"
   for f in "${SKILLS[@]}"; do
     rel=$(skill_rel "$f")
-    copy_or_download "$f" "$target/$rel"
+    copy_from_source "$f" "$target/$rel"
   done
 }
 
@@ -365,11 +396,12 @@ install_public_edc_skills() {
     "$target/edc-module-context-impl"
   for f in "${PUBLIC_SKILLS[@]}"; do
     rel=$(skill_rel "$f")
-    copy_or_download "$f" "$target/$rel"
+    copy_from_source "$f" "$target/$rel"
   done
 }
 
 install_claude_runtime() {
+  prepare_source_tree
   install_terminal_cli
   install_edc_skills "$HOME/.edc/skills"
   echo "Installed EDC terminal CLI at $HOME/.edc/scripts/edc."
@@ -393,6 +425,7 @@ case "$AGENT" in
     ;;
 
   cursor)
+    prepare_source_tree
     TARGET="$HOME/.cursor"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Cursor..."
@@ -406,6 +439,7 @@ case "$AGENT" in
     ;;
 
   codex)
+    prepare_source_tree
     TARGET="$HOME/.codex/skills"
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Codex..."
@@ -419,6 +453,7 @@ case "$AGENT" in
     ;;
 
   pi)
+    prepare_source_tree
     if ! command -v pi >/dev/null 2>&1; then
       die "pi CLI not found on PATH. Install pi first: https://pi.dev"
     fi
@@ -430,7 +465,9 @@ case "$AGENT" in
     fi
     install_terminal_cli
     install_edc_skills "$HOME/.edc/skills"
-    echo "Done. Run /edc inside pi for review/status/build/update/audit/doctor. Toggle mode with 'edc mode advisory|inject'."
+    echo "installed extension/source path: $SCRIPT_DIR/pi"
+    echo "restart pi or run /reload in existing sessions to refresh menu labels."
+    echo "Done. Run /edc inside pi for review/security review/delivery review/quality review/status/build/update/doctor. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi
     print_path_hint
     ;;

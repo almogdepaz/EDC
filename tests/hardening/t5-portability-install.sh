@@ -10,26 +10,53 @@ PLUGIN_SCRIPT="plugins/edc/scripts/edc-review.sh"
 
 echo "=== T5: Portability + plugin install ==="
 
-# ── 5a: bash version gate present ──────────────────────────────��─────────────
-if grep -q 'BASH_VERSINFO\[0\]' "$SCRIPT" && grep -q 'brew install bash' "$SCRIPT"; then
-  echo "PASS: bash version gate present in script"
+TMPDIR_T5=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_T5"' EXIT
+
+# ── 5a: bash 3.2-compatible scripts do not require bash >=4 ────────────────
+if ! grep -R 'BASH_VERSINFO\[0\].*-ge 4\|brew install bash\|bash >=4' plugins/edc/scripts pi/README.md >"$TMPDIR_T5/bash4.txt"; then
+  echo "PASS: plugin runtime no longer requires bash >=4"
 else
-  echo "FAIL: bash version gate missing"
+  echo "FAIL: plugin runtime still requires bash >=4"
+  cat "$TMPDIR_T5/bash4.txt"
   exit 1
 fi
 
-# ── 5b: version gate exits 2 on bash < 4 ─────────────────────��───────────────
-# Simulate BASH_VERSINFO[0]=3 by sourcing a modified env — we can't actually run
-# under bash 3.2, so test the logic statically: the gate uses [[ ]] which is
-# bash-only and exits 2. Verify the exit code in the gate.
-if grep -A3 'BASH_VERSINFO' "$SCRIPT" | grep -q 'exit 2'; then
-  echo "PASS: version gate exits with code 2"
+# ── 5b: runtime no longer resolves or exports EDC_BASH ──────────────────────
+if ! grep -R 'EDC_BASH\|resolveBashExecutable' plugins/edc/scripts pi/index.mjs tests/hardening/run-all.sh >"$TMPDIR_T5/edc-bash.txt"; then
+  echo "PASS: runtime no longer carries EDC_BASH interpreter contract"
 else
-  echo "FAIL: version gate does not exit 2"
+  echo "FAIL: runtime still carries EDC_BASH interpreter contract"
+  cat "$TMPDIR_T5/edc-bash.txt"
   exit 1
 fi
 
-# ── 5c: $ARGUMENTS quoting fix in command ──────────────────────────���─────────
+# ── 5c: installed runtime no longer requires jq ─────────────────────────────
+jq_runtime_scan_paths=$(find plugins/edc/scripts -type f ! -name 'edc-spawn-analyze.sh' -print)
+if ! grep 'command -v jq\|jq is required\|jq required\|brew install jq\|apt install jq' \
+  $jq_runtime_scan_paths \
+  pi/README.md \
+  pi/install.sh >"$TMPDIR_T5/jq.txt"; then
+  echo "PASS: installed runtime no longer requires jq"
+else
+  echo "FAIL: installed runtime still requires jq"
+  cat "$TMPDIR_T5/jq.txt"
+  exit 1
+fi
+
+# ── 5c2: shellcheck is wired in package scripts and CI ─────────────────────
+if grep -q '"lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/\*.sh"' package.json \
+  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh"' package.json \
+  && grep -q '"test": "npm run lint:hardening && bash tests/hardening/run-all.sh"' package.json \
+  && grep -q 'npm run lint:shell' .github/workflows/ci.yml \
+  && grep -q 'npm test' .github/workflows/ci.yml; then
+  echo "PASS: shellcheck is wired into runtime and hardening scripts in CI"
+else
+  echo "FAIL: shellcheck package script or CI wiring missing"
+  exit 1
+fi
+
+# ── 5d: $ARGUMENTS quoting fix in command ──────────────────────────���─────────
 if grep -q 'set -- \$ARGUMENTS' "$COMMAND" && grep -q '"$@"' "$COMMAND"; then
   echo "PASS: \$ARGUMENTS safely word-split via set -- and passed as \"\$@\""
 else
@@ -47,6 +74,31 @@ else
   exit 1
 fi
 
+if grep -q 'edc-review-all.sh' "$COMMAND" \
+  && ! grep -q 'edc-review.sh' "$COMMAND" \
+  && grep -q 'run-review:review-all' install.sh; then
+  echo "PASS: generic review wrappers delegate to combined review-all"
+else
+  echo "FAIL: generic review wrappers must delegate to edc-review-all.sh"
+  exit 1
+fi
+
+if node <<'NODE'
+const fs = require('fs');
+const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+const marketplace = JSON.parse(fs.readFileSync('.claude-plugin/marketplace.json', 'utf8'));
+const plugin = JSON.parse(fs.readFileSync('plugins/edc/.claude-plugin/plugin.json', 'utf8'));
+if (marketplace.metadata.version !== packageVersion) process.exit(1);
+if (!marketplace.plugins.every((entry) => entry.version === packageVersion)) process.exit(1);
+if (plugin.version !== packageVersion) process.exit(1);
+NODE
+then
+  echo "PASS: distribution metadata versions match package.json"
+else
+  echo "FAIL: distribution metadata versions drift from package.json"
+  exit 1
+fi
+
 # ── 5d: public command/skill surface is user-facing only ────────────────────
 commands=$(find plugins/edc/commands -maxdepth 1 -type f -name '*.md' -exec basename {} \; | sort | tr '\n' ' ')
 if [ "$commands" = "edc-build.md edc-doctor.md edc-run-review.md edc-update.md " ]; then
@@ -57,8 +109,8 @@ else
 fi
 
 skills=$(find plugins/edc/skills -maxdepth 1 -type d -mindepth 1 -exec basename {} \; | sort | tr '\n' ' ')
-if [ "$skills" = "edc-audit edc-review " ]; then
-  echo "PASS: public skills expose only edc-audit and edc-review"
+if [ "$skills" = "edc-audit edc-delivery-review edc-review " ]; then
+  echo "PASS: public skills expose only edc-audit, edc-delivery-review, and edc-review"
 else
   echo "FAIL: unexpected public skill surface: $skills"
   exit 1
@@ -72,13 +124,86 @@ for bundle in edc-build-impl edc-update-impl edc-module-context-impl edc-context
 done
 echo "PASS: hidden prompt bundles live outside public skills"
 
-# ── 5e: plugin script bundle exists ──────────────────────────────���───────────
-if [ -f "$PLUGIN_SCRIPT" ] && [ -f "plugins/edc/scripts/edc-classify-path.sh" ]; then
-  echo "PASS: plugin script bundle includes review + classifier helpers"
+# ── 5e: plugin script bundle exists ─────────────────────────────────────────
+if [ -f "$PLUGIN_SCRIPT" ] \
+  && [ -f "plugins/edc/scripts/edc-review-all.sh" ] \
+  && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/json-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/stream-filter.mjs" ]; then
+  echo "PASS: plugin runtime includes review/review-all + node helper CLIs"
 else
-  echo "FAIL: plugin script bundle missing review/classifier helper — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/review-all/node helper CLI — install hook cannot copy"
   exit 1
 fi
+
+# ── 5e3: remote installer uses a tagged archive, not per-file raw fetches ───
+if grep -q 'EDC_INSTALL_REF:-v' install.sh \
+  && grep -q 'archive/refs/tags/\$EDC_INSTALL_REF.tar.gz' install.sh \
+  && ! grep -q '^download()' install.sh; then
+  echo "PASS: remote installer bootstraps from a tagged archive"
+else
+  echo "FAIL: remote installer still depends on per-file raw downloads from main"
+  exit 1
+fi
+
+REMOTE_TMP=$(mktemp -d)
+REPO_ROOT_T5="$PWD"
+REMOTE_HOME="$REMOTE_TMP/home"
+REMOTE_BIN="$REMOTE_TMP/bin"
+mkdir -p "$REMOTE_HOME" "$REMOTE_BIN"
+cp install.sh "$REMOTE_TMP/install.sh"
+cat >"$REMOTE_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[ -n "$out" ] || exit 64
+printf '%s\n' "$url" >"${EDC_REMOTE_URL_LOG:?}"
+printf 'fake archive\n' >"$out"
+EOF
+chmod +x "$REMOTE_BIN/curl"
+cat >"$REMOTE_BIN/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dest=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$dest" ] || exit 64
+mkdir -p "$dest"
+cp -R "${EDC_REPO_ROOT:?}/plugins" "$dest/plugins"
+cp "${EDC_REPO_ROOT:?}/install.sh" "$dest/install.sh"
+EOF
+chmod +x "$REMOTE_BIN/tar"
+(
+  cd "$REMOTE_TMP"
+  EDC_REPO_ROOT="$REPO_ROOT_T5" \
+  EDC_REMOTE_URL_LOG="$REMOTE_TMP/url.log" \
+  HOME="$REMOTE_HOME" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_BIN:$PATH" \
+  bash install.sh --agent claude --no-path >"$TMPDIR_T5/remote-install.out" 2>&1
+)
+if grep -q 'archive/refs/tags/v' "$REMOTE_TMP/url.log" \
+  && [ -x "$REMOTE_HOME/.edc/scripts/edc" ]; then
+  echo "PASS: remote install uses tagged archive source tree"
+else
+  echo "FAIL: remote install did not use tagged archive source tree"
+  cat "$TMPDIR_T5/remote-install.out"
+  exit 1
+fi
+rm -rf "$REMOTE_TMP"
 
 # ── 5f: session-start hook contains installOrchestratorScript ────────────────
 if grep -q 'installOrchestratorScript' "$HOOK"; then
@@ -88,15 +213,40 @@ else
   exit 1
 fi
 
+# ── 5e2: shell entrypoints share script-dir resolution ─────────────────────
+if grep -q '^edc_resolve_script_dir()' plugins/edc/scripts/edc-lib.sh \
+  && ! grep -R '^_edc_resolve_script_dir()' plugins/edc/scripts/edc*.sh >"$TMPDIR_T5/script-dir.txt"; then
+  echo "PASS: shell entrypoints share script-dir resolution"
+else
+  echo "FAIL: shell entrypoints still duplicate script-dir resolution"
+  cat "$TMPDIR_T5/script-dir.txt" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 5f2: terminal runtime install derives copy/chmod from one table ────────
+if grep -q 'runtime_install_entries=(' install.sh \
+  && grep -q "IFS='|' read -r src dst executable" install.sh \
+  && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
+  echo "PASS: terminal runtime install derives copy/chmod from one table"
+else
+  echo "FAIL: terminal runtime install still duplicates copy/chmod lists"
+  exit 1
+fi
+
 # ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
 pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
 if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
   && grep -q 'edc-context-curator-impl/SKILL.md' install.sh \
   && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
-  && grep -q 'edc-classify-path.sh' install.sh; then
-  echo "PASS: pi installer copies private skills and classifier for spawned subprocesses"
+  && grep -q 'edc-audit/references/quality-checks.md' install.sh \
+  && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
+  && grep -q 'classify-cli.mjs' install.sh \
+  && grep -q 'json-cli.mjs' install.sh \
+  && grep -q 'pi-supervisor.mjs' install.sh \
+  && grep -q 'stream-filter.mjs' install.sh; then
+  echo "PASS: pi installer copies private skills and node runtime helpers for spawned subprocesses"
 else
-  echo "FAIL: pi installer does not copy private skills/classifier"
+  echo "FAIL: pi installer does not copy private skills/node runtime helpers"
   exit 1
 fi
 
@@ -116,10 +266,15 @@ else
   exit 1
 fi
 
-# ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
-TMPDIR_T5=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_T5"' EXIT
+if grep -q 'restart pi or run /reload' install.sh \
+  && grep -q 'installed extension/source path' install.sh; then
+  echo "PASS: pi installer reminds users to reload existing sessions"
+else
+  echo "FAIL: pi installer missing reload guidance"
+  exit 1
+fi
 
+# ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
 # Simulate install: run the hook with a fake project root
 result=$(node -e "
 import { join } from 'path';

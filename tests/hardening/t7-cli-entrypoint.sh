@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT="plugins/edc/scripts/edc"
 SCRIPT_ABS="$(pwd)/plugins/edc/scripts/edc"
 BASH_BIN="$(command -v bash)"
+NODE_BIN="$(command -v node)"
+NODE_DIR="$(dirname "$NODE_BIN")"
 ROOT_INSTALL="install.sh"
 
 echo "=== T7: CLI entrypoint ==="
@@ -16,6 +18,22 @@ if [ ! -f "$SCRIPT" ]; then
 fi
 echo "PASS: $SCRIPT exists"
 
+if grep -q '^parse_agent_context_args()' "$SCRIPT" \
+  && grep -q '^finalize_agent_context()' "$SCRIPT" \
+  && [ "$(grep -c '^      --agent)' "$SCRIPT")" -le 1 ]; then
+  echo "PASS: CLI shares agent/context option parsing"
+else
+  echo "FAIL: CLI still duplicates agent/context option parsing"
+  exit 1
+fi
+
+if grep -q 'mktemp "${manifest}.tmp.XXXXXX"' "$SCRIPT"; then
+  echo "PASS: edc mode temp file is created beside manifest for atomic rename"
+else
+  echo "FAIL: edc mode should create temp file beside manifest before mv"
+  exit 1
+fi
+
 TMPDIR_T7=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T7"' EXIT
 
@@ -24,6 +42,17 @@ FAKE_HOME="$TMPDIR_T7/home"
 PROJECT="$TMPDIR_T7/project"
 CAPTURE="$TMPDIR_T7/capture"
 mkdir -p "$FAKE_BIN" "$FAKE_HOME" "$PROJECT" "$CAPTURE"
+(
+  cd "$PROJECT"
+  git init -q
+  git config user.email test@test.com
+  git config user.name Test
+  git config commit.gpgsign false
+  printf 'fixture\n' > README.md
+  git add README.md
+  git commit -q -m init
+  git branch -f main HEAD
+)
 
 make_fake_agent() {
   local name="$1"
@@ -53,9 +82,11 @@ cat > "$FAKE_BIN/bash" <<'EOF'
 set -eu
 script_name=$(basename "$1")
 case "$script_name" in
-  edc-build.sh)  bucket=build  ;;
-  edc-review.sh) bucket=review ;;
-  edc-audit.sh)  bucket=audit  ;;
+  edc-build.sh)          bucket=build ;;
+  edc-review.sh)         bucket=review ;;
+  edc-review-all.sh)     bucket=review_all ;;
+  edc-delivery-review.sh) bucket=delivery ;;
+  edc-audit.sh)          bucket=audit ;;
   *)             bucket=other  ;;
 esac
 out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
@@ -66,25 +97,26 @@ printf '%s\n' "${EDC_REVIEW_MODEL:-}" > "$out/review_model"
 printf '%s\n' "${EDC_PI_MODEL:-}" > "$out/pi_model"
 printf '%s\n' "$1" > "$out/script"
 shift
-printf '%s\n' "$@" > "$out/args"
+: > "$out/args"
+if [ "$#" -gt 0 ]; then
+  printf '%s\n' "$@" > "$out/args"
+fi
 EOF
 chmod +x "$FAKE_BIN/bash"
 
 run_cli() {
-  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  PATH="$FAKE_BIN:$NODE_DIR:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_BUILD_MODEL="t7-model" \
   EDC_REVIEW_MODEL="t7-model" \
-  EDC_BASH="$FAKE_BIN/bash" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
 
 run_cli_pi_model_only() {
-  PATH="$FAKE_BIN:/usr/bin:/bin" \
+  PATH="$FAKE_BIN:$NODE_DIR:/usr/bin:/bin" \
   HOME="$FAKE_HOME" \
   EDC_PI_MODEL="t7-pi-model" \
-  EDC_BASH="$FAKE_BIN/bash" \
   EDC_TEST_CAPTURE_DIR="$CAPTURE" \
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
@@ -126,6 +158,23 @@ else
   exit 1
 fi
 
+# ── 7b2: --agent mandatory for delivery-review ───────────────────────────────
+set +e
+delivery_output=$(cd "$PROJECT" && run_cli delivery-review HEAD 2>&1)
+delivery_status=$?
+set -e
+if [ "$delivery_status" -eq 0 ]; then
+  echo "FAIL: delivery-review succeeded without --agent"
+  exit 1
+fi
+if echo "$delivery_output" | grep -q -- '--agent is required'; then
+  echo "PASS: delivery-review rejects missing --agent"
+else
+  echo "FAIL: delivery-review missing-agent error unclear"
+  echo "$delivery_output"
+  exit 1
+fi
+
 # ── 7c: pi accepts EDC_PI_MODEL without phase model variables ───────────────
 rm -rf "$CAPTURE/build"
 run_cli_pi_model_only build "$PROJECT" --agent pi --force
@@ -137,13 +186,13 @@ else
 fi
 
 # ── 7c2: pi model slugs are forwarded exactly ───────────────────────────────
-rm -rf "$CAPTURE/review"
+rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli --model gpt-5.5 review --agent pi HEAD --base main)
-if [ "$(cat "$CAPTURE/review/review_model")" = "gpt-5.5" ]; then
+if [ "$(cat "$CAPTURE/review_all/review_model")" = "gpt-5.5" ]; then
   echo "PASS: pi review forwards model slug without mutation"
 else
   echo "FAIL: pi review mutated model slug"
-  cat "$CAPTURE/review/review_model"
+  cat "$CAPTURE/review_all/review_model"
   exit 1
 fi
 
@@ -184,7 +233,7 @@ for agent in claude cursor codex pi; do
 done
 echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex/pi)"
 
-# ── 7f: review delegates to local orchestrator with EDC_AGENT_CLI ─────────────
+# ── 7f: review/security-review delegation ───────────────────────────────────
 mkdir -p "$PROJECT/.edc/scripts"
 cat > "$PROJECT/.edc/scripts/edc-review.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -204,11 +253,11 @@ else
   exit 1
 fi
 
-rm -rf "$CAPTURE/review"
+rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli review --agent codex HEAD --base main --ignore generated/**)
 
-if [ "$(cat "$CAPTURE/review/agent")" = "codex" ]; then
-  echo "PASS: review exports EDC_AGENT_CLI to orchestrator"
+if [ "$(cat "$CAPTURE/review_all/agent")" = "codex" ]; then
+  echo "PASS: review exports EDC_AGENT_CLI to combined orchestrator"
 else
   echo "FAIL: review did not export EDC_AGENT_CLI"
   exit 1
@@ -219,32 +268,252 @@ fi
 # orchestrator.
 mkdir -p "$PROJECT/edc-context"
 printf '{"policy":{"defaultMode":"advisory"}}\n' > "$PROJECT/edc-context/manifest.json"
-rm -rf "$CAPTURE/review"
+rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli review --agent pi HEAD --base main --ignore generated/**)
-if [ "$(cat "$CAPTURE/review/agent")" = "pi" ]; then
+if [ "$(cat "$CAPTURE/review_all/agent")" = "pi" ]; then
   echo "PASS: review allows pi with manifest advisory mode"
 else
   echo "FAIL: pi review was blocked before orchestrator dispatch"
   exit 1
 fi
 
-if [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ]; then
-  echo "PASS: review invokes repo edc-review.sh"
+if [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ]; then
+  echo "PASS: review invokes repo edc-review-all.sh"
 else
-  echo "FAIL: review invoked the wrong edc-review.sh"
-  cat "$CAPTURE/review/script"
+  echo "FAIL: review invoked the wrong review orchestrator"
+  cat "$CAPTURE/review_all/script"
   exit 1
 fi
 
-if grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
-  && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
-  && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null \
-  && grep -Fx -- '--ignore' "$CAPTURE/review/args" >/dev/null \
-  && grep -Fx -- 'generated/**' "$CAPTURE/review/args" >/dev/null; then
-  echo "PASS: review forwards target and base args"
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: review forwards target and base args to combined orchestrator"
 else
   echo "FAIL: review args not forwarded correctly"
+  cat "$CAPTURE/review_all/args"
+  exit 1
+fi
+
+# ── 7f1b: explicit security-review delegates to security orchestrator ───────
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli security-review --agent codex HEAD --base main)
+if [ "$(cat "$CAPTURE/review/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null; then
+  echo "PASS: security-review invokes repo edc-review.sh with args"
+else
+  echo "FAIL: security-review did not delegate correctly"
+  cat "$CAPTURE/review/agent" "$CAPTURE/review/script" "$CAPTURE/review/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1b2: canonical lens/scope commands delegate convenient args ───────────
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review full --agent codex --ignore generated/**)
+if [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review full delegates to combined full review"
+else
+  echo "FAIL: canonical review full did not delegate correctly"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff defaults to default branch"
+else
+  echo "FAIL: canonical review diff did not default to default branch"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+(
+  cd "$PROJECT"
+  git update-ref refs/remotes/origin/trunk HEAD
+  git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+)
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'origin/trunk' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff uses remote-only default branch"
+else
+  echo "FAIL: canonical review diff did not use remote-only default branch"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+git -C "$PROJECT" symbolic-ref --delete refs/remotes/origin/HEAD
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review diff trunk --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'trunk' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: canonical review diff accepts custom base"
+else
+  echo "FAIL: canonical review diff custom base did not delegate correctly"
+  cat "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli security full --agent codex)
+if [ "$(cat "$CAPTURE/review/script")" = "$SCRIPT_DIR/edc-review.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/review/args" >/dev/null; then
+  echo "PASS: canonical security full delegates to security full review"
+else
+  echo "FAIL: canonical security full did not delegate correctly"
+  cat "$CAPTURE/review/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/delivery"
+(cd "$PROJECT" && run_cli delivery full --agent codex)
+if [ "$(cat "$CAPTURE/delivery/script")" = "$SCRIPT_DIR/edc-delivery-review.sh" ] \
+  && grep -Fx -- '--full' "$CAPTURE/delivery/args" >/dev/null; then
+  echo "PASS: canonical delivery full delegates to delivery full review"
+else
+  echo "FAIL: canonical delivery full did not delegate correctly"
+  cat "$CAPTURE/delivery/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality full --agent codex)
+if [ "$(cat "$CAPTURE/audit/script")" = "$SCRIPT_DIR/edc-audit.sh" ] \
+  && [ ! -s "$CAPTURE/audit/args" ]; then
+  echo "PASS: canonical quality full delegates to full quality review"
+else
+  echo "FAIL: canonical quality full did not delegate correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality diff main --agent codex)
+if grep -Fx -- 'HEAD' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/audit/args" >/dev/null; then
+  echo "PASS: canonical quality diff delegates to diff-scoped quality review"
+else
+  echo "FAIL: canonical quality diff did not delegate correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1c: review-all delegates to combined orchestrator with args ───────────
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review-all --agent codex HEAD --base main --ignore generated/**)
+if [ "$(cat "$CAPTURE/review_all/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: review-all invokes repo edc-review-all.sh with args"
+else
+  echo "FAIL: review-all did not delegate correctly"
+  cat "$CAPTURE/review_all/agent" "$CAPTURE/review_all/script" "$CAPTURE/review_all/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1d: quality-review delegates to audit orchestrator; audit stays alias ─
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality-review --agent codex --ignore generated/**)
+if [ "$(cat "$CAPTURE/audit/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/audit/script")" = "$SCRIPT_DIR/edc-audit.sh" ] \
+  && grep -Fx -- '--ignore' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- 'generated/**' "$CAPTURE/audit/args" >/dev/null; then
+  echo "PASS: quality-review invokes repo edc-audit.sh with args"
+else
+  echo "FAIL: quality-review did not delegate correctly"
+  cat "$CAPTURE/audit/agent" "$CAPTURE/audit/script" "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli audit --agent codex)
+if [ "$(cat "$CAPTURE/audit/script")" = "$SCRIPT_DIR/edc-audit.sh" ]; then
+  echo "PASS: audit remains deprecated alias for quality-review"
+else
+  echo "FAIL: audit alias did not delegate to edc-audit.sh"
+  exit 1
+fi
+
+rm -rf "$CAPTURE/audit"
+(cd "$PROJECT" && run_cli quality-review --agent codex --diff origin/main...HEAD)
+if grep -Fx -- 'HEAD' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/audit/args" >/dev/null \
+  && grep -Fx -- 'origin/main' "$CAPTURE/audit/args" >/dev/null; then
+  echo "PASS: quality-review --diff normalizes to target and base args"
+else
+  echo "FAIL: quality-review --diff did not normalize correctly"
+  cat "$CAPTURE/audit/args" 2>/dev/null || true
+  exit 1
+fi
+
+# ── 7f1e: --diff normalizes to target + --base for diff-capable reviews ─────
+rm -rf "$CAPTURE/review_all"
+(cd "$PROJECT" && run_cli review --agent codex --diff origin/main...HEAD --ignore generated/**)
+if grep -Fx -- 'HEAD' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review_all/args" >/dev/null \
+  && grep -Fx -- 'origin/main' "$CAPTURE/review_all/args" >/dev/null; then
+  echo "PASS: review --diff normalizes to target and base args"
+else
+  echo "FAIL: review --diff did not normalize correctly"
+  cat "$CAPTURE/review_all/args"
+  exit 1
+fi
+
+rm -rf "$CAPTURE/review"
+(cd "$PROJECT" && run_cli security-review --agent codex --diff origin/main...HEAD)
+if grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
+  && grep -Fx -- 'origin/main' "$CAPTURE/review/args" >/dev/null; then
+  echo "PASS: security-review --diff normalizes to target and base args"
+else
+  echo "FAIL: security-review --diff did not normalize correctly"
   cat "$CAPTURE/review/args"
+  exit 1
+fi
+
+set +e
+conflict_output=$(cd "$PROJECT" && run_cli review --agent codex --full HEAD --base main 2>&1)
+conflict_status=$?
+set -e
+if [ "$conflict_status" -ne 0 ] && echo "$conflict_output" | grep -q -- '--full cannot be combined'; then
+  echo "PASS: conflicting review scope args are rejected"
+else
+  echo "FAIL: conflicting review scope args were not rejected clearly"
+  echo "$conflict_output"
+  exit 1
+fi
+
+# ── 7f2: delivery-review delegates to local orchestrator with args ───────────
+rm -rf "$CAPTURE/delivery"
+(cd "$PROJECT" && run_cli delivery-review --agent codex HEAD --base main)
+if [ "$(cat "$CAPTURE/delivery/agent")" = "codex" ] \
+  && [ "$(cat "$CAPTURE/delivery/script")" = "$SCRIPT_DIR/edc-delivery-review.sh" ] \
+  && grep -Fx -- 'HEAD' "$CAPTURE/delivery/args" >/dev/null \
+  && grep -Fx -- '--base' "$CAPTURE/delivery/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/delivery/args" >/dev/null; then
+  echo "PASS: delivery-review invokes repo edc-delivery-review.sh with args"
+else
+  echo "FAIL: delivery-review did not delegate correctly"
+  cat "$CAPTURE/delivery/agent" "$CAPTURE/delivery/script" "$CAPTURE/delivery/args" 2>/dev/null || true
   exit 1
 fi
 

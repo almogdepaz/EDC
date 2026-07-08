@@ -7,7 +7,7 @@
  *     and surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
- *   - exposes only human-facing skills (edc-review, edc-audit)
+ *   - exposes only human-facing skills (edc-review, edc-audit, edc-delivery-review)
  *
  * Mode is controlled by edc-context/manifest.json's `policy.defaultMode`
  * ("advisory" | "inject"), same as for Claude Code.
@@ -36,21 +36,38 @@ const EDC_COMMAND = {
 };
 
 const EDC_MENU = {
-  REVIEW_DEFAULT: "Review current branch vs default branch",
-  JOB_STATUS: "Job status",
-  KILL_JOB: "Kill running EDC job",
-  BUILD: "Build context",
-  UPDATE_DEFAULT: "Update context from default branch",
-  AUDIT: "Audit complexity",
-  DOCTOR: "Doctor / validate context",
-  CANCEL: "Cancel",
+  FULL_REVIEW: "full repo review",
+  DIFF_DEFAULT: "changes vs default branch",
+  DIFF_CUSTOM: "changes vs custom base",
+  JOB_STATUS: "job status",
+  KILL_JOB: "kill running edc job",
+  BUILD: "build context",
+  UPDATE_DEFAULT: "update context",
+  DOCTOR: "doctor / validate context",
+  CANCEL: "cancel",
 };
 
-const VISIBLE_SKILLS = ["edc-review", "edc-audit"];
+const EDC_LENS_MENU = {
+  COMBINED: "combined review",
+  SECURITY: "security review",
+  DELIVERY: "delivery review",
+  QUALITY: "quality review",
+  CANCEL: "cancel",
+};
+
+const EDC_SCOPE_MENU = {
+  CHANGED_DEFAULT: "changes vs default branch",
+  FULL_CURRENT: "full repo review",
+  CUSTOM_REFS: "changes vs custom base",
+  CANCEL: "cancel",
+};
+
+const VISIBLE_SKILLS = ["edc-review", "edc-audit", "edc-delivery-review"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
 const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
+const EDC_BACKGROUND_STARTING_STALE_MS = 60 * 1000;
 const EDC_BACKGROUND_UI_KEY = "edc-review";
 const EDC_BACKGROUND_UI_POLL_MS = 2000;
 
@@ -100,19 +117,24 @@ function renderEdcHelp() {
     "Opens the interactive EDC menu.",
     "",
     "Menu actions:",
-    "- Review current branch vs default branch",
-    "- Job status",
-    "- Kill running EDC job",
-    "- Build context",
-    "- Update context from default branch",
-    "- Audit complexity",
-    "- Doctor / validate context",
+    "- full repo review",
+    "- changes vs default branch",
+    "- changes vs custom base",
+    "- job status",
+    "- kill running edc job",
+    "- build context",
+    "- update context",
+    "- doctor / validate context",
     "",
     "Direct commands:",
     "  /edc kill",
     "",
     "Non-interactive use is intentionally CLI-only:",
-    "  edc review --agent pi HEAD --base <default-branch>",
+    "  edc review full --agent pi",
+    "  edc review diff --agent pi",
+    "  edc security full --agent pi",
+    "  edc delivery diff <base> --agent pi",
+    "  edc quality full --agent pi",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -122,17 +144,13 @@ function sendInfo(pi, customType, content) {
   pi.sendMessage({ customType, content, display: true });
 }
 
-function reviewArgsWithDefaultTarget(args) {
-  return renderArgs(args) || "HEAD";
-}
-
 function reviewSkipsContextPrompt(args) {
   const tokens = argTokens(args);
   return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
 }
 
 function isEdcOrchestratorCommand(command) {
-  const scriptName = "edc-(?:build|update|review|audit|doctor)\\.sh";
+  const scriptName = "edc-(?:build|update|review|review-all|delivery-review|audit|doctor)\\.sh";
   return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])\\$HOME/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
     || new RegExp(`(?:^|[\\s"'])/[^\\s"']*/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command);
@@ -247,17 +265,65 @@ async function shouldProceedWithReview(args, ctx, freshness = getContextFreshnes
   );
 }
 
-function reviewDeclinedMessage(args) {
-  const renderedArgs = reviewArgsWithDefaultTarget(args);
+function canonicalReviewCli(commandName, args) {
+  const tokens = argTokens(args);
+  if (tokens.includes("--full")) return `edc ${commandName} full --agent pi`;
+  const baseIndex = tokens.indexOf("--base");
+  const base = baseIndex >= 0 ? tokens[baseIndex + 1] : "<base>";
+  return `edc ${commandName} diff ${base || "<base>"} --agent pi`;
+}
+
+function reviewDeclinedMessage(args, commandName = "review") {
+  const canonical = canonicalReviewCli(commandName, args);
+  const directBase = canonicalReviewCli("security", args);
   return [
     "Review cancelled; EDC context was not refreshed.",
     "",
-    "To review anyway without refreshing context, use the CLI:",
-    `\`edc review --agent pi ${renderedArgs} --no-context-refresh\``,
+    "Refresh context, then rerun:",
+    `\`${canonical}\``,
     "",
-    "For a pure direct review that ignores any existing `edc-context/`, run:",
-    `\`edc review --agent pi ${renderedArgs} --ignore-context\``,
+    "Security-only direct review can skip context refresh:",
+    `\`${directBase} --no-context-refresh\``,
+    "",
+    "Or ignore existing context entirely:",
+    `\`${directBase} --ignore-context\``,
   ].join("\n");
+}
+
+async function selectReviewScope(ctx, options = {}) {
+  const supportsFull = options.supportsFull === true;
+  const commandName = options.commandName || "review";
+  const choice = await ctx.ui.select("what do you want to review?", [
+    EDC_SCOPE_MENU.CHANGED_DEFAULT,
+    EDC_SCOPE_MENU.FULL_CURRENT,
+    EDC_SCOPE_MENU.CUSTOM_REFS,
+    EDC_SCOPE_MENU.CANCEL,
+  ]);
+
+  switch (choice) {
+    case EDC_SCOPE_MENU.CHANGED_DEFAULT:
+    case "changed files vs default branch":
+      return { args: defaultBaseReviewArgs(ctx.cwd) };
+    case EDC_SCOPE_MENU.FULL_CURRENT:
+    case "full current repo":
+      if (!supportsFull) {
+        return { error: `full current repo scope is not supported for edc ${commandName} yet; use changed files or custom refs.` };
+      }
+      return { args: options.fullArgs || ["--full"] };
+    case EDC_SCOPE_MENU.CUSTOM_REFS:
+    case "custom refs": {
+      if (typeof ctx.ui.input !== "function") {
+        return { error: `custom refs require CLI for now: edc ${commandName} --agent pi --diff <base>...<target>` };
+      }
+      const base = await ctx.ui.input("base ref", { placeholder: "origin/main" });
+      if (!base) return { cancelled: true };
+      const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
+      if (!target) return { cancelled: true };
+      return { args: [String(target), "--base", String(base)] };
+    }
+    default:
+      return { cancelled: true };
+  }
 }
 
 function findEdcScript(cwd, scriptName) {
@@ -278,43 +344,11 @@ function nowRunId(kind = "job") {
   return `${stamp}-${kind}-${process.pid}`;
 }
 
-function piSubprocessEnv(ctx, bashPath = "") {
+function piSubprocessEnv(ctx) {
   const env = { ...process.env, EDC_AGENT_CLI: "pi" };
-  if (bashPath) {
-    env.EDC_BASH = bashPath;
-    env.PATH = `${dirname(bashPath)}:${env.PATH || ""}`;
-  }
   const model = currentPiModelSlug(ctx);
   if (model) env.EDC_PI_MODEL = model;
   return env;
-}
-
-function isBash4OrNewer(path) {
-  try {
-    const version = execFileSync(path, ["-lc", "printf '%s' \"${BASH_VERSINFO[0]}\""], {
-      timeout: 3000,
-      encoding: "utf-8",
-    }).trim();
-    return Number(version) >= 4;
-  } catch {
-    return false;
-  }
-}
-
-function resolveBashExecutable() {
-  const candidates = [];
-  const pathBash = process.env.PATH
-    ? process.env.PATH.split(":").map((dir) => join(dir, "bash"))
-    : [];
-  candidates.push(...pathBash, "/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash");
-
-  const seen = new Set();
-  for (const candidate of candidates) {
-    if (!candidate || seen.has(candidate) || !existsSync(candidate)) continue;
-    seen.add(candidate);
-    if (isBash4OrNewer(candidate)) return candidate;
-  }
-  return "";
 }
 
 function runEdcScript(scriptName, args, ctx) {
@@ -323,16 +357,10 @@ function runEdcScript(scriptName, args, ctx) {
     return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: install EDC orchestrator first\n" });
   }
 
-  const bashPath = resolveBashExecutable();
-  if (!bashPath) {
-    return Promise.resolve({ code: 2, stdout: "", stderr: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)\n" });
-  }
-
-  const script = `set -- ${renderShellArgs(args)}\nexec ${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@"`;
   return new Promise((resolve) => {
-    const child = spawn(bashPath, ["-lc", script], {
+    const child = spawn("bash", [edcScript, ...args], {
       cwd: ctx.cwd,
-      env: piSubprocessEnv(ctx, bashPath),
+      env: piSubprocessEnv(ctx),
       stdio: ["ignore", "pipe", "pipe"],
       signal: ctx.signal,
     });
@@ -413,6 +441,12 @@ function isStatusStale(status) {
   return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_STALE_MS;
 }
 
+function isStartingPidStale(status) {
+  if (/^[1-9]\d*$/.test(String(status.pid || ""))) return false;
+  const startedAt = Date.parse(status.started_at || "");
+  return Number.isFinite(startedAt) && Date.now() - startedAt > EDC_BACKGROUND_STARTING_STALE_MS;
+}
+
 function serializeStatus(fields) {
   return Object.entries(fields)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -479,13 +513,16 @@ function runningBackgroundJob(cwd) {
   if (status.status !== "running") return null;
 
   const alive = isPidAlive(status.pid);
+  const startingPidStale = isStartingPidStale(status);
   if (alive === true) return { runId: status.run_id || "current", status };
-  if (alive === null && !isStatusStale(status)) return { runId: status.run_id || "current", status };
+  if (alive === null && !startingPidStale && !isStatusStale(status)) return { runId: status.run_id || "current", status };
 
   const kind = status.kind || "job";
   const reason = alive === false
     ? `background ${kind} process is no longer running`
-    : `background ${kind} status is stale`;
+    : startingPidStale
+      ? `background ${kind} process did not finish starting`
+      : `background ${kind} status is stale`;
   markRunningBackgroundFailed(
     cwd,
     statusPath,
@@ -510,10 +547,21 @@ function writeRunningBackgroundStatus(statusPath, logPath, fields) {
 }
 
 function failureClassificationShell(kind) {
+  const structuredPrefix = `
+  structured_reason=""
+  structured_hint=""
+  if [ -f "$result_file" ]; then
+    structured_reason="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.failureReason || j.reasonCode || "");' "$result_file" 2>/dev/null || true)"
+    structured_hint="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(j.failureHint || "");' "$result_file" 2>/dev/null || true)"
+  fi
+  if [ -n "$structured_reason" ]; then
+    failure_reason="$structured_reason"
+    failure_hint="$structured_hint"`;
+
   if (kind !== "review") {
     return `
-if [ "$rc" -ne 0 ]; then
-  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+if [ "$rc" -ne 0 ]; then${structuredPrefix}
+  elif [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background ${kind}"
     failure_hint="rerun edc ${kind} after the working branch stops changing"
   elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
@@ -527,8 +575,8 @@ fi`;
   }
 
   return `
-if [ "$rc" -ne 0 ]; then
-  if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
+if [ "$rc" -ne 0 ]; then${structuredPrefix}
+  elif [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
     failure_reason="HEAD changed during background review"
     failure_hint="rerun the review after the working branch stops changing"
   elif grep -q 'report validation failed for module' "$log_file" 2>/dev/null; then
@@ -542,6 +590,12 @@ if [ "$rc" -ne 0 ]; then
   elif grep -q "has no '## ' headings" "$log_file" 2>/dev/null; then
     failure_reason="review report validation failed"
     failure_hint="inspect the module reviewer output in the log; the report is missing required headings"
+  elif grep -q 'ERROR: no changed files found for target:' "$log_file" 2>/dev/null; then
+    failure_reason="no changed files found for review"
+    failure_hint="review uses committed diff plus dirty tracked files; commit changes, modify a tracked file, or choose another target/base"
+  elif grep -q 'ERROR: no reviewable files after filtering tool output and ignore rules' "$log_file" 2>/dev/null; then
+    failure_reason="no reviewable files after filtering"
+    failure_hint="changed files are EDC scratch files or matched by --ignore/.edcignore; choose another target/base or adjust ignore rules"
   elif grep -Eq 'pi subprocess: WebSocket closed|WebSocket closed 1006|provider_transport_failure' "$log_file" 2>/dev/null; then
     failure_reason="pi provider websocket closed during background review"
     failure_hint="provider connection dropped while a nested pi subprocess was running; rerun edc review, and if it repeats run edc update --agent pi separately or reduce context scope"
@@ -564,11 +618,6 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
   const edcScript = findEdcScript(ctx.cwd, scriptName);
   if (!edcScript) {
     return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
-  }
-
-  const bashPath = resolveBashExecutable();
-  if (!bashPath) {
-    return { error: "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" };
   }
 
   const statusPath = backgroundStatusPath(ctx.cwd);
@@ -598,6 +647,7 @@ status_file=${shellQuote(statusPath.path)}
 log_file=${shellQuote(logPath.path)}
 log_display=${shellQuote(logPath.display)}
 status_dir=${shellQuote(dirname(statusPath.path))}
+result_file="$status_dir/result.json"
 mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -613,7 +663,8 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
   [ -n "$started_head" ] && echo "started_head=$started_head"
 } > "$status_file"
 
-${shellQuote(bashPath)} ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
+rm -f "$result_file"
+EDC_RESULT_FILE="$result_file" bash ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -621,16 +672,59 @@ repo_changed=""
 if [ -n "$started_head" ] && [ -n "$finished_head" ] && [ "$started_head" != "$finished_head" ]; then
   repo_changed="HEAD changed from $(printf '%s' "$started_head" | cut -c1-8) to $(printf '%s' "$finished_head" | cut -c1-8) during background ${kind}; result may reflect the earlier repo state"
 fi
+read_result_field() {
+  [ -f "$result_file" ] || return 0
+  node -e '
+    const fs = require("fs");
+    const key = process.argv[2];
+    const json = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    let value = "";
+    if (key === "status") value = json.status || (Number(json.exitCode) === 0 ? "success" : "failed");
+    else if (key === "reasonCode") value = json.reasonCode || "";
+    else if (key === "message") value = json.message || json.failureReason || "";
+    else if (key === "hint") value = json.hint || json.failureHint || "";
+    else if (key === "failedPhase") value = json.failedPhase || "";
+    else if (key === "childResult") value = json.childResult || "";
+    else if (key === "scope") value = json.scope || "";
+    else if (key === "base") value = json.base || "";
+    else if (key === "target") value = json.target || "";
+    else if (key === "dirtyTrackedIncluded") value = typeof json.dirtyTrackedIncluded === "boolean" ? (json.dirtyTrackedIncluded ? "included" : "excluded") : "";
+    else if (key === "untrackedIncluded") value = typeof json.untrackedIncluded === "boolean" ? (json.untrackedIncluded ? "included" : "excluded") : "";
+    else if (key === "finalReview") value = json.finalReview || "";
+    else if (key === "outputs") value = Array.isArray(json.outputs) ? json.outputs.join(", ") : "";
+    process.stdout.write(String(value || "").replace(/[\\r\\n]+/g, " "));
+  ' "$result_file" "$1" 2>/dev/null || true
+}
+structured_status="$(read_result_field status)"
+structured_reason_code="$(read_result_field reasonCode)"
+structured_message="$(read_result_field message)"
+structured_result_hint="$(read_result_field hint)"
+structured_failed_phase="$(read_result_field failedPhase)"
+structured_child_result="$(read_result_field childResult)"
+structured_scope="$(read_result_field scope)"
+structured_base="$(read_result_field base)"
+structured_target="$(read_result_field target)"
+structured_dirty_tracked="$(read_result_field dirtyTrackedIncluded)"
+structured_untracked="$(read_result_field untrackedIncluded)"
+structured_outputs="$(read_result_field outputs)"
 final_review=""
 if [ ${shellQuote(kind)} = "review" ]; then
   final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
 fi
+structured_final_review="$(read_result_field finalReview)"
+[ -n "$structured_final_review" ] && final_review="$structured_final_review"
 failure_reason=""
 failure_hint=""
 ${failureClassificationShell(kind)}
+[ -n "$structured_message" ] && failure_reason="$structured_message"
+[ -n "$structured_result_hint" ] && failure_hint="$structured_result_hint"
+status_value="\${structured_status:-}"
+if [ -z "$status_value" ]; then
+  if [ "$rc" -eq 0 ]; then status_value="success"; else status_value="failed"; fi
+fi
 {
   echo "kind=${kind}"
-  if [ "$rc" -eq 0 ]; then echo "status=success"; else echo "status=failed"; fi
+  echo "status=$status_value"
   echo "exit_code=$rc"
   echo "started_at=$started_at"
   echo "finished_at=$finished_at"
@@ -641,17 +735,43 @@ ${failureClassificationShell(kind)}
   [ -n "$started_head" ] && echo "started_head=$started_head"
   [ -n "$finished_head" ] && echo "finished_head=$finished_head"
   [ -n "$repo_changed" ] && echo "repo_changed=$repo_changed"
+  [ -n "$structured_reason_code" ] && echo "reason_code=$structured_reason_code"
+  [ -n "$structured_failed_phase" ] && echo "failed_phase=$structured_failed_phase"
+  [ -n "$structured_child_result" ] && echo "child_result=$structured_child_result"
+  [ -n "$structured_scope" ] && echo "scope=$structured_scope"
+  [ -n "$structured_base" ] && echo "base=$structured_base"
+  [ -n "$structured_target" ] && echo "target=$structured_target"
+  [ -n "$structured_dirty_tracked" ] && echo "dirty_tracked_files=$structured_dirty_tracked"
+  [ -n "$structured_untracked" ] && echo "untracked_files=$structured_untracked"
+  [ -n "$structured_outputs" ] && echo "outputs=$structured_outputs"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
   [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
   [ -n "$final_review" ] && echo "final_review=$final_review"
 } > "$status_file"
 `;
 
-  const child = spawn(bashPath, ["-lc", script], {
+  const child = spawn("bash", ["-lc", script], {
     cwd: ctx.cwd,
     detached: true,
     stdio: "ignore",
-    env: piSubprocessEnv(ctx, bashPath),
+    env: piSubprocessEnv(ctx),
+  });
+  child.on("error", (error) => {
+    markRunningBackgroundFailed(
+      ctx.cwd,
+      statusPath,
+      {
+        kind,
+        started_at: startedAt,
+        run_id: runId,
+        pid: "spawn-error",
+        args: renderedArgs,
+        log: logPath.display,
+        started_head: startedHead,
+      },
+      `failed to start background ${kind}: ${error.message}`,
+      "verify bash is available on PATH, then rerun the EDC job",
+    );
   });
   child.unref();
 
@@ -734,6 +854,7 @@ function renderBackgroundJobStatus(args, cwd) {
     `status: ${status.status || "unknown"}`,
   ];
   if (status.exit_code) lines.push(`exit code: ${status.exit_code}`);
+  if (status.reason_code) lines.push(`code: ${status.reason_code}`);
   if (status.started_at) lines.push(`started: ${status.started_at}`);
   if (status.finished_at) lines.push(`finished: ${status.finished_at}`);
   if (status.final_review) lines.push(`final review: ${status.final_review}`);
@@ -742,12 +863,22 @@ function renderBackgroundJobStatus(args, cwd) {
   if (status.started_head) lines.push(`started HEAD: ${status.started_head.slice(0, 8)}`);
   if (status.finished_head && status.finished_head !== status.started_head) lines.push(`finished HEAD: ${status.finished_head.slice(0, 8)}`);
   if (status.repo_changed) lines.push(`warning: ${status.repo_changed}`);
+  if (status.failed_phase) lines.push(`failed phase: ${status.failed_phase}`);
+  if (status.scope) lines.push(`scope: ${status.scope}`);
+  if (status.base) lines.push(`base: ${status.base}`);
+  if (status.target) lines.push(`target: ${status.target}`);
+  if (status.dirty_tracked_files) lines.push(`dirty tracked files: ${status.dirty_tracked_files}`);
+  if (status.untracked_files) lines.push(`untracked files: ${status.untracked_files}`);
+  if (status.outputs) lines.push(`outputs: ${status.outputs}`);
   if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
   if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
+  if (status.child_result) lines.push(`child result: ${status.child_result}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
   if (status.status === "success") {
     lines.push(`EDC ${kind} complete.`);
+  } else if (status.status === "success-with-warning") {
+    lines.push(`EDC ${kind} complete with warnings.`);
   } else if (status.status === "failed") {
     lines.push(`EDC ${kind} failed. Open the log above for details.`);
   } else if (status.status === "cancelled") {
@@ -869,7 +1000,10 @@ function interactiveOnlyMessage() {
     "/edc is interactive-only.",
     "",
     "Use the EDC CLI for non-interactive runs:",
-    "  edc review --agent pi HEAD --base <default-branch>",
+    "  edc review full --agent pi",
+    "  edc review diff --agent pi",
+    "  edc security full --agent pi",
+    "  edc quality full --agent pi",
     "  edc build --agent pi",
     "  edc update --agent pi --base <default-branch>",
   ].join("\n");
@@ -882,16 +1016,16 @@ function killRunningJobAction(pi, ctx) {
   sendInfo(pi, "edc-job-kill", message);
 }
 
-async function runReviewAgainstDefault(pi, ctx) {
-  const renderedArgs = defaultBaseReviewArgs(ctx.cwd);
+async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review") {
+  const renderedArgs = args || [];
   const freshness = getContextFreshness(ctx.cwd);
   const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
   if (!proceed) {
-    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs));
+    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, commandName));
     return;
   }
 
-  const result = startBackgroundJob("review", "edc-review.sh", renderedArgs, ctx);
+  const result = startBackgroundJob(kind, scriptName, renderedArgs, ctx);
   if (result.error) {
     sendInfo(pi, "edc-background", result.error);
   } else if (result.alreadyRunning) {
@@ -901,6 +1035,84 @@ async function runReviewAgainstDefault(pi, ctx) {
     startBackgroundStatusWatcher(ctx);
     sendInfo(pi, "edc-background", backgroundJobStartedMessage(result));
   }
+}
+
+async function runScopedReview(pi, ctx, kind, scriptName, options = {}) {
+  const scope = await selectReviewScope(ctx, options);
+  if (scope.cancelled) return;
+  if (scope.error) {
+    sendInfo(pi, "edc-review-scope", scope.error);
+    return;
+  }
+  await startReviewJob(pi, ctx, kind, scriptName, scope.args || [], options.commandName || "review");
+}
+
+function reviewConfigForLens(lens, isFullScope) {
+  switch (lens) {
+    case EDC_LENS_MENU.COMBINED:
+      return { kind: "review-all", scriptName: "edc-review-all.sh", commandName: "review", args: isFullScope ? ["--full"] : null };
+    case EDC_LENS_MENU.SECURITY:
+      return { kind: "review", scriptName: "edc-review.sh", commandName: "security", args: isFullScope ? ["--full"] : null };
+    case EDC_LENS_MENU.DELIVERY:
+      return { kind: "delivery-review", scriptName: "edc-delivery-review.sh", commandName: "delivery", args: isFullScope ? ["--full"] : null };
+    case EDC_LENS_MENU.QUALITY:
+      return { kind: "audit", scriptName: "edc-audit.sh", commandName: "quality", args: isFullScope ? [] : null };
+    default:
+      return null;
+  }
+}
+
+async function selectReviewLens(ctx) {
+  return ctx.ui.select("review lens", [
+    EDC_LENS_MENU.COMBINED,
+    EDC_LENS_MENU.SECURITY,
+    EDC_LENS_MENU.DELIVERY,
+    EDC_LENS_MENU.QUALITY,
+    EDC_LENS_MENU.CANCEL,
+  ]);
+}
+
+async function argsForReviewScope(ctx, scopeChoice) {
+  switch (scopeChoice) {
+    case EDC_MENU.FULL_REVIEW:
+      return { isFullScope: true, args: [] };
+    case EDC_MENU.DIFF_DEFAULT:
+      return { isFullScope: false, args: defaultBaseReviewArgs(ctx.cwd) };
+    case EDC_MENU.DIFF_CUSTOM: {
+      if (typeof ctx.ui.input !== "function") {
+        return { error: "custom refs require CLI for now: edc review diff <base> --agent pi" };
+      }
+      const base = await ctx.ui.input("base ref", { placeholder: "origin/main" });
+      if (!base) return { cancelled: true };
+      const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
+      if (!target) return { cancelled: true };
+      return { isFullScope: false, args: [String(target), "--base", String(base)] };
+    }
+    default:
+      return { cancelled: true };
+  }
+}
+
+async function runReviewFromMenuScope(pi, ctx, scopeChoice) {
+  const scope = await argsForReviewScope(ctx, scopeChoice);
+  if (scope.cancelled) return;
+  if (scope.error) {
+    sendInfo(pi, "edc-review-scope", scope.error);
+    return;
+  }
+
+  const lens = await selectReviewLens(ctx);
+  if (!lens || lens === EDC_LENS_MENU.CANCEL) {
+    sendInfo(pi, "edc-menu", "EDC menu cancelled.");
+    return;
+  }
+
+  const config = reviewConfigForLens(lens, scope.isFullScope);
+  if (!config) {
+    sendInfo(pi, "edc-menu", "EDC menu cancelled.");
+    return;
+  }
+  await startReviewJob(pi, ctx, config.kind, config.scriptName, config.args ?? scope.args, config.commandName);
 }
 
 function runBackgroundAction(pi, ctx, kind, scriptName, args = "") {
@@ -939,19 +1151,31 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   const choice = await ctx.ui.select("EDC", [
-    EDC_MENU.REVIEW_DEFAULT,
+    EDC_MENU.FULL_REVIEW,
+    EDC_MENU.DIFF_DEFAULT,
+    EDC_MENU.DIFF_CUSTOM,
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
     EDC_MENU.UPDATE_DEFAULT,
-    EDC_MENU.AUDIT,
     EDC_MENU.DOCTOR,
     EDC_MENU.CANCEL,
   ]);
 
   switch (choice) {
-    case EDC_MENU.REVIEW_DEFAULT:
-      await runReviewAgainstDefault(pi, ctx);
+    case EDC_MENU.FULL_REVIEW:
+    case EDC_MENU.DIFF_DEFAULT:
+    case EDC_MENU.DIFF_CUSTOM:
+      await runReviewFromMenuScope(pi, ctx, choice);
+      break;
+    case "review all changes":
+      await runScopedReview(pi, ctx, "review-all", "edc-review-all.sh", { commandName: "review" });
+      break;
+    case EDC_LENS_MENU.SECURITY:
+      await runScopedReview(pi, ctx, "review", "edc-review.sh", { commandName: "security" });
+      break;
+    case EDC_LENS_MENU.DELIVERY:
+      await runScopedReview(pi, ctx, "delivery-review", "edc-delivery-review.sh", { commandName: "delivery", supportsFull: true });
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);
@@ -966,8 +1190,8 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.UPDATE_DEFAULT:
       runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
       break;
-    case EDC_MENU.AUDIT:
-      runBackgroundAction(pi, ctx, "audit", "edc-audit.sh");
+    case EDC_LENS_MENU.QUALITY:
+      await runScopedReview(pi, ctx, "audit", "edc-audit.sh", { commandName: "quality", supportsFull: true, fullArgs: [] });
       break;
     case EDC_MENU.DOCTOR:
       await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");
@@ -1035,7 +1259,6 @@ export default async function edcExtension(pi) {
       projectRoot: ctx.cwd,
       toolName: t,
       toolInput: event.input || {},
-      pluginRoot: PLUGIN_ROOT,
       sessionId,
     });
     if (!injection) return;

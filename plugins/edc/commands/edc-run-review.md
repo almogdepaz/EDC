@@ -1,12 +1,12 @@
 ---
 name: edc:edc-run-review
-description: Performs differential review of code changes, with optional EDC context
-argument-hint: "--pr <number> [--base <ref>] [--no-context-refresh|--ignore-context] | --base <ref> [--no-context-refresh|--ignore-context] | <target> [--base <ref>] [--no-context-refresh|--ignore-context] | <pr-url>"
+description: Performs combined security, delivery, and quality review of code changes, with optional EDC context
+argument-hint: "--full | <target> --base <ref> [--ignore <glob>]... [--context-mode advisory|inject]"
 allowed-tools:
   - Bash
 ---
 
-# Differential Review
+# Combined Review
 
 **Arguments:** $ARGUMENTS
 
@@ -17,10 +17,10 @@ reviewing. Warn the user this can take several minutes.
 
 ```bash
 set -- $ARGUMENTS
-if [ -f ".edc/scripts/edc-review.sh" ]; then
-  review_script=".edc/scripts/edc-review.sh"
-elif [ -f "$HOME/.edc/scripts/edc-review.sh" ]; then
-  review_script="$HOME/.edc/scripts/edc-review.sh"
+if [ -f ".edc/scripts/edc-review-all.sh" ]; then
+  review_script=".edc/scripts/edc-review-all.sh"
+elif [ -f "$HOME/.edc/scripts/edc-review-all.sh" ]; then
+  review_script="$HOME/.edc/scripts/edc-review-all.sh"
 else
   echo "SCRIPT_MISSING: install EDC orchestrator first"
   exit 1
@@ -32,5 +32,5 @@ bash "$review_script" "$@"
 
 If the script exits non-zero, surface its error message verbatim and stop. Do not retry.
 
-The script prints `Consolidated: <path>` and `Verified: <path>` on success. Tell the
-user the path of the final review file.
+The script writes security, delivery, and quality outputs on success. Tell the user
+the reported output paths.

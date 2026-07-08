@@ -39,8 +39,11 @@ while [ "$#" -gt 0 ]; do
             echo "edc: no edc-context/manifest.json in $REPO_ROOT — build first" >&2
             exit 2
           fi
+          json_cli="$REPO_ROOT/plugins/edc/hooks/lib/json-cli.mjs"
+          command -v node >/dev/null 2>&1 || { echo "edc: node required to update $manifest" >&2; exit 2; }
+          [ -f "$json_cli" ] || { echo "edc: json-cli.mjs not found at $json_cli" >&2; exit 2; }
           tmp="$(mktemp)"
-          jq --arg m "$mode" '.policy.defaultMode = $m' "$manifest" > "$tmp"
+          node "$json_cli" mode-set "$manifest" "$mode" > "$tmp"
           mv "$tmp" "$manifest"
           echo "edc: set policy.defaultMode = $mode"
           exit 0
@@ -89,11 +92,13 @@ pi install "$SOURCE" "${ARGS[@]}"
 cat <<EOF
 
 Done. Available command in pi:
-  /edc             interactive EDC menu (review, status, build, update, audit, doctor)
+  /edc             interactive EDC menu (review, delivery-review, status, build, update, audit, doctor)
 
 Visible skills:
-  edc-review       differential review methodology
-  edc-audit        overengineering / bloat audit methodology
+  edc-review       security/adversarial review methodology
+  edc-audit        code quality / maintainability audit methodology
+  edc-delivery-review
+                   goal/spec delivery + architecture-fit review methodology
 
 Mode toggle (per-project, after context has been built):
   bash pi/install.sh --context-mode advisory   # docs only (default)

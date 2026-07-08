@@ -55,7 +55,7 @@ echo "Verified: review-HEAD.md"
   await edcExtension(pi);
   assert.equal(typeof handler, "function", "extension should register /edc handler");
 
-  const selections = ["Review current branch vs default branch", "Job status"];
+  const selections = ["security review", "changed files vs default branch", "job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -157,11 +157,12 @@ echo "Verified: review-HEAD.md"
   };
   await edcExtension(pi);
 
+  const selections = ["security review", "changed files vs default branch"];
   const ctx = {
     cwd: worktree,
     hasUI: true,
     ui: {
-      select: async () => "Review current branch vs default branch",
+      select: async () => selections.shift(),
       confirm: async () => true,
     },
     model: { provider: "test", id: "model" },

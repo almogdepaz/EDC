@@ -46,7 +46,7 @@ export function resolvePluginRoot(metaUrl) {
   let dir = dirname(fileURLToPath(metaUrl));
   for (let i = 0; i < 6; i++) {
     if (
-      existsSync(join(dir, "scripts", "edc-route.sh")) &&
+      existsSync(join(dir, "scripts", "edc-review.sh")) &&
       existsSync(join(dir, "skills"))
     ) {
       return dir;
@@ -69,10 +69,6 @@ function loadManifest(projectRoot) {
   } catch {
     return null;
   }
-}
-
-function manifestPath(projectRoot) {
-  return join(projectRoot, EDC_MANIFEST_REL);
 }
 
 // --- staleness ---
@@ -150,10 +146,19 @@ function extractFilePaths(toolName, toolInput) {
 
 function extractFilePathsFromBash(command) {
   const paths = new Set();
+
+  // Deterministic escape hatch for complex shell syntax that regex tokenization
+  // cannot parse safely: one explicit path per comment line.
+  const hintPattern = /(?:^|\n)\s*#\s*edc-context-path:\s*(.+?)(?=\r?\n|$)/g;
+  let match;
+  while ((match = hintPattern.exec(command)) !== null) {
+    const hintedPath = match[1].trim();
+    if (hintedPath) paths.add(hintedPath);
+  }
+
   // Catch any path-shaped token: optional ./ or /, then at least one
   // dir/segment pair (extensionless OK). Routing filters non-matches.
   const pathPattern = /(?:^|[\s=:'"`])(\.{0,2}\/?[\w.-]+(?:\/[\w.-]+)+)/g;
-  let match;
   while ((match = pathPattern.exec(command)) !== null) {
     paths.add(match[1]);
   }
@@ -162,8 +167,13 @@ function extractFilePathsFromBash(command) {
 
 export function normalizePath(p, projectRoot) {
   let normalized = p.replace(/^\.\//, "");
-  if (projectRoot && normalized.startsWith(projectRoot)) {
-    normalized = normalized.slice(projectRoot.length).replace(/^\//, "");
+  if (projectRoot) {
+    const root = projectRoot.replace(/\/+$/, "");
+    if (normalized === root) {
+      normalized = "";
+    } else if (normalized.startsWith(`${root}/`)) {
+      normalized = normalized.slice(root.length + 1);
+    }
   }
   return normalized;
 }
@@ -171,8 +181,8 @@ export function normalizePath(p, projectRoot) {
 // --- routing ---
 
 /**
- * Convert a glob pattern (subset supported by edc-route.sh's `[[ $f == $pat ]]`)
- * into a RegExp. Supports `*` (no slash), `**` (any), `?` (single non-slash),
+ * Convert an EDC manifest glob pattern into a RegExp. Supports `*` (no slash),
+ * `**` (any), `?` (single non-slash),
  * and `[...]` character classes. Anchored.
  */
 function globToRegex(glob) {
@@ -206,35 +216,9 @@ function globToRegex(glob) {
   return new RegExp(re);
 }
 
-function bashPatternToRegex(pattern) {
-  let re = "^";
-  for (let i = 0; i < pattern.length; i++) {
-    const c = pattern[i];
-    if (c === "*") {
-      if (pattern[i + 1] === "*") i++;
-      re += ".*";
-    } else if (c === "?") {
-      re += ".";
-    } else if (c === "[") {
-      const end = pattern.indexOf("]", i + 1);
-      if (end === -1) {
-        re += "\\[";
-      } else {
-        re += pattern.slice(i, end + 1);
-        i = end;
-      }
-    } else if (/[.+^$(){}|\\]/.test(c)) {
-      re += "\\" + c;
-    } else {
-      re += c;
-    }
-  }
-  return new RegExp(`${re}$`);
-}
-
 function pathMatchesPattern(filePath, pattern) {
   if (pattern.endsWith("/")) return filePath.startsWith(pattern);
-  return filePath === pattern || filePath.startsWith(`${pattern}/`) || bashPatternToRegex(pattern).test(filePath);
+  return filePath === pattern || filePath.startsWith(`${pattern}/`) || globToRegex(pattern).test(filePath);
 }
 
 function routeFileStateSync(manifest, filePath) {
@@ -315,8 +299,8 @@ function contextlessMatches(manifest, filePath, source) {
 }
 
 /**
- * Classify a path into exactly one context coverage state. Mirrors
- * plugins/edc/scripts/edc-classify-path.sh.
+ * Classify a path into exactly one context coverage state. This is the single
+ * classifier implementation used directly by JS callers and by classify-cli.mjs.
  */
 export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
   for (const pattern of ignorePatterns) {
@@ -348,31 +332,11 @@ export function classifyPathSync(manifest, filePath, ignorePatterns = []) {
 }
 
 /**
- * Route a file path to a module, in-process. Mirrors the 3-tier algorithm in
- * plugins/edc/scripts/edc-route.sh. Returns null on no-match or ambiguity.
+ * Route a file path to a module, in-process. Returns null on no-match or ambiguity.
  */
 export function routeFileSync(manifest, filePath) {
   const state = routeFileStateSync(manifest, filePath);
   return state.state === "context-module" ? state.module : null;
-}
-
-/**
- * Legacy signature kept for any external caller. Loads the manifest from disk
- * and dispatches to routeFileSync. New code should call routeFileSync directly
- * with an already-parsed manifest to avoid the file read.
- *
- * The third param (pluginRoot) is unused — historically pointed at
- * edc-route.sh; routing is now pure JS.
- */
-function routeFile(manifestPathArg, filePath, _pluginRoot) {
-  if (!existsSync(manifestPathArg)) return null;
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(manifestPathArg, "utf-8"));
-  } catch {
-    return null;
-  }
-  return routeFileSync(manifest, filePath);
 }
 
 function moduleDocPath(manifest, moduleName) {
@@ -439,6 +403,7 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
   if (!isEdcProject(projectRoot)) return;
 
   installScriptFiles(projectRoot, pluginRoot);
+  installClassifierRuntime(projectRoot, pluginRoot);
   installPrivatePromptBundles(projectRoot, pluginRoot);
 }
 
@@ -460,7 +425,7 @@ function installScriptFiles(projectRoot, pluginRoot) {
   let scriptNames;
   try {
     scriptNames = readdirSync(sourceDir).filter(
-      (name) => name === "edc" || name.endsWith(".sh"),
+      (name) => name === "edc" || (name.endsWith(".sh") && name !== "edc-spawn-analyze.sh"),
     );
   } catch {
     return;
@@ -478,6 +443,25 @@ function installScriptFiles(projectRoot, pluginRoot) {
     } catch (err) {
       process.stderr.write(
         `[edc] WARNING: could not install ${scriptName}: ${err.message}\n`,
+      );
+    }
+  }
+}
+
+function installClassifierRuntime(projectRoot, pluginRoot) {
+  const sourceDir = join(pluginRoot, "hooks", "lib");
+  const destDir = join(projectRoot, ".edc", "hooks", "lib");
+  for (const fileName of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
+    const src = join(sourceDir, fileName);
+    const dst = join(destDir, fileName);
+    if (!existsSync(src) || !shouldCopyFile(src, dst)) continue;
+    try {
+      mkdirSync(destDir, { recursive: true });
+      copyFileSync(src, dst);
+      if (["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs"].includes(fileName)) chmodSync(dst, 0o755);
+    } catch (err) {
+      process.stderr.write(
+        `[edc] WARNING: could not install classifier runtime ${fileName}: ${err.message}\n`,
       );
     }
   }
@@ -592,7 +576,6 @@ export function buildToolCallInjection({
   projectRoot,
   toolName,
   toolInput,
-  pluginRoot,
   sessionId,
 }) {
   const manifest = loadManifest(projectRoot);

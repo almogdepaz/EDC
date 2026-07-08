@@ -121,7 +121,7 @@ async function assertCompatible(order, mode) {
 
     const skillPaths = flattenSkillPaths(await stack.emit("resources_discover", { type: "resources_discover" }, { cwd: stack.cwd }));
     const skillNames = skillPaths.map((path) => path.split("/").pop()).sort();
-    assert.deepEqual(skillNames, ["context-prune-skill", "edc-audit", "edc-review"]);
+    assert.deepEqual(skillNames, ["context-prune-skill", "edc-audit", "edc-delivery-review", "edc-review"]);
 
     const sessionEvent = { type: "session_start" };
     const sessionId = `t24-${mode}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

@@ -2,7 +2,7 @@
 
 Repo maps for coding agents.
 
-EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, audits, debugging, and context loading.
+EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, quality review, debugging, and context loading.
 
 Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 
@@ -12,7 +12,7 @@ Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
 pi install npm:@sgtbeatdown/edc
 cd your-repo
 pi
-# run /edc, choose Build context, then Review current branch vs main
+# run /edc, choose build context, then choose scope + review lens
 ```
 
 First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
@@ -34,16 +34,18 @@ EDC separates deterministic orchestration from LLM analysis:
 - Subagents write per-module architecture context and review reports.
 - Agent integrations expose the same workflows through native commands, skills, hooks, or pi's interactive menu.
 
-The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Reviews use Trail of Bits-style differential review methodology, routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
+The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Security reviews are routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
 
 ### Commands
 
 | Command | When to run it |
 |---------|----------------|
 | **build** | Once per repo, and after big refactors. Discovers modules and writes `edc-context/{index.md, manifest.json, modules/*.md, reports/*, build/build.json}` plus a short agent orientation (`AGENTS.md`, or `EDC_AGENTS.md` when preserving an existing `AGENTS.md`). |
-| **update** | Before review/audit if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
-| **review** | On a PR, branch, commit, or diff file. Runs context-aware differential review and writes a consolidated `review-*.md` report. |
-| **audit** | Anytime. Compares context expectations against actual code to flag overengineering, bloat, duplication, and dead exports. |
+| **update** | Before review if HEAD has moved. Incremental refresh from a branch diff so you do not rebuild from scratch on every PR. |
+| **review full\|diff [base]** | Runs all lenses: security, delivery/architecture, and quality review. |
+| **security full\|diff [base]** | Runs context-aware security/adversarial review and writes a consolidated `review-*.md` report. |
+| **delivery full\|diff [base]** | Checks goal/spec delivery and architecture fit, writing `delivery-review-*.md`. |
+| **quality full\|diff [base]** | Code-quality and maintainability review. Full audits all modules; diff audits modules owning changed files. |
 | **doctor** | When something feels off. Validates the `edc-context/` tree and routing contract. |
 | **mode** | Shows or toggles runtime context loading mode (`advisory` or `inject`). |
 
@@ -61,17 +63,23 @@ edc build  --agent codex --focus orchestrator
 edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
-# run the review pipeline in the current repo
-edc review --agent claude --base main
-edc review --agent cursor HEAD --base main
-edc review --agent codex --pr 42
-edc review --agent pi HEAD --base main
-edc review --agent codex https://github.com/owner/repo/pull/42
-edc review --agent codex HEAD --base main --ignore 'generated/**'
+# run all review lenses in the current repo: security, delivery, then quality
+edc review full --agent claude
+edc review diff --agent pi          # diff vs detected default branch
+edc review diff main --agent pi     # diff vs explicit base
 
-# complexity / bloat / duplication audit
-edc audit  --agent claude
-edc audit  --agent pi
+# run the security-only review pipeline in the current repo
+edc security full --agent claude
+edc security diff main --agent cursor
+edc security diff origin/main --agent codex --ignore 'generated/**'
+
+# goal/spec delivery + architecture-fit review
+edc delivery full --agent claude
+edc delivery diff main --agent pi
+
+# code quality / maintainability review
+edc quality full --agent claude
+edc quality diff main --agent pi
 
 # runtime-mode toggle (used by Claude Code and pi inject/advisory hooks)
 edc mode                # show current mode
@@ -82,7 +90,7 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, and `audit` (not for `mode` or `doctor`). `review` and `audit` auto-build or auto-update `edc-context/` first if it is missing or stale. Review routes changed files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target plus dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ## Install
 
@@ -154,30 +162,29 @@ Claude, Cursor, and Codex expose thin wrappers for the same deterministic orches
 
 | Agent | User-facing actions |
 |-------|---------------------|
-| Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit` |
+| Claude Code | `/edc:edc-build`, `/edc:edc-update`, `/edc:edc-run-review`, `/edc:edc-doctor`; methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 | Cursor | `/edc-build`, `/edc-update`, `/edc-run-review`, `/edc-doctor`; public methodology skills |
 | Codex | `$edc-build`, `$edc-update`, `$edc-run-review`, `$edc-doctor`; public methodology skills |
-| pi | `/edc` interactive menu: review/status/build/update/audit/doctor; methodology skills `edc-review`, `edc-audit` |
+| pi | `/edc` interactive menu: choose scope first (full repo, changes vs default branch, changes vs custom base), then lens (combined/security/delivery/quality); methodology skills `edc-review`, `edc-audit`, `edc-delivery-review` |
 
 ### Review invocation examples
 
 ```bash
 # terminal CLI
-edc review --agent claude --pr 42
-edc review --agent codex https://github.com/owner/repo/pull/42
-edc review --agent pi HEAD --base main
-edc review --agent claude abc1234                 # single commit; base defaults to abc1234^
-edc review --agent claude HEAD --base HEAD~5      # commit range
-edc review --agent claude path/to/changes.patch   # pre-generated diff file
-edc review --agent claude --pr 42 --base main --ignore-context
+edc review full --agent pi
+edc review diff main --agent pi
+edc security full --agent claude
+edc security diff HEAD~5 --agent claude
+# advanced legacy security forms still support PRs, single commits, and patch files:
+edc security-review --agent claude --pr 42
+edc security-review --agent claude path/to/changes.patch
 
-# Claude slash command equivalent
-/edc:edc-run-review --pr 42
+# Claude slash command equivalent for combined review
+/edc:edc-run-review --full
 /edc:edc-run-review HEAD --base main
-/edc:edc-run-review path/to/changes.patch
 ```
 
-Without `--base`, a git ref target uses its parent (`<target>^`) as the base, which reviews only that commit. To review a branch against `main`, pass `--base main`. For PR targets, EDC uses `gh pr diff <number-or-url> --name-only`, so `gh` must be installed and authenticated. Use `--ignore-context` for a pure direct review with no context build/update and no reads from existing `edc-context/`; use `--no-context-refresh` to skip creation/update while still allowing existing context if present.
+Without `--base`, a git ref target uses its parent (`<target>^`) as the base, which reviews only that commit. To review a branch against `main`, pass `--base main`. For PR numbers, PR URLs, or patch files, use the explicit security-only command (`edc security-review --agent <agent> ...`) because delivery and quality phases require a git diff scope. Use `--ignore-context` for a pure direct security review with no context build/update and no reads from existing `edc-context/`; use `--no-context-refresh` to skip creation/update while still allowing existing context if present.
 
 ## Runtime Modes
 

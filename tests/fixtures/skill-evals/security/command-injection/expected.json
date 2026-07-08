@@ -1,0 +1,13 @@
+{
+  "skill": "edc-review",
+  "fixture": "command-injection",
+  "attackPathRequired": true,
+  "requiredFindings": [
+    { "category": "command injection", "evidence": "exec" }
+  ],
+  "forbiddenFindings": [
+    { "category": "code quality" },
+    { "category": "scope creep" }
+  ],
+  "requiredEvidence": ["src/export.diff", "projectName", "tar"]
+}

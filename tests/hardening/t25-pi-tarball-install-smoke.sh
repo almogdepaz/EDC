@@ -85,7 +85,7 @@ const extensionCommands = commands.filter((command) => command.source === "exten
 assert.deepEqual(extensionCommands, ["edc"]);
 
 const skillCommands = commands.filter((command) => command.source === "skill").map((command) => command.name).sort();
-assert.deepEqual(skillCommands, ["skill:edc-audit", "skill:edc-review"]);
+assert.deepEqual(skillCommands, ["skill:edc-audit", "skill:edc-delivery-review", "skill:edc-review"]);
 
 assert.ok(existsSync(join(projectDir, ".edc", "scripts", "edc-review.sh")), "session_start should install project-local EDC scripts");
 assert.ok(existsSync(join(projectDir, ".edc", "skills", "edc-review", "SKILL.md")), "session_start should install private/public EDC skills cache");

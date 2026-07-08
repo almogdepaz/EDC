@@ -2,35 +2,21 @@
 # t28-contextless-classification: pin the contextless coverage contract.
 #
 # Contextless paths are deterministic coverage/accounting, not fake human
-# modules. The shared classifier must return exactly one state for each path and
-# doctor must require docs only for real context modules.
+# modules. The shared batch classifier must return exactly one state for each
+# path and doctor must require docs only for real context modules.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-resolve_bash4() {
-  local candidate
-  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-BASH_BIN="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
-export EDC_BASH="$BASH_BIN"
+BASH_BIN="${BASH_BIN:-bash}"
 
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
 trap 'check_cleanup' EXIT
 
-SCRIPT="$ROOT/plugins/edc/scripts/edc-classify-path.sh"
+CLASSIFY_CLI="$ROOT/plugins/edc/hooks/lib/classify-cli.mjs"
 DOCTOR="$ROOT/plugins/edc/scripts/edc-doctor.sh"
 
 TMP="$(mktemp -d)"
@@ -49,7 +35,8 @@ cat > "$MANIFEST" <<'JSON'
     {"name": "exact-mod", "doc": "edc-context/modules/exact-mod.md", "priority": 10, "match": {"exactFiles": ["src/exact.ts"]}},
     {"name": "core", "doc": "edc-context/modules/core.md", "priority": 10, "match": {"prefixes": ["src/"]}},
     {"name": "amb-a", "doc": "edc-context/modules/amb-a.md", "priority": 100, "match": {"prefixes": ["amb/"]}},
-    {"name": "amb-b", "doc": "edc-context/modules/amb-b.md", "priority": 100, "match": {"prefixes": ["amb/"]}}
+    {"name": "amb-b", "doc": "edc-context/modules/amb-b.md", "priority": 100, "match": {"prefixes": ["amb/"]}},
+    {"name": "scripts", "doc": "edc-context/modules/scripts.md", "priority": 10, "match": {"globs": ["scripts/*.py"]}}
   ],
   "contextless": {
     "entries": [
@@ -62,8 +49,8 @@ cat > "$MANIFEST" <<'JSON'
 }
 JSON
 
-classify_shell() {
-  "$BASH_BIN" "$SCRIPT" --ignore 'tmp/**' "$MANIFEST" "$1" 2>/dev/null
+classify_batch() {
+  printf '%s\n' "$1" | node "$CLASSIFY_CLI" --ignore 'tmp/**' "$MANIFEST" 2>/dev/null | awk -F '\t' 'NR == 1 {print $2}'
 }
 
 classify_js() {
@@ -83,6 +70,8 @@ cases=(
   "config/prod.yml|contextless:risky-config:promotion-check"
   "assets/logo.png|contextless:generated-assets:no-context-review"
   "package.json|contextless:legacy-unmapped:account-only"
+  "scripts/tool.py|context-module:scripts"
+  "scripts/nested/tool.py|uncovered"
   "orphan.ts|uncovered"
   "amb/file.ts|ambiguous"
 )
@@ -91,10 +80,10 @@ all_ok=1
 for case in "${cases[@]}"; do
   file="${case%%|*}"
   want="${case##*|}"
-  got="$(classify_shell "$file")" || got=""
+  got="$(classify_batch "$file")" || got=""
   if [ "$got" != "$want" ]; then
     all_ok=0
-    echo "  shell $file: got '$got', want '$want'"
+    echo "  batch $file: got '$got', want '$want'"
   fi
   got_js="$(classify_js "$file")" || got_js=""
   if [ "$got_js" != "$want" ]; then
@@ -103,11 +92,11 @@ for case in "${cases[@]}"; do
   fi
   if [ "$got" != "$got_js" ]; then
     all_ok=0
-    echo "  parity $file: shell '$got' vs js '$got_js'"
+    echo "  parity $file: batch '$got' vs js '$got_js'"
   fi
 done
 
-check "28.1: shell/js classifier returns exact context states" "$all_ok"
+check "28.1: batch/js classifier returns exact context states" "$all_ok"
 
 setup_doctor_repo() {
   local dir="$1"
@@ -162,6 +151,32 @@ if [ "$rc" -eq 0 ]; then
   check "28.2: doctor accepts contextless tracked paths without module docs" 1
 else
   check "28.2: doctor accepts contextless tracked paths without module docs" 0
+  echo "$out"
+fi
+
+DOCTOR_REPO="$TMP/doctor-policy-fail"
+setup_doctor_repo "$DOCTOR_REPO"
+jq '.policy.unmatchedPathPolicy = "fail"' edc-context/manifest.json > edc-context/manifest.json.tmp
+mv edc-context/manifest.json.tmp edc-context/manifest.json
+out=$("$BASH_BIN" "$DOCTOR" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  check "28.2b: doctor accepts policy.unmatchedPathPolicy=fail" 1
+else
+  check "28.2b: doctor accepts policy.unmatchedPathPolicy=fail" 0
+  echo "$out"
+fi
+
+DOCTOR_REPO="$TMP/doctor-policy-allow"
+setup_doctor_repo "$DOCTOR_REPO"
+jq '.policy.unmatchedPathPolicy = "allow"' edc-context/manifest.json > edc-context/manifest.json.tmp
+mv edc-context/manifest.json.tmp edc-context/manifest.json
+out=$("$BASH_BIN" "$DOCTOR" 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  check "28.2c: doctor accepts policy.unmatchedPathPolicy=allow" 1
+else
+  check "28.2c: doctor accepts policy.unmatchedPathPolicy=allow" 0
   echo "$out"
 fi
 

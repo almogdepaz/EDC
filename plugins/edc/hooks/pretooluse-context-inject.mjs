@@ -1,8 +1,5 @@
 import { readFileSync } from "fs";
-import {
-  resolvePluginRoot,
-  buildToolCallInjection,
-} from "./lib/route.mjs";
+import { buildToolCallInjection } from "./lib/route.mjs";
 import { detectPlatform } from "./lib/platform.mjs";
 
 // --- I/O helpers ---
@@ -56,13 +53,10 @@ function main() {
 
   const platform = detectPlatform(input.raw);
   const projectRoot = input.cwd;
-  const pluginRoot = resolvePluginRoot(import.meta.url);
-
   const injection = buildToolCallInjection({
     projectRoot,
     toolName: input.toolName,
     toolInput: input.toolInput,
-    pluginRoot,
     sessionId: input.sessionId,
   });
 

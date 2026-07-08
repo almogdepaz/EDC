@@ -1,10 +1,10 @@
 ---
 name: edc-review
 description: >
-  Performs differential review of code changes (PRs, commits, diffs).
-  Adapts analysis depth to codebase size, uses git history for context, calculates
-  blast radius, checks test coverage, leverages edc-context/ files when available,
-  and generates comprehensive markdown reports.
+  Performs security/adversarial differential review of code changes (PRs, commits, diffs).
+  Use this for auth, validation, trust-boundary, injection, crypto, memory-safety,
+  external-call, state-mutation, or security-regression risk. It leverages git
+  history and edc-context for blast radius and writes markdown security reports.
 allowed-tools:
   - Read
   - Write
@@ -14,255 +14,66 @@ allowed-tools:
   - Skill
 ---
 
-# Differential Review
+# Security Review
 
-Code review for PRs, commits, and diffs.
+Review code changes for exploitable or misuse-oriented security risk. This is not a generic code-quality or delivery/spec review.
 
----
+Use edc-audit for code quality, maintainability, bloat, duplication, and test-value analysis. Use edc-delivery-review for goal/spec delivery and architecture-fit review. Use this skill when the important question is: **can this change break a trust boundary, remove a protection, expose attacker-controlled input, or reintroduce a security bug?**
 
-## Invocation Modes
+## Invocation modes
 
-This skill has two entry modes. Check arguments **first**, before any other step.
+Check arguments first.
 
-### Mode A — Scoped (`--task-file <path>`)
+### Mode A — scoped (`--task-file <path>`)
 
-Invoked by the `edc-review.sh` orchestrator for per-module reviews. The task file is written
-by `scripts/edc-review.sh` and contains everything needed for a self-contained review.
+The `edc-review.sh` orchestrator invokes this mode for per-module security reviews.
 
-**Required steps when `--task-file` is present:**
-
-1. Read the task file at `<path>` (e.g. `edc-context/review-tasks/{module}.md`)
-2. Parse these fields from the task file:
-   - **Target** (PR URL, commit SHA, or diff path) — under `## Target`
-   - **Baseline** (optional) — under `## Baseline`
-   - **Files to review** — bullet list under `## Files to review`
-3. Derive `{module}` from the task file basename (e.g. `edc-context/review-tasks/foo.md` → `foo`)
-4. Load context in this order (skip silently if a file does not exist):
+1. Read the task file at `<path>`.
+2. Parse:
+   - **Target** under `## Target`
+   - **Baseline** under `## Baseline` when present
+   - **Files to review** under `## Files to review`
+3. Derive `{module}` from the task file basename.
+4. Load context in this order, skipping missing files silently:
    - `edc-context/index.md` for routing/coupling/blast-radius guidance
    - `edc-context/reports/issues.md`
    - `edc-context/modules/{module}.md`
-5. Scope the review **strictly to the listed files**. Do not expand to siblings or
-   transitive callers unless blast radius analysis explicitly requires touching them.
-6. Run the standard workflow (Phases 0–6) on those files only.
-7. Write the report to `edc-context/review-tasks/report-{module}.md`. **The report file is mandatory.**
-   The orchestrator hard-fails if it is missing.
+5. Scope review strictly to listed files. Inspect callers/dependencies only when security blast radius or reachability requires it.
+6. Follow `methodology.md`, `adversarial.md`, `patterns.md`, and `reporting.md`.
+7. Write `edc-context/review-tasks/report-{module}.md`. The report file is mandatory.
 
-Do not write to any other location, do not update `manifest.json`, do not consolidate.
-The orchestrator script handles consolidation.
+Do not write elsewhere, update `manifest.json`, or consolidate. The orchestrator handles consolidation.
 
-### Mode B — Standalone (no `--task-file`)
+### Mode B — standalone
 
-Behave as a self-directed review: classify the change, build context, run the full
-workflow, and write a report to a sensible filename (e.g. `review-{target}.md`). This is
-the original behavior, used when a human invokes the skill directly.
+When no task file is provided, classify the target, build/load context, run the same security workflow, and write a durable report such as `review-{target}.md`.
 
----
+## Core rules
 
-## Core Principles
+- **Security-only:** report vulnerabilities, security regressions, trust-boundary breaks, attacker-controlled data flow bugs, and missing security tests. Do not report style, bloat, generic maintainability, or spec-delivery issues.
+- **Evidence-first:** every finding needs file:line evidence and a concrete attack path or misuse path. If reachability is unproven, say so and lower confidence.
+- **History-aware:** inspect git history for removed auth, validation, escaping, sandboxing, crypto, memory-safety, or CVE/security-fix code.
+- **Context-aware:** use EDC invariants, trust boundaries, known issues, and coupling notes to focus analysis.
+- **No false drama:** a report with `No security findings` is valid when no exploitable or security-relevant issue is found.
+- **Output-first:** create the required report early and finalize it even when there are no findings.
 
-1. **Output-First**: Create the output file (`issues.md` or `edc-context/reports/issues.md`) BEFORE any analysis begins. Append findings as discovered. Never batch to end.
-2. **Risk-First**: Focus on auth, validation, state mutation, external calls, data flow
-3. **Evidence-Based**: Every finding backed by git history, line numbers, attack scenarios
-4. **Adaptive**: Scale to codebase size (SMALL/MEDIUM/LARGE)
-5. **Honest**: Explicitly state coverage limits and confidence level
+## Risk triggers
 
----
+Treat these as security-relevant until proven otherwise:
 
-## Rationalizations (Do Not Skip)
+| Risk | Examples |
+|---|---|
+| Access control | authn/authz, roles, permissions, tenant boundaries |
+| Input/data validation | parsing, escaping, deserialization, path handling, SQL/shell/templates |
+| State mutation | money, ownership, config, persistence, irreversible operations |
+| Trust boundaries | public APIs, CLI args, env/config, filesystem, network, subprocesses |
+| Crypto/secrets | key handling, randomness, signing, tokens, credentials, logs |
+| Memory safety | C/C++ buffers, allocation math, signedness, lifetime/free patterns |
+| Regression | removed/reintroduced security checks, code from CVE/fix/security commits |
 
-| Rationalization | Why It's Wrong | Required Action |
-|-----------------|----------------|-----------------|
-| "Small PR, quick review" | Heartbleed was 2 lines | Classify by RISK, not size |
-| "I know this codebase" | Familiarity breeds blind spots | Build explicit baseline context |
-| "Git history takes too long" | History reveals regressions | Never skip Phase 1 |
-| "Blast radius is obvious" | You'll miss transitive callers | Calculate quantitatively |
-| "No tests = not my problem" | Missing tests = elevated risk rating | Flag in report, elevate severity |
-| "Just a refactor, no security impact" | Refactors break invariants | Analyze as HIGH until proven LOW |
-| "I'll explain verbally" | No artifact = findings lost | Always write report |
+## Supporting docs
 
----
-
-## Quick Reference
-
-### Codebase Size Strategy
-
-| Codebase Size | Strategy | Approach |
-|---------------|----------|----------|
-| SMALL (<20 files) | DEEP | Read all deps, full git blame |
-| MEDIUM (20-200) | FOCUSED | 1-hop deps, priority files |
-| LARGE (200+) | SURGICAL | Critical paths only |
-
-### Risk Level Triggers
-
-| Risk Level | Triggers |
-|------------|----------|
-| HIGH | Auth, crypto, external calls, state mutation, validation removal |
-| MEDIUM | Business logic, state changes, new public APIs |
-| LOW | Comments, tests, UI, logging |
-
----
-
-## Workflow Overview
-
-```
-Pre-Analysis → Phase 0: Triage → Phase 1: Code Analysis → Phase 2: Test Coverage
-    ↓              ↓                    ↓                        ↓
-Phase 3: Blast Radius → Phase 4: Deep Context → Phase 5: Adversarial → Phase 6: Report
-```
-
----
-
-## Decision Tree
-
-**Starting a review?**
-
-```
-├─ Need detailed phase-by-phase methodology?
-│  └─ Read: methodology.md
-│     (Pre-Analysis + Phases 0-4: triage, code analysis, test coverage, blast radius)
-│
-├─ Analyzing HIGH RISK change?
-│  └─ Read: adversarial.md
-│     (Phase 5: Attacker modeling, exploit scenarios, exploitability rating)
-│
-├─ Writing the final report?
-│  └─ Read: reporting.md
-│     (Phase 6: Report structure, templates, formatting guidelines)
-│
-├─ Looking for specific vulnerability patterns?
-│  └─ Read: patterns.md
-│     (Regressions, reentrancy, access control, overflow, etc.)
-│
-└─ Quick triage only?
-   └─ Use Quick Reference above, skip detailed docs
-```
-
----
-
-## Quality Checklist
-
-Before delivering:
-
-- [ ] **Output file created at start** (before any analysis — `issues.md` or `edc-context/reports/issues.md`)
-- [ ] **Complex C/C++ functions analyzed in dedicated isolated pass** (>100 LOC or with recursion/state-machine/parser structure: perform focused analysis on that function alone BEFORE continuing with the rest of the file, preventing context exhaustion on complex targets)
-- [ ] All changed files analyzed
-- [ ] Git blame on removed security code
-- [ ] Blast radius calculated for HIGH risk
-- [ ] Attack scenarios are concrete (not generic)
-- [ ] Findings reference specific line numbers + commits
-- [ ] Report file finalized (append summary if no findings)
-- [ ] User notified with summary
-
----
-
-## Integration
-
-**EDC context**:
-- If `edc-context/` exists, use it as the baseline context
-- If it does not exist, ask the user to run `/edc-build` for full context or build a lightweight manual baseline from changed files and git history
-
-**EDC context files (`edc-context/`):**
-- If `edc-context/index.md` exists, load it for routing/coupling/blast-radius guidance, critical invariants, and compact architecture context
-- Use `edc-context/manifest.json` as the authoritative machine routing contract; do not duplicate or improvise path-routing rules
-- Load relevant `edc-context/modules/{module}.md` for changed modules
-- Load `edc-context/reports/issues.md` to check if changes touch known issues
-- Use documented invariants for compliance checking
-- Use coupling/blast-radius notes for cross-module impact analysis
-
----
-
-## Example Usage
-
-### Quick Triage (Small PR)
-```
-Input: 5 file PR, 2 HIGH RISK files
-Strategy: Use Quick Reference
-1. Classify risk level per file (2 HIGH, 3 LOW)
-2. Focus on 2 HIGH files only
-3. Git blame removed code
-4. Generate minimal report
-Time: ~30 minutes
-```
-
-### Standard Review (Medium Codebase)
-```
-Input: 80 files, 12 HIGH RISK changes
-Strategy: FOCUSED (see methodology.md)
-1. Full workflow on HIGH RISK files
-2. Surface scan on MEDIUM
-3. Skip LOW risk files
-4. Complete report with all sections
-Time: ~3-4 hours
-```
-
-### Deep Audit (Large, Critical Change)
-```
-Input: 450 files, auth system rewrite
-Strategy: SURGICAL + EDC context
-1. Build/load baseline context (`/edc-build` if needed)
-2. Deep analysis on auth changes only
-3. Blast radius analysis
-4. Adversarial modeling
-5. Comprehensive report
-Time: ~6-8 hours
-```
-
----
-
-## When NOT to Use This Skill
-
-- **Greenfield code** (no baseline to compare)
-- **Documentation-only changes** (no security impact)
-- **Formatting/linting** (cosmetic changes)
-- **User explicitly requests quick summary only** (they accept risk)
-
-For these cases, use standard code review instead.
-
----
-
-## Red Flags (Stop and Investigate)
-
-**Immediate escalation triggers:**
-- Removed code from "security", "CVE", or "fix" commits
-- Access control or authorization checks removed
-- Validation removed without replacement
-- External calls or subprocess spawns added without checks
-- High blast radius (50+ callers) + HIGH risk change
-- Change touches code flagged in `edc-context/reports/issues.md`
-
-These patterns require adversarial analysis even in quick triage.
-
----
-
-## Tips for Best Results
-
-**Do:**
-- Start with git blame for removed code
-- Calculate blast radius early to prioritize
-- Generate concrete attack scenarios
-- Reference specific line numbers and commits
-- Be honest about coverage limitations
-- Always generate the output file
-
-**Don't:**
-- Skip git history analysis
-- Make generic findings without evidence
-- Claim full analysis when time-limited
-- Forget to check test coverage
-- Miss high blast radius changes
-- Output report only to chat (file required)
-
----
-
-## Supporting Documentation
-
-- **[methodology.md](methodology.md)** - Detailed phase-by-phase workflow (Phases 0-4)
-- **[adversarial.md](adversarial.md)** - Attacker modeling and exploit scenarios (Phase 5)
-- **[reporting.md](reporting.md)** - Report structure and formatting (Phase 6)
-- **[patterns.md](patterns.md)** - Common vulnerability patterns reference
-
----
-
-**For first-time users:** Start with [methodology.md](methodology.md) to understand the complete workflow.
-
-**For experienced users:** Use this page's Quick Reference and Decision Tree to navigate directly to needed content.
+- `methodology.md` — triage, history, security test confidence, blast radius, context checks
+- `adversarial.md` — attacker model, concrete attack path, exploitability
+- `patterns.md` — vulnerability pattern reference
+- `reporting.md` — security report shape and no-finding format

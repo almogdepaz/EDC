@@ -35,14 +35,12 @@ for (const required of [
   'plugins/edc/skills/**',
   'plugins/edc/prompt-bundles/**',
   'README.md',
-  'CHANGELOG.md',
   'CONTRIBUTING.md',
-  'SECURITY.md',
   'LICENSE',
 ]) {
   ok(`files allowlist includes ${required}`, files.has(required));
 }
-for (const forbidden of ['benchmark/**', 'edc-context/**', 'tests/**', 'review-tasks/**']) {
+for (const forbidden of ['CHANGELOG.md', 'SECURITY.md', 'benchmark/**', 'edc-context/**', 'tests/**', 'review-tasks/**']) {
   ok(`files allowlist excludes ${forbidden}`, !files.has(forbidden));
 }
 NODE

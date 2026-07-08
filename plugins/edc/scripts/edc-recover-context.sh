@@ -76,8 +76,26 @@ _edc_split_recovery_args() {
   done
   if [ "$seen_sep" -eq 0 ]; then
     # No separator: same args go to both phases.
-    _edc_update_args=("${_edc_build_args[@]}")
+    _edc_update_args=(${_edc_build_args[@]+"${_edc_build_args[@]}"})
   fi
+}
+
+_edc_recovery_success_with_warning_if_fresh() {
+  local phase="$1"
+  if assert_context_fresh 2>/dev/null; then
+    echo "EDC context recovery succeeded with warning: $phase subprocess reported failure, but context validation passed." >&2
+    echo "HINT: treating validated durable context as success; inspect the agent log for transport/provider diagnostics." >&2
+    return 0
+  fi
+  return 1
+}
+
+_edc_recovery_failed_after_spawn() {
+  local phase="$1"
+  echo "EDC context recovery failed." >&2
+  echo "reason: $phase subprocess failed and context validation did not pass" >&2
+  echo "next step: inspect the agent log above, then rerun context recovery after fixing the reported issue" >&2
+  echo "hint: if the agent wrote partial context, run edc doctor or rebuild with edc build --agent <agent> --force" >&2
 }
 
 recover_context_if_needed() {
@@ -93,23 +111,25 @@ recover_context_if_needed() {
   # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
   # state and route to update by mistake.
   if [ -x "$CLEAN_SLATE_SH" ]; then
-    "$EDC_BASH" "$CLEAN_SLATE_SH" >&2 || true
+    bash "$CLEAN_SLATE_SH" >&2 || true
   fi
 
   case "$state" in
     MISSING)
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..." >&2
       local build_prompt
-      build_prompt=$(resolve_prompt build "${_edc_build_args[@]}") || return 1
-      edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt" \
-        || { echo "ERROR: edc-build invocation failed" >&2; return 1; }
+      build_prompt=$(resolve_prompt build ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
+      if ! edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt"; then
+        _edc_recovery_success_with_warning_if_fresh "edc-build" || { _edc_recovery_failed_after_spawn "edc-build"; return 1; }
+      fi
       ;;
     STALE)
       echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
       local update_prompt
-      update_prompt=$(resolve_prompt update "${_edc_update_args[@]}") || return 1
-      edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" \
-        || { echo "ERROR: edc-update invocation failed" >&2; return 1; }
+      update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}) || return 1
+      if ! edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt"; then
+        _edc_recovery_success_with_warning_if_fresh "edc-update" || { _edc_recovery_failed_after_spawn "edc-update"; return 1; }
+      fi
       ;;
   esac
 
@@ -122,11 +142,12 @@ recover_context_if_needed() {
   # the build with --force exactly once before giving up.
   if [ -x "$CLEAN_SLATE_SH" ]; then
     echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
-    "$EDC_BASH" "$CLEAN_SLATE_SH" --force >&2 || true
+    bash "$CLEAN_SLATE_SH" --force >&2 || true
     local force_build_prompt
-    force_build_prompt=$(resolve_prompt build --force "${_edc_build_args[@]}") || return 1
-    edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" \
-      || { echo "ERROR: edc-build retry failed" >&2; return 1; }
+    force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
+    if ! edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt"; then
+      _edc_recovery_success_with_warning_if_fresh "edc-build retry" || { _edc_recovery_failed_after_spawn "edc-build retry"; return 1; }
+    fi
   fi
 
   if assert_context_fresh 2>/dev/null; then

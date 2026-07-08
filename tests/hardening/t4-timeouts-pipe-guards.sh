@@ -13,7 +13,9 @@ echo "=== T4: Timeouts + pipe guards ==="
 
 # ── 4a: TIMEOUT_BIN detection logic present ───────────────────────────────────
 # TIMEOUT_BIN + run_with_timeout live in edc-lib.sh now; orchestrators only call them.
-if grep -q 'TIMEOUT_BIN' "$SPAWN" && grep -q 'run_with_timeout' "$SPAWN"; then
+if grep -q 'TIMEOUT_BIN' "$SPAWN" && grep -q 'run_with_timeout' "$SPAWN" \
+  && ! grep -q 'case "${1:-}"' "$SPAWN" \
+  && grep -q 'EDC_TIMEOUT_WARNED' "$SPAWN"; then
   echo "PASS: TIMEOUT_BIN detection and run_with_timeout present"
 else
   echo "FAIL: timeout infrastructure missing from $SPAWN"
@@ -21,14 +23,22 @@ else
 fi
 
 # ── 4b: agent spawns wrapped with run_with_timeout ──────────────────────────────
-# Matches both literal seconds and env-default form (`run_with_timeout "$timeout_secs"`
-# in the helper, where $timeout_secs is set by the caller from EDC_*_TIMEOUT envs).
-# In edc-lib.sh each per-CLI branch wraps with run_with_timeout.
+# All stream-json backends route through one shared helper that wraps the actual
+# agent command with run_with_timeout.
 wrapped=$(grep -cE '^\s+run_with_timeout' "$SPAWN")
-if [ "$wrapped" -ge 3 ]; then
-  echo "PASS: agent spawns wrapped with run_with_timeout ($wrapped per-CLI branches)"
+if [ "$wrapped" -eq 1 ] && grep -q '^edc_run_filtered_stream()' "$SPAWN"; then
+  echo "PASS: agent spawns wrapped with shared run_with_timeout helper"
 else
-  echo "FAIL: expected >=3 wrapped per-CLI branches in $SPAWN, found $wrapped"
+  echo "FAIL: expected one shared run_with_timeout helper in $SPAWN, found $wrapped wrappers"
+  exit 1
+fi
+
+# ── 4b2: stream capture/filter pipeline is shared, not per-backend duplicated ─
+if grep -q '^edc_run_filtered_stream()' "$SPAWN" \
+  && [ "$(grep -c 'tee "\$capture"' "$SPAWN")" -eq 1 ]; then
+  echo "PASS: stream capture/filter pipeline is shared"
+else
+  echo "FAIL: stream capture/filter pipeline is duplicated across backends"
   exit 1
 fi
 

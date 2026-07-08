@@ -1,0 +1,14 @@
+{
+  "skill": "edc-audit",
+  "fixture": "error-test-value",
+  "requiredFindings": [
+    { "category": "interface honesty", "evidence": "getUserPreference" },
+    { "category": "swallowed error", "evidence": "catch" },
+    { "category": "test value", "evidence": "testGetUserPreferenceMocksFetch" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "spec delivery" }
+  ],
+  "requiredEvidence": ["src/cache.ts", "memory.set"]
+}

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# bash >= 4 required
-[[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]] || {
-  echo "ERROR: requires bash >= 4.0 (on macOS: brew install bash)" >&2
-  exit 2
-}
 # edc-build orchestrator.
 # Deterministic control plane for /edc:edc-build.
 #
@@ -33,30 +28,15 @@ set -euo pipefail
 
 # ── dependency check ─────────────────────────────────────────────────────────
 
-if ! command -v jq > /dev/null 2>&1; then
-  echo "ERROR: jq is required (brew install jq / apt install jq)" >&2
-  exit 2
-fi
 if ! command -v git > /dev/null 2>&1; then
   echo "ERROR: git is required" >&2
   exit 2
 fi
 
-# Resolve SCRIPT_DIR through symlinks so sibling helpers are found via the
-# real script location, not the invocation path.
-_edc_resolve_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [ -L "$src" ]; do
-    local dir
-    dir="$(cd -P "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ $src != /* ]] && src="$dir/$src"
-  done
-  cd -P "$(dirname "$src")" && pwd
-}
-SCRIPT_DIR="$(_edc_resolve_script_dir)"
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=edc-lib.sh
 . "$SCRIPT_DIR/edc-lib.sh"
+SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
@@ -87,14 +67,17 @@ EOF
 # Exits non-zero with a v1 migration hint if v1 markers detected.
 decide_route() {
   local force="$1"
-  local rc=0
-  "$EDC_BASH" "$CLEAN_SLATE_SH" --check > /dev/null 2>/tmp/edc-clean-slate-check.err || rc=$?
+  local rc=0 check_err
+  check_err=$(mktemp)
+  bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     0)  # no context dir
+      rm -f "$check_err"
       echo "build"
       return 0
       ;;
     11) # healthy v2
+      rm -f "$check_err"
       if [ "$force" = "1" ]; then
         echo "wipe-and-build"
       else
@@ -103,16 +86,19 @@ decide_route() {
       return 0
       ;;
     10) # partial / malformed v2
+      rm -f "$check_err"
       echo "wipe-and-build"
       return 0
       ;;
     12) # v1 layout — refuse
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 12
       ;;
     *)
       echo "ERROR: edc-clean-slate.sh --check returned unexpected exit $rc" >&2
-      cat /tmp/edc-clean-slate-check.err >&2 || true
+      cat "$check_err" >&2 || true
+      rm -f "$check_err"
       return 1
       ;;
   esac
@@ -202,6 +188,8 @@ EOF
 # ── main ─────────────────────────────────────────────────────────────────────
 
 build_main() {
+  edc_result_begin build
+  trap edc_result_on_exit EXIT
   local force=0
   local -a passthrough=()
 
@@ -230,13 +218,20 @@ build_main() {
   edc_require_agent_cli
 
   # Decide route in shell (LLM does NOT make this call).
-  local route
-  route=$(decide_route "$force") || exit $?
+  local route route_rc=0
+  route=$(decide_route "$force") || route_rc=$?
+  if [ "$route_rc" -ne 0 ]; then
+    case "$route_rc" in
+      12) edc_result_failure "$route_rc" "legacy-v1-layout" "legacy v1 edc-context layout detected" "remove edc-context and run edc build again" ;;
+      *) edc_result_failure "$route_rc" "build-route-failed" "build route decision failed" "inspect edc-clean-slate output and rerun after fixing it" ;;
+    esac
+    exit "$route_rc"
+  fi
   echo "→ build route: $route"
 
   # Wipe if route demands it.
   if [ "$route" = "wipe-and-build" ]; then
-    "$EDC_BASH" "$CLEAN_SLATE_SH" --force >&2 \
+    bash "$CLEAN_SLATE_SH" --force >&2 \
       || { echo "ERROR: clean-slate --force failed" >&2; exit 1; }
   fi
 
@@ -260,7 +255,7 @@ build_main() {
   fi
 
   echo "→ spawning $EDC_AGENT_CLI for edc-$action..."
-  prompt=$(resolve_prompt "$action" "${passthrough[@]}") || exit 1
+  prompt=$(resolve_prompt "$action" ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   local timeout_var
   if [ "$action" = "update" ]; then
     timeout_var="${EDC_UPDATE_TIMEOUT:-1800}"
@@ -268,7 +263,7 @@ build_main() {
     timeout_var="${EDC_BUILD_TIMEOUT:-3600}"
   fi
   edc_spawn "edc-$action" "$timeout_var" "$prompt" \
-    || { echo "ERROR: edc-$action invocation failed" >&2; exit 1; }
+    || { echo "ERROR: edc-$action invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-$action agent invocation failed" "inspect the log above, then rerun edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
   if [ "$action" = "build" ]; then
     finalize_agents_entrypoint
@@ -279,7 +274,7 @@ build_main() {
     echo "ERROR: edc-doctor.sh not found at $DOCTOR_SH" >&2
     exit 1
   fi
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: build produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi
@@ -287,12 +282,13 @@ build_main() {
   edc_run_context_curator || exit 1
   edc_run_context_curator_edit || exit 1
 
-  if ! "$EDC_BASH" "$DOCTOR_SH"; then
+  if ! bash "$DOCTOR_SH"; then
     echo "ERROR: context curator edit produced an invalid v2 layout (edc-doctor failed)" >&2
     exit 1
   fi
   edc_remove_context_curator_report
 
+  edc_result_success
   echo "Build OK. Layout validated by edc-doctor; context curator report/edit pass completed."
   exit 0
 }

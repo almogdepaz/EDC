@@ -13,12 +13,12 @@ the user-facing tour.
 |---------|--------------|
 | `/edc:edc-build` | Build the v2 context tree (`AGENTS.md`, `edc-context/index.md`, `edc-context/manifest.json`, `edc-context/modules/*`) |
 | `/edc:edc-update` | Incrementally refresh the v2 context tree from branch diff |
-| `/edc:edc-run-review` | Run differential review on the current branch / commit / PR number or URL |
+| `/edc:edc-run-review` | Run combined security, delivery, and quality review for `--full` or a git diff target/base |
 | `/edc:edc-doctor` | Validate the v2 context tree and manifest routing contract |
 
-Audit and review methodology are exposed as skills (`edc-audit`, `edc-review`), not as user-facing commands. Internal worker command shims were removed so autocomplete only shows real user actions.
+Quality review, security review, and delivery/architecture review methodology are exposed as skills (`edc-audit`, `edc-review`, `edc-delivery-review`). Internal worker command shims were removed so autocomplete only shows real user actions.
 
-Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes those workflows through one interactive `/edc` menu (review/status/build/update/audit/doctor) registered by `pi/`.
+Cursor (`/edc-*`) and Codex (`$edc-*`) expose the same user-facing command set through wrappers emitted by `install.sh`: build, update, run-review, and doctor. Pi exposes workflows through one interactive `/edc` menu: choose scope first (full repo, changes vs default branch, or custom base), then lens (combined/security/delivery/quality), plus status/build/update/doctor.
 
 ## Internal structure
 
@@ -31,11 +31,12 @@ plugins/edc/
     edc-doctor.md
 
   scripts/                             # everything that ships to ~/.edc/scripts/
-    edc                                # terminal CLI (build / update / review / audit / mode / doctor)
+    edc                                # terminal CLI (build / update / review/security/delivery/quality / mode / doctor)
     edc-build.sh                       # full-build orchestrator
     edc-update.sh                      # incremental-update orchestrator
-    edc-audit.sh                       # complexity / bloat audit orchestrator
-    edc-review.sh                      # differential review orchestrator
+    edc-audit.sh                       # quality review / maintainability orchestrator (full or diff-scoped)
+    edc-review.sh                      # security/adversarial review orchestrator
+    edc-delivery-review.sh             # goal/spec delivery + architecture-fit review orchestrator
     edc-doctor.sh                      # context-tree validator
 
     edc-lib.sh                         # sourced helpers: PATHS, RUNTIME, SPAWN, PROMPT sections
@@ -43,13 +44,14 @@ plugins/edc/
     edc-clean-slate.sh                 # v1 leftover detection + wipe
     edc-recover-context.sh             # auto-rebuild/update when context is stale
 
-    edc-route.sh                       # path -> module router (exec'd, stable CLI contract)
     edc-manifest.sh                    # manifest stdin/stdout filter
+    ../hooks/lib/classify-cli.mjs      # batch path classifier used by shell orchestrators
     edc-build-plan.sh                  # deterministic per-module task planner (jq)
 
   skills/                              # user-facing methodology skills
-    edc-review/                        # differential review methodology + patterns
-    edc-audit/                         # bloat / duplication / overengineering methodology
+    edc-review/                        # security/adversarial review methodology + patterns
+    edc-audit/                         # code quality / maintainability audit methodology
+    edc-delivery-review/               # goal/spec delivery + architecture-fit review methodology
 
   prompt-bundles/                      # hidden prompt bundles for orchestrators
     edc-module-context-impl/           # per-module context methodology
@@ -65,7 +67,7 @@ plugins/edc/
 
 ## Design: script-as-orchestrator
 
-The user's agent session uses thin command wrappers that call deterministic orchestrators (`edc-build.sh`, `edc-update.sh`, `edc-review.sh`, `edc-doctor.sh`; terminal CLI also exposes `edc-audit.sh`), which:
+The user's agent session uses thin command wrappers that call deterministic orchestrators (`edc-build.sh`, `edc-update.sh`, `edc-review.sh`, `edc-delivery-review.sh`, `edc-doctor.sh`; terminal CLI also exposes `edc-audit.sh`), which:
 
 1. Validates context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Auto-rebuilds or auto-updates context if stale (via `edc-recover-context.sh`)
@@ -81,19 +83,21 @@ their outputs.
 
 ## Skill files as prompt templates
 
-`skills/edc-review/` contains:
+`skills/edc-review/` contains the security/adversarial review bundle:
 
-- `SKILL.md` — main review workflow definition
-- `methodology.md` — phase-by-phase review process
+- `SKILL.md` — main security review workflow definition
+- `methodology.md` — security triage/history/blast-radius workflow
 - `patterns.md` — vulnerability pattern catalog (tunable via autoresearch / GEPA)
 - `adversarial.md` — attacker modeling methodology
-- `reporting.md` — output format contract
+- `reporting.md` — security report contract
 
-These are **prompt material**. The orchestrator concatenates them into the
-subprocess prompt; they exist as separate files so each one can be tuned
-independently.
+`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting. Runtime result JSON uses `success`, `failed`, or `success-with-warning`; the warning state means durable reports/context validated despite transport/provider oddities.
 
-`prompt-bundles/edc-build-impl/`, `prompt-bundles/edc-update-impl/`, and `prompt-bundles/edc-module-context-impl/` are hidden prompt bundles for orchestrator subprocesses. `skills/edc-audit/` is both a user-facing methodology skill and the audit prompt used by terminal/orchestrated audit flows.
+`skills/edc-delivery-review/` contains the delivery/architecture review bundle. It keeps goal/spec delivery and architecture fit as separate axes.
+
+These are **prompt material**. Runtime prompt resolution embeds the required bundle files for orchestrated subprocesses; they exist as separate files so each one can be tuned independently.
+
+`prompt-bundles/edc-build-impl/`, `prompt-bundles/edc-update-impl/`, and `prompt-bundles/edc-module-context-impl/` are hidden prompt bundles for orchestrator subprocesses.
 
 ## Multi-agent support
 
@@ -121,11 +125,18 @@ resolution, pi JSON supervision, and codex-home isolation.
 ## Default invocation
 
 ```bash
-edc-review.sh --base main              # review current branch vs main
-edc-review.sh feat-branch --base main  # review branch vs main
-edc-review.sh --pr 42 --base main      # review PR by number (uses gh)
-edc-review.sh https://github.com/...   # review PR by URL (uses gh)
-edc-review.sh path/to/diff.patch       # review diff file
+edc review full --agent pi             # combined full repo review
+edc review diff main --agent pi        # combined current branch vs main
+edc security full --agent pi           # security full repo review
+edc security diff main --agent pi      # security current branch vs main
+edc delivery full --agent pi           # delivery/architecture full repo review
+edc quality diff main --agent pi       # quality review for modules changed vs main
+
+edc-review.sh --full                   # lower-level security full repo review
+edc-review.sh --base main              # lower-level security current branch vs main
+edc-review.sh --pr 42 --base main      # lower-level security PR by number (uses gh)
+edc-review.sh https://github.com/...   # lower-level security PR by URL (uses gh)
+edc-review.sh path/to/diff.patch       # lower-level security diff file
 ```
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.

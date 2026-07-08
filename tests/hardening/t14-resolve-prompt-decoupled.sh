@@ -35,6 +35,11 @@ echo "UPDATE_SKILL_MARKER" > "$SKILLS_DIR/edc-update-impl/SKILL.md"
 echo "CURATOR_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-impl/SKILL.md"
 echo "CURATOR_EDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-edit-impl/SKILL.md"
 echo "AUDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-audit/SKILL.md"
+mkdir -p "$SKILLS_DIR/edc-audit/references"
+echo "AUDIT_SCOPE_MARKER" > "$SKILLS_DIR/edc-audit/references/scope-and-standards.md"
+echo "AUDIT_SMELL_MARKER" > "$SKILLS_DIR/edc-audit/references/smell-baseline.md"
+echo "AUDIT_CHECKS_MARKER" > "$SKILLS_DIR/edc-audit/references/quality-checks.md"
+echo "AUDIT_REPORTING_MARKER" > "$SKILLS_DIR/edc-audit/references/reporting.md"
 echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"
 echo "METHODOLOGY_MARKER" > "$SKILLS_DIR/edc-review/methodology.md"
 echo "ADVERSARIAL_MARKER" > "$SKILLS_DIR/edc-review/adversarial.md"
@@ -97,6 +102,18 @@ for action_skill in "build:BUILD_SKILL_MARKER" \
   fi
 done
 
+# ── 14.2b: audit prompt embeds the full audit bundle ───────────────────────
+out=$(run_resolve claude audit)
+all_audit_present=1
+for marker in "AUDIT_SKILL_MARKER" \
+              "AUDIT_SCOPE_MARKER" \
+              "AUDIT_SMELL_MARKER" \
+              "AUDIT_CHECKS_MARKER" \
+              "AUDIT_REPORTING_MARKER"; do
+  echo "$out" | grep -qF "$marker" || all_audit_present=0
+done
+check "claude audit: embeds full audit bundle (5 markers)" "$all_audit_present"
+
 # ── 14.3: build/update arg-string forwarding ────────────────────────────────
 out=$(run_resolve claude build --force --focus broker)
 if echo "$out" | grep -qF "CLI ARGUMENTS: --force --focus broker"; then
@@ -150,6 +167,15 @@ for agent in cursor codex; do
       check "$agent $action: emits SKILL.md content ($marker)" 0
     fi
   done
+
+  out=$(run_resolve "$agent" audit)
+  all_audit_present=1
+  for marker in "AUDIT_SKILL_MARKER" "AUDIT_SCOPE_MARKER" \
+                "AUDIT_SMELL_MARKER" "AUDIT_CHECKS_MARKER" \
+                "AUDIT_REPORTING_MARKER"; do
+    echo "$out" | grep -qF "$marker" || all_audit_present=0
+  done
+  check "$agent audit: embeds full audit bundle (5 markers)" "$all_audit_present"
 
   out=$(run_resolve "$agent" review "$TASK_FILE")
   all_present=1

@@ -1,0 +1,12 @@
+{
+  "skill": "edc-review",
+  "fixture": "benign-refactor",
+  "noSecurityFindings": true,
+  "requiredFindings": [],
+  "forbiddenFindings": [
+    { "category": "style" },
+    { "category": "maintainability" },
+    { "category": "delivery" }
+  ],
+  "requiredEvidence": ["src/render.diff", "No security findings"]
+}

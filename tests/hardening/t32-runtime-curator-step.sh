@@ -10,21 +10,7 @@ TMP="$(mktemp -d)"
 MOCK_BIN="$TMP/bin"
 trap 'rm -rf "$TMP"' EXIT
 
-resolve_bash4() {
-  local candidate
-  for candidate in "${EDC_BASH:-}" /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null || true)" /bin/bash; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    if "$candidate" -lc '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
-}
-
-BASH_BIN="$(resolve_bash4)" || { echo "FAIL: bash >=4 not found"; exit 1; }
-export EDC_BASH="$BASH_BIN"
+BASH_BIN="${BASH_BIN:-bash}"
 
 mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/claude" <<'MOCK'

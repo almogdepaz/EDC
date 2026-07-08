@@ -2,28 +2,36 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JSON_CLI="$SCRIPT_DIR/../hooks/lib/json-cli.mjs"
 
 usage() {
   cat <<'EOF'
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review --agent claude|cursor|codex|pi [target|--pr <number-or-url>] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
-  edc [--model <slug>] audit  --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review   full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] delivery full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality  full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target|--pr <number-or-url>|--full] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>|--full] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
   edc mode advisory|inject
   edc doctor
 
 Commands:
   build   Build or update edc-context/ in the target repo (auto-routes between full build and update)
   update  Force the incremental-update path explicitly (refuses if edc-context/ is missing/broken)
-  review  Run the differential review pipeline (auto-builds/updates context if needed)
-  audit   Run the complexity-audit pipeline (auto-builds/updates context if needed)
+  review    Run all review phases: security, delivery, and quality
+  security  Run the security review pipeline
+  delivery  Run the goal/spec delivery + architecture-fit review pipeline
+  quality   Run the code-quality/maintainability review pipeline
   mode    Set policy.defaultMode in edc-context/manifest.json (advisory or inject)
   doctor  Validate the v2 context tree and manifest routing contract
 
 Notes:
-  --agent is required for build, update, review, and audit.
-  --model is optional and applies to both build and review phases. Per-phase
+  --agent is required for build, update, review, security, delivery, and quality.
+  --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
     'claude-haiku-4-5'; cursor: 'sonnet-4'; etc).
@@ -82,8 +90,9 @@ find_script() {
 read_manifest_default_mode() {
   local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || return 0
-  command -v jq > /dev/null 2>&1 || die "jq is required to read $manifest"
-  jq -r '.policy.defaultMode // empty' "$manifest"
+  command -v node > /dev/null 2>&1 || die "node is required to read $manifest"
+  [ -f "$JSON_CLI" ] || die "json-cli.mjs not found at $JSON_CLI"
+  node "$JSON_CLI" mode-get "$manifest"
 }
 
 validate_context_mode() {
@@ -111,31 +120,170 @@ enforce_agent_context_mode() {
   esac
 }
 
-build_cmd() {
-  local agent=""
-  local target="."
-  local positional_target=""
-  local -a passthrough=()
+option_in_list() {
+  local needle="$1" list="$2"
+  case " $list " in
+    *" $needle "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+detect_default_base_ref() {
+  local ref stripped
+  ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$ref" ]; then
+    if git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+    stripped=${ref#origin/}
+    if [ "$stripped" != "$ref" ] && git rev-parse --verify "$stripped^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$stripped"
+      return 0
+    fi
+  fi
+  for ref in main master origin/main origin/master; do
+    if git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+  done
+  printf '%s\n' main
+}
+
+canonical_scope_dispatch() {
+  local lens="$1"
+  shift
+  local scope="${1:-}"
+  case "$scope" in
+    full)
+      shift
+      CANONICAL_SCOPE_ARGS=(--full ${@+"$@"})
+      ;;
+    diff)
+      shift
+      local base
+      if [ "${1:-}" != "" ] && [ "${1#-}" = "$1" ]; then
+        base="$1"
+        shift
+      else
+        base=$(detect_default_base_ref)
+      fi
+      CANONICAL_SCOPE_ARGS=(HEAD --base "$base" ${@+"$@"})
+      ;;
+    "")
+      die "edc $lens requires a scope: full or diff [base]"
+      ;;
+    *)
+      die "edc $lens scope must be 'full' or 'diff [base]' (got: $scope)"
+      ;;
+  esac
+}
+
+normalize_scope_args() {
+  local command_name="$1" supports_full="$2"
+  shift 2
+
+  PARSED_SCOPE_ARGS=()
+  local diff_spec="" full_scope=0 has_base=0 positional_count=0
+  local -a other_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --diff)
+        [ "$#" -ge 2 ] || die "--diff requires a value like <base>...<target>"
+        [ -z "$diff_spec" ] || die "--diff may only be specified once"
+        diff_spec="$2"
+        shift 2
+        ;;
+      --full)
+        full_scope=1
+        shift
+        ;;
+      --base)
+        [ "$#" -ge 2 ] || die "--base requires a value"
+        has_base=1
+        other_args+=("$1" "$2")
+        shift 2
+        ;;
+      --ignore|--context-mode|--pr)
+        [ "$#" -ge 2 ] || die "$1 requires a value"
+        other_args+=("$1" "$2")
+        shift 2
+        ;;
+      --*)
+        other_args+=("$1")
+        shift
+        ;;
+      *)
+        positional_count=$((positional_count + 1))
+        other_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [ "$full_scope" -eq 1 ] && { [ -n "$diff_spec" ] || [ "$has_base" -ne 0 ] || [ "$positional_count" -ne 0 ]; }; then
+    die "--full cannot be combined with --diff, --base, or a positional target"
+  fi
+  if [ -n "$diff_spec" ] && { [ "$has_base" -ne 0 ] || [ "$positional_count" -ne 0 ]; }; then
+    die "--diff cannot be combined with --base or a positional target"
+  fi
+  if [ "$full_scope" -eq 1 ]; then
+    [ "$supports_full" -eq 1 ] || die "--full is not supported for $command_name yet; use --diff <base>...<target>"
+    PARSED_SCOPE_ARGS=("--full")
+    if [ "${#other_args[@]}" -gt 0 ]; then
+      PARSED_SCOPE_ARGS+=("${other_args[@]}")
+    fi
+    return 0
+  fi
+  if [ -n "$diff_spec" ]; then
+    case "$diff_spec" in
+      *...*) ;;
+      *) die "--diff must use <base>...<target>" ;;
+    esac
+    local base_ref="${diff_spec%%...*}"
+    local target_ref="${diff_spec#*...}"
+    [ -n "$base_ref" ] || die "--diff base ref is empty"
+    [ -n "$target_ref" ] || die "--diff target ref is empty"
+    PARSED_SCOPE_ARGS=("$target_ref" "--base" "$base_ref")
+    if [ "${#other_args[@]}" -gt 0 ]; then
+      PARSED_SCOPE_ARGS+=("${other_args[@]}")
+    fi
+    return 0
+  fi
+  PARSED_SCOPE_ARGS=()
+  if [ "${#other_args[@]}" -gt 0 ]; then
+    PARSED_SCOPE_ARGS=("${other_args[@]}")
+  fi
+}
+
+parse_agent_context_args() {
+  local command_name="$1" allow_context_mode="$2" position_mode="$3" unknown_policy="$4" flag_opts="$5" value_opts="$6"
+  shift 6
+
+  PARSED_AGENT=""
+  PARSED_CONTEXT_MODE=""
+  PARSED_POSITIONAL_TARGET=""
+  PARSED_PASSTHROUGH=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --agent)
         [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --force)
-        passthrough+=("$1")
-        shift
-        ;;
-      --focus)
-        [ "$#" -ge 2 ] || die "--focus requires a module name"
-        passthrough+=("$1" "$2")
+        PARSED_AGENT="$2"
         shift 2
         ;;
       --ignore)
         [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
+        PARSED_PASSTHROUGH+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
+        [ "$allow_context_mode" -eq 1 ] || die "unknown $command_name option: $1"
+        [ "$#" -ge 2 ] || die "--context-mode requires a value"
+        PARSED_CONTEXT_MODE="$2"
+        PARSED_PASSTHROUGH+=("$1" "$2")
         shift 2
         ;;
       --help|-h)
@@ -143,25 +291,66 @@ build_cmd() {
         exit 0
         ;;
       --*)
-        die "unknown build option: $1"
+        if option_in_list "$1" "$flag_opts"; then
+          PARSED_PASSTHROUGH+=("$1")
+          shift
+        elif option_in_list "$1" "$value_opts"; then
+          [ "$#" -ge 2 ] || die "$1 requires a value"
+          PARSED_PASSTHROUGH+=("$1" "$2")
+          shift 2
+        elif [ "$unknown_policy" = "passthrough" ]; then
+          PARSED_PASSTHROUGH+=("$1")
+          shift
+        else
+          die "unknown $command_name option: $1"
+        fi
         ;;
       *)
-        if [ -n "$positional_target" ]; then
-          die "build accepts at most one path"
-        fi
-        positional_target="$1"
-        shift
+        case "$position_mode" in
+          build-target)
+            if [ -n "$PARSED_POSITIONAL_TARGET" ]; then
+              die "build accepts at most one path"
+            fi
+            PARSED_POSITIONAL_TARGET="$1"
+            shift
+            ;;
+          passthrough)
+            PARSED_PASSTHROUGH+=("$1")
+            shift
+            ;;
+          none)
+            die "unknown $command_name option: $1"
+            ;;
+          *)
+            die "internal parser error: unknown position mode '$position_mode'"
+            ;;
+        esac
         ;;
     esac
   done
+}
 
-  [ -n "$agent" ] || die "--agent is required"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
+finalize_agent_context() {
+  local use_context_mode="$1"
 
-  if [ -n "$positional_target" ]; then
-    target="$positional_target"
+  [ -n "$PARSED_AGENT" ] || die "--agent is required"
+  if [ "$use_context_mode" -eq 1 ]; then
+    validate_context_mode "$PARSED_CONTEXT_MODE"
+    if [ -z "$PARSED_CONTEXT_MODE" ]; then
+      PARSED_CONTEXT_MODE="$(read_manifest_default_mode)"
+      validate_context_mode "$PARSED_CONTEXT_MODE"
+    fi
+    enforce_agent_context_mode "$PARSED_AGENT" "$PARSED_CONTEXT_MODE"
   fi
+  require_command "$PARSED_AGENT"
+  _check_model_or_prompt "$PARSED_AGENT"
+}
+
+build_cmd() {
+  parse_agent_context_args build 0 build-target strict "--force" "--focus" "$@"
+  finalize_agent_context 0
+
+  local target="${PARSED_POSITIONAL_TARGET:-.}"
   [ -d "$target" ] || die "build target directory not found: $target"
 
   local build_script
@@ -170,176 +359,77 @@ build_cmd() {
 
   (
     cd "$target"
-    EDC_AGENT_CLI="$agent" "$EDC_BASH" "$build_script" "${passthrough[@]}"
+    EDC_AGENT_CLI="$PARSED_AGENT" bash "$build_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
   )
 }
 
-review_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
-
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --base)
-        [ "$#" -ge 2 ] || die "--base requires a ref (e.g. --base main)"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern (e.g. --ignore 'vendor/**')"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        passthrough+=("$1")
-        shift
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
+security_review_cmd() {
+  parse_agent_context_args security-review 1 passthrough passthrough "--no-context-refresh --ignore-context --full" "--base --diff --pr" "$@"
+  finalize_agent_context 1
+  normalize_scope_args security-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local review_script
   review_script="$(find_script edc-review.sh)" \
     || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$review_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
-audit_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
+review_all_cmd() {
+  parse_agent_context_args review 1 passthrough passthrough "--full" "--base --diff" "$@"
+  finalize_agent_context 1
+  normalize_scope_args review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        die "unknown audit option: $1"
-        ;;
-    esac
-  done
+  local review_all_script
+  review_all_script="$(find_script edc-review-all.sh)" \
+    || die "edc-review-all.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review-all.sh"
 
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_all_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+}
+
+delivery_review_cmd() {
+  parse_agent_context_args delivery-review 1 passthrough passthrough "--full" "--base --diff" "$@"
+  finalize_agent_context 1
+  normalize_scope_args delivery-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+
+  local delivery_script
+  delivery_script="$(find_script edc-delivery-review.sh)" \
+    || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
+
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+}
+
+quality_review_cmd() {
+  parse_agent_context_args quality-review 1 passthrough passthrough "" "--base --diff" "$@"
+  finalize_agent_context 1
+  normalize_scope_args quality-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
   local audit_script
   audit_script="$(find_script edc-audit.sh)" \
     || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$audit_script" "${passthrough[@]}"
+  if [ "${#PARSED_SCOPE_ARGS[@]}" -gt 0 ]; then
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" "${PARSED_SCOPE_ARGS[@]}"
+  else
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script"
+  fi
 }
 
 update_cmd() {
-  local agent=""
-  local context_mode=""
-  local -a passthrough=()
-
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --agent)
-        [ "$#" -ge 2 ] || die "--agent requires a value"
-        agent="$2"
-        shift 2
-        ;;
-      --base)
-        [ "$#" -ge 2 ] || die "--base requires a ref"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --ignore)
-        [ "$#" -ge 2 ] || die "--ignore requires a glob pattern"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --context-mode)
-        [ "$#" -ge 2 ] || die "--context-mode requires a value"
-        context_mode="$2"
-        passthrough+=("$1" "$2")
-        shift 2
-        ;;
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      *)
-        die "unknown update option: $1"
-        ;;
-    esac
-  done
-
-  [ -n "$agent" ] || die "--agent is required"
-  validate_context_mode "$context_mode"
-  if [ -z "$context_mode" ]; then
-    context_mode="$(read_manifest_default_mode)"
-    validate_context_mode "$context_mode"
-  fi
-  enforce_agent_context_mode "$agent" "$context_mode"
-  require_command "$agent"
-  _check_model_or_prompt "$agent"
+  parse_agent_context_args update 1 none strict "" "--base" "$@"
+  finalize_agent_context 1
 
   local update_script
   update_script="$(find_script edc-update.sh)" \
     || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
 
-  EDC_AGENT_CLI="$agent" EDC_CONTEXT_MODE="$context_mode" "$EDC_BASH" "$update_script" "${passthrough[@]}"
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$update_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
-
 doctor_cmd() {
   local doctor_script
   doctor_script="$(find_script edc-doctor.sh)" \
     || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
-  "$EDC_BASH" "$doctor_script"
+  bash "$doctor_script"
 }
 
 mode_cmd() {
@@ -358,11 +448,15 @@ mode_cmd() {
 
   local manifest="edc-context/manifest.json"
   [ -f "$manifest" ] || die "$manifest not found (run 'edc build' first)"
-  command -v jq > /dev/null 2>&1 || die "jq is required to update $manifest"
+  command -v node > /dev/null 2>&1 || die "node is required to update $manifest"
+  [ -f "$JSON_CLI" ] || die "json-cli.mjs not found at $JSON_CLI"
 
   local tmp
-  tmp="$(mktemp)"
-  jq --arg mode "$mode" '.policy.defaultMode = $mode' "$manifest" > "$tmp"
+  tmp="$(mktemp "${manifest}.tmp.XXXXXX")"
+  if ! node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
   mv "$tmp" "$manifest"
   echo "policy.defaultMode set to $mode in $manifest"
 }
@@ -418,8 +512,6 @@ main() {
   }
 
   _load_config
-  EDC_BASH="${EDC_BASH:-$BASH}"
-  export EDC_BASH
 
   # Parse top-level --model <slug>. Must appear before the subcommand verb.
   while [ "$#" -gt 0 ]; do
@@ -444,10 +536,42 @@ main() {
       build_cmd "$@"
       ;;
     review)
-      review_cmd "$@"
+      if [ "${1:-}" = "full" ] || [ "${1:-}" = "diff" ]; then
+        canonical_scope_dispatch review "$@"
+        review_all_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      else
+        review_all_cmd "$@"
+      fi
       ;;
-    audit)
-      audit_cmd "$@"
+    security)
+      canonical_scope_dispatch security "$@"
+      security_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      ;;
+    delivery)
+      canonical_scope_dispatch delivery "$@"
+      delivery_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      ;;
+    quality)
+      canonical_scope_dispatch quality "$@"
+      if [ "${CANONICAL_SCOPE_ARGS[0]:-}" = "--full" ]; then
+        # Full quality review is the audit orchestrator without target/base args;
+        # keep only non-scope passthrough flags after the scope token.
+        quality_review_cmd "${CANONICAL_SCOPE_ARGS[@]:1}"
+      else
+        quality_review_cmd ${CANONICAL_SCOPE_ARGS[@]+"${CANONICAL_SCOPE_ARGS[@]}"}
+      fi
+      ;;
+    review-all)
+      review_all_cmd "$@"
+      ;;
+    security-review)
+      security_review_cmd "$@"
+      ;;
+    delivery-review)
+      delivery_review_cmd "$@"
+      ;;
+    quality-review|audit)
+      quality_review_cmd "$@"
       ;;
     update)
       update_cmd "$@"

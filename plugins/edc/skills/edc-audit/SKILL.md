@@ -1,142 +1,48 @@
 ---
 name: edc-audit
-description: Identifies overengineering, code bloat, and duplication by comparing context expectations to actual code
+description: Identifies code quality, maintainability, overengineering, bloat, duplication, and test-value risks by comparing EDC context expectations to actual code
 ---
 
-# Audit Complexity
+# Audit Code Quality
 
-Analyze the codebase for overengineering, bloat, and duplication using the `edc-context/` files as a baseline for what the code SHOULD look like.
+Analyze code quality and maintainability using the `edc-context/` files as the baseline for what the code SHOULD look like. This is a read-only scoped analysis pass: audit workers must not mutate source code, branch state, generated context, or canonical reports outside their assigned report artifact.
 
 **Clean Slate Rule:** When spawning subagents for analysis, they MUST be fresh agents with NO access to the current conversation context. This prevents bias from user discussion influencing findings. See `edc-build-impl` for rationale.
 
+## Required references
+
+Read these bundled references before producing findings:
+
+1. `references/scope-and-standards.md` — scope discipline, standards sources, evidence rules, and tooling-skip policy
+2. `references/smell-baseline.md` — Fowler smell baseline; use as heuristics and label baseline-only findings as possible smell
+3. `references/quality-checks.md` — concrete code-quality checks for maintainability, correctness smells, error handling, tests, type/contracts, and simplicity
+4. `references/reporting.md` — canonical report targets and finding format
+
+The runtime embeds these files below this `SKILL.md` for orchestrated audit runs. If invoking the skill manually and the references are not embedded, read them from this skill directory before continuing.
+
 ## Prerequisites
 
-This skill runs only inside an audit subprocess spawned by `plugins/edc/scripts/edc-audit.sh`. The orchestrator gates on `edc-context/manifest.json` freshness and auto-recovers (build/update) before invoking this skill, so when this skill runs you can assume `edc-context/modules/` and `edc-context/manifest.json` exist and reflect HEAD. If they don't, that's an orchestrator bug — fail loudly rather than trying to repair the layout from inside the skill.
+This skill usually runs inside an audit subprocess spawned by `plugins/edc/scripts/edc-audit.sh` or a build-time audit orchestration step. The orchestrator is responsible for context freshness and for assigning scope.
 
-## Process
+When invoked for the current whole-repo audit command, assume `edc-context/modules/` and `edc-context/manifest.json` exist and reflect HEAD. During build-time module audit, a task may provide module files directly before the final manifest exists; in that case, use the task-provided module doc and file list rather than requiring `manifest.json`.
 
-### Step 1 — LOC vs Complexity Estimate
+If required scope inputs are missing, fail loudly. Do not repair the context layout from inside the skill.
 
-For each `edc-context/modules/{module}.md`:
-1. Read the module purpose and the invariants/flows described
-2. Based on the described complexity, estimate what a senior engineer would write this in (LOC)
-3. Count actual LOC of the module's source files
-4. Flag modules where actual LOC > 2x the estimate
+## Workflow
 
-Output per module:
-```
-| Module | Estimated LOC | Actual LOC | Ratio | Verdict |
-```
+1. **Load scope and standards.** Follow `references/scope-and-standards.md`. Identify documented standards sources for the assigned scope and record any rules that materially affect findings.
+2. **Load smell baseline.** Follow `references/smell-baseline.md`. Repo standards override baseline smells; baseline-only findings are judgement calls.
+3. **Run quality checks.** Follow `references/quality-checks.md`. Verify every candidate in context before reporting it.
+4. **Write output.** Follow `references/reporting.md`. Scoped workers write only their assigned artifact; synthesis/whole-repo runs write `edc-context/reports/{complexity,issues}.md`.
 
-### Step 2 — Dead Exports
+## Quality-only boundary
 
-For each source file, find all exports (functions, classes, types, constants). For each export, grep the entire codebase for imports/usage. Flag exports with zero external references.
+This audit targets code quality only: maintainability, correctness smells, error handling, interface clarity, type/contracts, test value, duplication, bloat, and simplicity.
 
-### Step 3 — Wrapper Functions
+Do not turn this into a delivery/spec review. Do not judge whether the change implements the user's goal unless the issue is visible as code-quality evidence inside the assigned scope.
 
-Find functions that:
-- Have a body of 1-3 lines
-- Call exactly one other function
-- Pass through all or most arguments unchanged
-- Add no logic, validation, or transformation
+Do not turn this into an exploit-focused review. If a finding is primarily about adversarial misuse, leave it for the dedicated adversarial review workflow.
 
-These are indirection without value. List each with the function it wraps.
+## Output summary
 
-### Step 4 — Abstraction vs Usage
-
-For each module, count:
-- Number of exported abstractions (interfaces, types, classes, functions)
-- Number of unique callers/importers across the codebase
-
-Flag modules where `abstractions > 3 * callers` (more abstractions than justified by usage).
-
-### Step 5 — Duplication Detection
-
-Find similar code blocks across files:
-- Functions with near-identical bodies (>80% token overlap)
-- Repeated patterns of 5+ lines that could be extracted
-- Types/interfaces that differ by 1-2 fields
-
-Use the `edc-context/modules/{module}.md` cross-module coupling sections to identify where the analysis already flagged duplication.
-
-### Step 6 — File Length Distribution
-
-List all source files by LOC. Flag:
-- Files > 3x the median file length
-- Files > 500 LOC (absolute threshold)
-- Concentration: if one file has > 30% of total project LOC
-
-### Step 7 — Indirection Depth
-
-For key entrypoints documented in `edc-context/index.md`, trace the call chain from entrypoint to actual work. Count the number of function hops. Flag chains where:
-- Depth > 4 for simple operations
-- Any hop is a pure pass-through (wrapper)
-
-### Step 8 — Test Mirroring
-
-Compare test files against production modules. Flag tests that:
-- Reimplement production logic instead of importing it
-- Define helper functions that duplicate production functions
-- Have assertion logic that mirrors validation logic in production
-
-## Output
-
-Write two report files under `edc-context/reports/` (create the directory if it does not exist). Reports MUST live under `edc-context/reports/` — never at the top level of `edc-context/`.
-
-### `edc-context/reports/complexity.md`
-
-```
-<!-- generated by edc-audit -->
-# Complexity Audit
-
-## Summary
-- Bloat score: X/10 (0 = lean, 10 = severely bloated)
-- Dead exports: N
-- Wrapper functions: N
-- Over-abstracted modules: N
-- Duplicated code blocks: N
-- Oversized files: N
-
-## LOC Estimates vs Reality
-[table from step 1]
-
-## Dead Exports
-[list from step 2]
-
-## Wrapper Functions
-[list from step 3]
-
-## Over-Abstracted Modules
-[list from step 4]
-
-## Duplication
-[list from step 5]
-
-## Oversized Files
-[list from step 6]
-
-## Deep Call Chains
-[list from step 7]
-
-## Test Mirroring
-[list from step 8]
-```
-
-### `edc-context/reports/issues.md`
-
-Promote any audit findings that represent real correctness, security, or operational risks (as opposed to pure bloat) into `edc-context/reports/issues.md`. If the file already exists from a prior `edc-build-impl` run, merge new findings in rather than overwriting unrelated entries. Use this structure:
-
-```
-<!-- generated by edc-audit -->
-# Known Issues
-
-## <severity> — <short title>
-- where: file:line
-- problem: ...
-- recommendation: ...
-```
-
-Each finding (in either report) should include:
-- what the problem is
-- where (file:line)
-- suggested simplification or fix (one sentence, not a full fix)
+Reports should make quality tradeoffs actionable without prescribing a full refactor. Prefer small, boring recommendations tied to a specific file/line and explain why the issue matters for future changes or correctness.

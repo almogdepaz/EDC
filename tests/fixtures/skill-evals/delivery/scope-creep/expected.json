@@ -1,0 +1,15 @@
+{
+  "skill": "edc-delivery-review",
+  "fixture": "scope-creep",
+  "deliveryVerdict": "delivered",
+  "architectureFit": "questionable",
+  "requiredFindings": [
+    { "category": "scope creep", "evidence": "tokenTtlSeconds" },
+    { "category": "module ownership", "evidence": "auth-service" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "possible smell" }
+  ],
+  "requiredEvidence": ["spec.md", "src/settings.ts", "No behavior or config changes"]
+}

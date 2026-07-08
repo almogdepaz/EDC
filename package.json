@@ -39,9 +39,7 @@
     "plugins/edc/README.md",
     "install.sh",
     "README.md",
-    "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "SECURITY.md",
     "LICENSE"
   ],
   "peerDependencies": {
@@ -61,7 +59,9 @@
     ]
   },
   "scripts": {
-    "test": "bash tests/hardening/run-all.sh",
+    "lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/*.sh",
+    "lint:hardening": "shellcheck -S error tests/hardening/*.sh",
+    "test": "npm run lint:hardening && bash tests/hardening/run-all.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check"
   }

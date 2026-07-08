@@ -7,36 +7,37 @@ Owns the terminal entrypoint, deterministic shell orchestrators, command wrapper
 **Primary paths:** `install.sh`, `plugins/edc/scripts/`, `plugins/edc/commands/`.
 
 ## Purpose
-This module turns EDC prompt bundles into reproducible workflows. The public `edc` command parses user intent and model/runtime options, then delegates to shell orchestrators that decide build/update/review/audit control flow. Shell owns state classification, freshness recovery, routing, validation, and subprocess spawning; agent prompts only perform bounded semantic work.
+This module turns EDC prompt bundles into reproducible workflows. The public `edc` command parses user intent, review scope, and model/runtime options, then delegates to shell orchestrators that decide build/update/review/delivery-review/quality-review/audit control flow. Shell owns state classification, freshness recovery, routing, validation, structured result files, and subprocess spawning; agent prompts only perform bounded semantic work.
 
-The current runtime supports Claude, Cursor, Codex, and Pi, standardizes nested script execution through `EDC_BASH` so macOS `/bin/bash` 3.2 does not leak into child orchestrators, and tightens review reliability around context-skip modes plus allowed-unmapped accounting. The root installer and package metadata now point users at the `pi/` extension surface for Pi installs.
+The current runtime separates command UX from skill lenses: `edc review`/`review-all` runs security, delivery/architecture, and quality phases in sequence; `security-review` is security/adversarial differential review; `delivery-review` checks goal/spec delivery plus architecture fit and also supports full-current-repo scope; `quality-review` runs the code-quality/maintainability audit pipeline, with `audit` kept as a deprecated alias. Audit can run full-repo or diff-scoped; diff scope audits only modules owning changed files plus dirty tracked files. Pi may pass a detected default branch instead of hard-coded `main`; shell review/update/delivery-review/quality-review still own git-ref validation, freshness recovery, and failure reporting for that ref.
 
 ## Actors and entrypoints
-- Human operator invokes `edc build|update|review|audit|mode|doctor` after install.
+- Human operator invokes `edc build|update|review|review-all|security-review|delivery-review|quality-review|audit|mode|doctor` after install.
 - Agent subprocesses are spawned through `edc_spawn` with `EDC_AGENT_CLI=claude|cursor|codex|pi`.
 - Agent wrappers and hooks invoke project-local `.edc/scripts/edc-*.sh` copied from this module.
 - Slash-command wrappers in `plugins/edc/commands/` invoke the same scripts from Claude/Cursor surfaces.
-- `install.sh` performs global/project install wiring and advertises Pi source installs through `pi/install.sh`.
+- `install.sh` performs global/project install wiring, installs public/private skill files including references, ships `edc-delivery-review.sh`, and advertises Pi source installs through `pi/install.sh`.
 
 ## Key files
-- `plugins/edc/scripts/edc`: public CLI parser. It accepts `--agent pi`, reads manifest default mode for review/audit/update, allows non-Claude backends in `advisory`, recognizes `EDC_PI_MODEL` as configured-model evidence for Pi, and dispatches via `"$EDC_BASH"`.
-- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, and prompt rendering. Pi support includes `edc_require_agent_cli`, generated Pi JSON supervisor, Pi stream parsing, `EDC_PI_MODEL` fallback, Pi skill search paths, and `EDC_BASH` script-substitution instructions.
-- `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It uses shared backend validation and `EDC_BASH` for child scripts.
-- `plugins/edc/scripts/edc-build-plan.sh`: deterministic fanout planner. Its task prompts now require distilled high-signal module docs, so the shell contract and prompt contract agree on not persisting scratch analysis.
-- `plugins/edc/scripts/edc-update.sh`: healthy-v2-only incremental update gate; accepts Pi backend and uses `EDC_BASH` for preflight and doctor.
-- `plugins/edc/scripts/edc-review.sh`: self-driving review pipeline. It accepts Pi backend, routes review-task generation through `EDC_BASH`, exposes `-h/--help`, supports PR shorthand plus `--no-context-refresh`/`--ignore-context` direct-review modes, separates expected `unmapped.allowedGlobs` paths into a deterministic `allowed-unmapped` report, and keeps deterministic task/consolidation/verification/report-validation phases.
-- `plugins/edc/scripts/edc-audit.sh`: freshness recovery plus one audit subprocess; shares backend validation with build/review/update.
-- `plugins/edc/scripts/edc-manifest.sh`: deterministic post-step for generated timestamp, `sourceCommit`, and coverage counts; routes files through `"$EDC_BASH"`.
-- `plugins/edc/scripts/edc-doctor.sh`: v2 layout/routing validator; route checks use `EDC_BASH` and catch manifest coverage gaps such as moved Pi paths.
-- `plugins/edc/scripts/edc-recover-context.sh`: shared stale/missing recovery for review/audit; clean-slate calls use `EDC_BASH`.
-- `plugins/edc/commands/edc-run-review.md`: Bash-only user command that warns missing/stale context may trigger a long build/update before review.
+- `plugins/edc/scripts/edc`: public CLI parser. It normalizes `--diff <base>...<target>` into `target --base <base>`, rejects conflicting scope flags, maps `review`/`review-all` to the combined review orchestrator, maps `security-review` to the security pipeline, maps `quality-review`/`audit` to `edc-audit.sh`, supports `delivery-review --full`, enforces `--agent`, reads manifest default mode, recognizes `EDC_PI_MODEL` as configured-model evidence for Pi, and dispatches through normal `bash` resolution.
+- `plugins/edc/scripts/edc-lib.sh`: shared path constants, timeout wrapper, backend validation, model/config resolution, stream filters, cost/transcript logging, `edc_spawn`, prompt rendering, result-scope metadata (`full`/`differential`, base, target, dirty tracked inclusion), and structured run-result writing to `edc-context/build/last-run.json` (or `EDC_RESULT_FILE`). It embeds full audit bundles (`SKILL.md` plus references) and full review bundles into subprocess prompts, and emits script-substitution instructions for installed `.edc/scripts` paths.
+- `plugins/edc/scripts/edc-build.sh`: classifies context state with `edc-clean-slate.sh --check`, chooses build/update/wipe-and-build, spawns the selected prompt, and doctor-validates. It uses shared backend validation and Bash 3.2-compatible child script calls.
+- `plugins/edc/scripts/edc-build-plan.sh`: deterministic fanout planner. Its task prompts require distilled high-signal module docs, so the shell contract and prompt contract agree on not persisting scratch analysis.
+- `plugins/edc/scripts/edc-update.sh`: healthy-v2-only incremental update gate; accepts Pi backend and uses normal `bash` resolution for preflight and doctor.
+- `plugins/edc/scripts/edc-review.sh`: security/adversarial review pipeline. It supports PR shorthand plus `--no-context-refresh`/`--ignore-context`, includes dirty tracked files when reviewing current `HEAD`, manifest-routes changed files, writes per-module reports, enforces review write containment, consolidates/verifies final reports, and accounts for expected contextless/allowed-unmapped paths through deterministic reports.
+- `plugins/edc/scripts/edc-review-all.sh`: combined review orchestrator. It runs security, delivery, then quality phases with per-phase `EDC_RESULT_FILE`s, stops on failed phase results, aggregates outputs/status/warnings through `json-cli.mjs`, and writes one structured `review-all` result with failed-phase/child-result metadata.
+- `plugins/edc/scripts/edc-delivery-review.sh`: delivery/architecture review pipeline. It validates target/base refs, resolves them to commit SHAs before placing shell commands in the agent prompt, supports `--full` current-repo review, recovers context when needed, embeds the delivery skill bundle and references, prompts for diff/stat/log/spec discovery or spec-source discovery, writes `delivery-review-<target>.md` or `delivery-review-current.md`, records structured success/failure in `last-run.json`, and rejects missing/structureless reports.
+- `plugins/edc/scripts/edc-audit.sh`: code-quality/quality-review orchestrator. It recovers context, creates `edc-context/audit-tasks/`, spawns one worker per real manifest module for full scope or only modules owning changed/dirty files for diff scope, validates worker markdown, spawns synthesis to write canonical reports, validates those reports, and removes worker artifacts unless `EDC_KEEP_AUDIT_TASKS=1`.
+- `plugins/edc/scripts/edc-manifest.sh`: deterministic post-step for generated timestamp, `sourceCommit`, coverage counts, and ignore-rule provenance; routes files through Bash-compatible helpers and accepts `--ignore`.
+- `plugins/edc/scripts/edc-doctor.sh`: v2 layout/routing validator; route checks use Bash-compatible helpers and fail uncovered/ambiguous tracked paths after applying manifest coverage ignore globs.
+- `plugins/edc/scripts/edc-recover-context.sh`: shared stale/missing recovery for review/audit/delivery-review; clean-slate calls use normal `bash` resolution.
 
 ## Core flows
 ### CLI dispatch
-1. `edc` loads config from `edc-lib.sh`, exporting `EDC_BASH` and recognized model variables.
-2. Top-level `--model` populates both `EDC_BUILD_MODEL` and `EDC_REVIEW_MODEL`.
+1. `edc` loads config from `edc-lib.sh`, exporting recognized model variables without an `EDC_BASH` indirection.
+2. Top-level `--model` populates spawned phase model variables.
 3. Command parsers validate agent and context mode. `inject` remains Claude-only for terminal CLI; `advisory` is allowed for Pi/Cursor/Codex.
-4. The selected orchestrator runs with `EDC_AGENT_CLI=<backend>` and `"$EDC_BASH"`.
+4. The selected orchestrator runs with `EDC_AGENT_CLI=<backend>` and `EDC_CONTEXT_MODE=<mode>` under normal `bash` resolution.
 
 ### Pi subprocess spawn
 1. `edc_require_agent_cli` requires `pi` and `python3`.
@@ -45,33 +46,36 @@ The current runtime supports Claude, Cursor, Codex, and Pi, standardizes nested 
 4. `stream_filter` translates Pi `message_update`, `tool_execution_start`, `tool_execution_end`, and `auto_retry_end` events into operator-readable output.
 
 ### Freshness recovery and validation
-Review/audit source `edc-recover-context.sh`. Missing/stale context triggers build/update prompts unless a direct review mode was requested, followed by a force rebuild if recovery still does not produce fresh v2 context. `--no-context-refresh` uses existing context without recovering it; `--ignore-context` deliberately builds direct review tasks without module context. Expected unmapped files declared in `unmapped.allowedGlobs` are accounted for by an `allowed-unmapped` report rather than spawning a synthetic review. Build/update always run `edc-doctor.sh`; review validates per-module reports before consolidation and validates final reports after verification.
+Review, security-review, delivery-review, and quality-review/audit source `edc-recover-context.sh` when context is needed. Missing/stale context triggers build/update prompts unless an explicit direct security-review mode was requested, followed by a force rebuild if recovery still does not produce fresh v2 context. `--base` is an arbitrary git ref supplied by callers (CLI, PR shorthand, `--diff`, or Pi default-branch detection); the runtime treats it as input to git diff/recovery rather than assuming `main`. Delivery-review converts display refs to SHAs before constructing agent-run shell commands, so hostile ref names are not copied into executable prompt snippets. Build/update always run `edc-doctor.sh`; security review validates per-module/final reports; delivery-review validates the requested report; quality-review validates worker reports and final canonical reports; review-all trusts only child structured results and durable output validation.
 
 ## Invariants
-- Bash >=4 is mandatory for orchestrators; nested script calls must use `EDC_BASH`, not ambient `bash`.
-- The shell orchestrator owns build-vs-update, context recovery, review routing, and validation decisions.
+- Orchestrators must remain Bash 3.2-compatible; nested script calls must not rely on `EDC_BASH`.
+- The shell orchestrator owns build-vs-update, context recovery, scope normalization, security-review routing, review-all phase aggregation, audit fanout/synthesis, and validation decisions.
 - `manifest.policy.defaultMode` is preserved across builds/updates and only `edc mode` should mutate it directly.
 - `edc_spawn` is the sole backend-specific subprocess boundary.
-- Prompt path substitution must tell spawned agents to replace `plugins/edc/scripts/` with `$EDC_SCRIPTS_DIR` and run helpers with `$EDC_BASH`.
+- Prompt path substitution must tell spawned agents to replace `plugins/edc/scripts/` with `$EDC_SCRIPTS_DIR` and run helpers with Bash-compatible commands.
 - Deterministic planners should shape task prompts, not semantic conclusions; subagents still own module analysis output.
-- User-facing install and command docs must point at the current Pi package layout (`pi/`, not legacy `agents/pi/`).
+- Public command/install docs must keep the workflow taxonomy clear: combined review (`review`/`review-all`), security-only review (`security-review`), delivery/architecture review, and code-quality review (`quality-review`/`audit`) are different entrypoints over three lenses.
 
 ## Trust boundaries
-- CLI args are user-controlled but mapped to fixed orchestrator invocations; free-form args must remain quoted/array-preserved.
+- CLI args and git refs are user-controlled but mapped to fixed orchestrator invocations; free-form args must remain quoted/array-preserved.
 - Pi JSON event streams are untrusted and parsed defensively; nonmatching JSON is ignored by `stream_filter`.
+- LLM-authored reports are validated for existence/structure before being surfaced as successful output, and orchestrators write structured `last-run.json` status so wrappers can distinguish validation failures from generic pipeline failures.
 - LLM-authored manifests are rejected if they include generated fields or invalid routing structure; `edc-manifest.sh` owns coverage and commit provenance.
 - Project-local `.edc/scripts` are executable copies of this module; stale installs are updated by hooks/wrappers but still execute in the target repo.
 
 ## Coupling
-- Consumes `canonical-skills` through `resolve_prompt` for build/update/audit/review subprocess prompts.
+- Consumes `canonical-skills` through `resolve_prompt` for build/update/audit/review subprocess prompts and through the delivery-review script for delivery skill bundles.
 - Mirrors path constants and routing semantics with `plugin-surface` (`edc-lib.sh` vs `hooks/lib/paths.mjs` and `edc-route.sh` vs `routeFileSync`).
-- Used by `agent-wrappers` for Pi menu actions, shared background jobs, Bash-timeout extension, and model propagation.
-- Pinned by `hardening-tests`, especially CLI entrypoint, prompt resolution, review routing, Bash alignment, package publish checks, and Pi backend tests.
-- Invoked by `benchmarking` for prompt evaluation and model propagation.
+- Used by `agent-wrappers` for Pi scope menus, shared background jobs, Bash-timeout extension, default-base argument passing, structured status fields, and model propagation.
+- Pinned by `hardening-tests`, especially CLI entrypoint/scope normalization, review-all aggregation, structured phase-result contract, audit/delivery orchestrators, prompt resolution, review routing/write containment, Bash alignment, package publish checks, and Pi backend tests.
+- Invoked by `benchmarking` for security-prompt evaluation and model propagation.
 
 ## Fragility points
-- `edc-lib.sh` and `edc-review.sh` are large multi-mode files; small changes can affect all backends.
+- `edc-lib.sh`, `edc-review.sh`, `pi/index.mjs`, and the top-level `edc` parser are large multi-mode files; small changes can affect all backends.
+- Review-all is a thin aggregator but depends on every child phase writing valid `EDC_RESULT_FILE` JSON; missing/invalid child results must remain failures rather than green pipeline exits.
+- Per-module audit multiplies subprocess count by manifest module count before synthesis in full scope, and diff scope depends on manifest routing of changed/dirty files, so timeout/model behavior and routing correctness matter more than in the old single-pass audit.
+- Delivery-review embeds its skill bundle locally rather than through `resolve_prompt`; keep bundle completeness checks, SHA-only prompt command construction, `--full` prompt shape, report validation, and `last-run.json` reason codes aligned with installer/resource-copy behavior and tests.
 - Pi subprocess supervision depends on Pi JSON event names (`agent_end`, `message_update`, `tool_execution_*`). Event-shape drift can make subprocess output silent or prematurely terminated.
-- `edc-manifest.sh` still walks raw `git ls-files`; build/update ignore rules must be reflected in `unmapped.allowedGlobs` for coverage to stay clean.
-- Direct review modes intentionally bypass parts of the context-recovery contract; callers must make the tradeoff explicit with `--no-context-refresh` or `--ignore-context`.
-- Small prompt-string changes in deterministic planners can cascade into generated context quality even though they look like shell-only edits.
+- Direct security-review modes intentionally bypass parts of the context-recovery contract; callers must make the tradeoff explicit with `--no-context-refresh` or `--ignore-context`.
+- Small prompt-string changes in deterministic planners or skill bundle emitters can cascade into generated context/review quality even though they look like shell-only edits.

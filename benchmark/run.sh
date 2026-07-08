@@ -55,7 +55,7 @@ run_single_cve() {
 
     # Clean previous context
     rm -rf "$cve_dir/edc-context"
-    mkdir -p "$output_dir"
+    mkdir -p "$cve_dir/edc-context/modules" "$output_dir"
 
     # Build the prompt — scoped to affected files
     local file_list=""
@@ -71,7 +71,7 @@ This is a security-focused analysis. Perform ultra-granular line-by-line analysi
 looking for all vulnerabilities including memory safety issues, state machine logic \
 errors, flag/boolean corruption, protocol injection, and data flow problems.
 
-Write the complete analysis to edc-context/full-context.md
+Write the complete scoped analysis to edc-context/modules/security-benchmark.md
 
 Then create edc-context/reports/issues.md listing ALL security issues you find, with:
 - issue title

@@ -39,9 +39,7 @@
     "plugins/edc/README.md",
     "install.sh",
     "README.md",
-    "CHANGELOG.md",
     "CONTRIBUTING.md",
-    "SECURITY.md",
     "LICENSE"
   ],
   "peerDependencies": {

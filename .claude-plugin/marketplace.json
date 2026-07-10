@@ -4,14 +4,14 @@
     "name": "almogdepaz"
   },
   "metadata": {
-    "version": "1.1.2",
-    "description": "EDC — Your Every Day Carry Skills. Deep codebase context and context-aware code review."
+    "version": "1.1.3",
+    "description": "EDC builds repository architecture maps for AI agents and runs context-aware code review."
   },
   "plugins": [
     {
       "name": "edc",
-      "version": "1.1.2",
-      "description": "Deep codebase context building and context-aware differential code review.",
+      "version": "1.1.3",
+      "description": "Repository architecture maps, agent context, and context-aware code review.",
       "author": {
         "name": "almogdepaz"
       },

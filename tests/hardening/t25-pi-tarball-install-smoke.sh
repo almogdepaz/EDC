@@ -24,10 +24,10 @@ AGENT_DIR="$TMP/pi-agent"
 PROJECT_DIR="$TMP/project"
 mkdir -p "$PACK_DIR" "$INSTALL_ROOT" "$AGENT_DIR" "$PROJECT_DIR"
 
-tarball="$(npm pack --pack-destination "$PACK_DIR" --silent)"
+tarball="$(npm_config_dry_run=false NPM_CONFIG_DRY_RUN=false npm pack --pack-destination "$PACK_DIR" --silent)"
 tarball_path="$PACK_DIR/$tarball"
 
-npm install --prefix "$INSTALL_ROOT" --ignore-scripts --silent "$tarball_path"
+npm_config_dry_run=false NPM_CONFIG_DRY_RUN=false npm install --prefix "$INSTALL_ROOT" --ignore-scripts --silent "$tarball_path"
 installed_pkg="$INSTALL_ROOT/node_modules/@sgtbeatdown/edc"
 
 if [ ! -f "$installed_pkg/package.json" ]; then

@@ -148,6 +148,11 @@ manifest_context_mode() {
   node "$EDC_JSON_CLI" review-context-mode "$EDC_REVIEW_TASKS_MANIFEST" 2>/dev/null || echo "context"
 }
 
+manifest_module_policy() {
+  local module="$1"
+  node "$EDC_JSON_CLI" review-module-policy "$EDC_REVIEW_TASKS_MANIFEST" "$module" 2>/dev/null || true
+}
+
 load_ignore_patterns() {
   if [ "$#" -gt 0 ]; then
     printf '%s\n' "$@"
@@ -225,11 +230,33 @@ normalize_review_report_headings() {
   rm -f "$tmp"
 }
 
-# assert_report_valid <module>: require the reporting contract's Findings section.
-# (edc-review skill always emits ## What Changed, ## Findings, etc. per reporting.md)
+assert_promotion_check_result_valid() {
+  local module="$1"
+  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+  local result="$EDC_REVIEW_TASKS_DIR/result-${module}.json"
+  if [ ! -f "$report" ]; then
+    echo "ERROR: missing $report - promotion-check subprocess did not produce a human report for module '$module'" >&2
+    return 1
+  fi
+  if [ ! -f "$result" ]; then
+    echo "ERROR: missing $result - promotion-check subprocess did not produce structured result for module '$module'" >&2
+    echo "HINT: promotion-check success is validated from JSON, not markdown headings." >&2
+    return 1
+  fi
+  node "$EDC_JSON_CLI" review-promotion-result-valid "$result" "$report" || return 1
+}
+
+# assert_report_valid <module>: validate the machine contract for a module.
+# Normal security review reports keep the edc-review markdown contract; promotion
+# checks use a structured JSON sidecar because their human report is not a
+# security findings report.
 assert_report_valid() {
   local module="$1"
   local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+  if [ "$(manifest_module_policy "$module")" = "promotion-check" ]; then
+    assert_promotion_check_result_valid "$module"
+    return $?
+  fi
   if [ ! -f "$report" ]; then
     echo "ERROR: missing $report - edc-review skill did not produce output for module '$module'" >&2
     return 1
@@ -530,18 +557,19 @@ auto_mode() {
     local module
     module=$(basename "$task_path" .md)
     echo "→ reviewing module: $module"
-    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report spawn_rc
+    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report allowed_result spawn_rc
     allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+    allowed_result="$EDC_REVIEW_TASKS_DIR/result-${module}.json"
     before_snapshot=$(mktemp)
     after_snapshot=$(mktemp)
-    edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report"
+    edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report" "$allowed_result"
     review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
     if edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt"; then
       spawn_rc=0
     else
       spawn_rc=$?
     fi
-    edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report"
+    edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report" "$allowed_result"
     changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
     rm -f "$before_snapshot" "$after_snapshot"
     if [ -n "$changed_forbidden" ]; then
@@ -553,8 +581,10 @@ auto_mode() {
     assert_report_valid "$module" \
       || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
     if [ "$spawn_rc" -ne 0 ]; then
-      assert_report_complete_after_failed_subprocess "$module" \
-        || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the module reviewer output in the log; failed subprocesses must produce the full security report contract before being accepted as warnings" "$module" ""; exit 1; }
+      if [ "$(manifest_module_policy "$module")" != "promotion-check" ]; then
+        assert_report_complete_after_failed_subprocess "$module" \
+          || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the module reviewer output in the log; failed subprocesses must produce the full security report contract before being accepted as warnings" "$module" ""; exit 1; }
+      fi
       had_warning=1
       echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
       echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
@@ -1044,8 +1074,14 @@ ${file_list}
 1. This is a promotion check only, not a full module review.
 2. Do not read generated module docs; these paths are intentionally contextless.
 3. Inspect only the listed diff and the smallest adjacent source needed to decide whether durable agent context now exists.
-4. Report whether update should promote these paths into a real context module, and why.
-5. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`
+4. Write a human-readable promotion check report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`.
+5. Write the machine-readable result to \`$EDC_REVIEW_TASKS_DIR/result-${module}.json\` with these fields:
+   - \`schemaVersion\`: \`1\`
+   - \`kind\`: \`"contextless-promotion-check"\`
+   - \`status\`: \`"success"\`
+   - \`promotionDecision\`: either \`"promote"\` or \`"keep-contextless"\`
+   - \`targetModule\`: non-empty module name when \`promotionDecision\` is \`"promote"\`
+   - \`reportPath\`: \`"$EDC_REVIEW_TASKS_DIR/report-${module}.md"\`
 
 DO NOT edit \`edc-context/manifest.json\`, \`edc-context/index.md\`, or \`edc-context/modules/*.md\`.
 DO NOT perform a full module review.

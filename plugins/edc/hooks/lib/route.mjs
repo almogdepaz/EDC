@@ -521,23 +521,16 @@ function copyTreeIfStale(sourceDir, destDir) {
 /**
  * Build the session-start context block.
  * Returns { content: string, mode: "advisory" | "inject" | "no-context" }.
- * `content` is empty string when the hook should be a no-op
- * (advisory mode, or no manifest with no notice — caller decides).
+ * `content` is empty string when the hook should be a no-op. Missing context is
+ * intentionally silent: globally installed extensions must not steer unrelated
+ * agent sessions into EDC setup work.
  */
 export function buildSessionStartContent(projectRoot) {
   const manifest = loadManifest(projectRoot);
   const indexPath = join(projectRoot, EDC_INDEX_REL);
 
   if (!manifest) {
-    return {
-      mode: "no-context",
-      content: [
-        "## EDC Context",
-        "",
-        "No codebase context built yet. Run `/edc-build` to generate deep architectural context.",
-        "This enables automatic context injection when editing files.",
-      ].join("\n"),
-    };
+    return { mode: "no-context", content: "" };
   }
 
   if (manifest.policy?.defaultMode === "advisory") {

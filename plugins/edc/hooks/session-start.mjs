@@ -1,8 +1,6 @@
 import { readFileSync } from "fs";
 import {
-  resolvePluginRoot,
   buildSessionStartContent,
-  installOrchestratorScript,
 } from "./lib/route.mjs";
 import { detectPlatform } from "./lib/platform.mjs";
 
@@ -47,11 +45,6 @@ function main() {
   const input = parseInput(raw);
   const platform = detectPlatform(input);
   const projectRoot = resolveProjectRoot(input);
-  const pluginRoot = resolvePluginRoot(import.meta.url);
-
-  // ensure orchestrator script is installed in project
-  installOrchestratorScript(projectRoot, pluginRoot);
-
   const { mode, content } = buildSessionStartContent(projectRoot);
   if (mode === "advisory") return;
 

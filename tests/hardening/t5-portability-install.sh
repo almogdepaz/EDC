@@ -205,11 +205,12 @@ else
 fi
 rm -rf "$REMOTE_TMP"
 
-# ── 5f: session-start hook contains installOrchestratorScript ────────────────
-if grep -q 'installOrchestratorScript' "$HOOK"; then
-  echo "PASS: installOrchestratorScript present in session-start hook"
+# ── 5f: session-start is inert; explicit Pi command installs runtime ────────
+if ! grep -q 'installOrchestratorScript' "$HOOK" \
+  && grep -q 'installOrchestratorScript(ctx.cwd, PLUGIN_ROOT)' pi/index.mjs; then
+  echo "PASS: session-start avoids project cache writes; explicit Pi command installs runtime"
 else
-  echo "FAIL: installOrchestratorScript missing from session-start hook"
+  echo "FAIL: session-start/explicit install contract regressed"
   exit 1
 fi
 

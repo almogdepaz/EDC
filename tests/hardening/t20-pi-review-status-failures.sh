@@ -207,6 +207,10 @@ exit 1
   assert.ok(restartMessage, "restart message should be emitted");
   assert.match(restartMessage.content, /Background EDC review started\./);
   assert.doesNotMatch(restartMessage.content, /already running/);
+  assert.ok(
+    await waitFor(() => existsSync(statusPath) && /status=(failed|success|success-with-warning|cancelled)/.test(readFileSync(statusPath, "utf-8")), 3000),
+    "restarted background review should finish before temp repo cleanup",
+  );
 } finally {
   if (childPid) {
     try { process.kill(childPid, "SIGTERM"); } catch {}

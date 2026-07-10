@@ -1218,11 +1218,6 @@ export default async function edcExtension(pi) {
 
   // -- session start --------------------------------------------------------
   pi.on("session_start", async (_event, ctx) => {
-    try {
-      installOrchestratorScript(ctx.cwd, PLUGIN_ROOT);
-    } catch {
-      // best effort
-    }
     startBackgroundStatusWatcher(ctx);
     const { mode, content } = buildSessionStartContent(ctx.cwd);
     if (mode === "advisory" || !content) return;
@@ -1279,6 +1274,11 @@ export default async function edcExtension(pi) {
   pi.registerCommand(EDC_COMMAND.name, {
     description: EDC_COMMAND.description,
     handler: async (args, ctx) => {
+      try {
+        installOrchestratorScript(ctx.cwd, PLUGIN_ROOT);
+      } catch {
+        // best effort; menu actions will surface missing runtime scripts if install fails
+      }
       await handleEdcMenu(pi, args, ctx);
     },
   });

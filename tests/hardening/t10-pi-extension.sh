@@ -540,6 +540,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
+  // 4a. installed EDC pi skills are globally discoverable, even in plain repos.
+  const plainSkillRepo = `${cwd}/plain-skill-repo`;
+  fs.mkdirSync(plainSkillRepo, { recursive: true });
+  childProcess.execFileSync("git", ["init", "-q"], { cwd: plainSkillRepo });
+  const plainResources = await rd.handler({ type: "resources_discover", cwd: plainSkillRepo, reason: "startup" }, { cwd: plainSkillRepo });
+  const plainSkillNames = (plainResources.skillPaths || []).map(p => p.split("/").pop()).sort();
+  if (JSON.stringify(plainSkillNames) !== JSON.stringify(expectedSkills)) {
+    console.log("PLAIN_GLOBAL_SKILLS_FAIL:" + plainSkillNames.join(","));
+    process.exit(1);
+  }
+
   // 5. session_start injects edc-context/index.md when mode=inject
   const ss = calls.events.find(e => e.event === "session_start");
   const sessionStatusesBefore = calls.statuses.length;
@@ -571,6 +582,29 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("SESSION_START_COMPLETED_WIDGET_FAIL:" + JSON.stringify(calls.widgets.slice(sessionWidgetsBefore)));
     process.exit(1);
   }
+
+  // 5a. session_start in a plain git repo is quiet and does not contaminate the repo with .edc.
+  const plainRepo = `${cwd}/plain-git-repo`;
+  fs.mkdirSync(plainRepo, { recursive: true });
+  childProcess.execFileSync("git", ["init", "-q"], { cwd: plainRepo });
+  childProcess.execFileSync("git", ["config", "user.email", "a@example.com"], { cwd: plainRepo });
+  childProcess.execFileSync("git", ["config", "user.name", "a"], { cwd: plainRepo });
+  fs.writeFileSync(`${plainRepo}/tracked.txt`, "tracked\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: plainRepo });
+  childProcess.execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: plainRepo });
+  const plainMessagesBefore = calls.messages.length;
+  await ss.handler({ type: "session_start", cwd: plainRepo, reason: "startup" }, { ...ssCtx, cwd: plainRepo });
+  const plainSessionMessages = calls.messages.slice(plainMessagesBefore).filter((message) => message.customType === "edc-session-context");
+  if (plainSessionMessages.length !== 0 || fs.existsSync(`${plainRepo}/.edc`)) {
+    console.log("PLAIN_SESSION_CONTAMINATION_FAIL:" + JSON.stringify({ messages: plainSessionMessages, hasEdc: fs.existsSync(`${plainRepo}/.edc`) }));
+    process.exit(1);
+  }
+  await edcCmd.opts.handler("-h", { cwd: plainRepo, hasUI: false });
+  if (!fs.existsSync(`${plainRepo}/.edc/scripts/edc-build.sh`) || !fs.existsSync(`${plainRepo}/.edc/skills/edc-review/SKILL.md`)) {
+    console.log("EXPLICIT_EDC_INSTALL_FAIL:" + JSON.stringify({ hasScripts: fs.existsSync(`${plainRepo}/.edc/scripts/edc-build.sh`), hasSkill: fs.existsSync(`${plainRepo}/.edc/skills/edc-review/SKILL.md`) }));
+    process.exit(1);
+  }
+
   const shutdown = calls.events.find(e => e.event === "session_shutdown");
   const shutdownStatusesBefore = calls.statuses.length;
   const shutdownWidgetsBefore = calls.widgets.length;
@@ -583,25 +617,6 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("SESSION_SHUTDOWN_CLEAR_FAIL:" + JSON.stringify({ statuses: calls.statuses.slice(shutdownStatusesBefore), widgets: calls.widgets.slice(shutdownWidgetsBefore) }));
     process.exit(1);
   }
-  for (const requiredScript of ["edc-review.sh", "edc-review-all.sh", "edc-delivery-review.sh", "edc-lib.sh", "edc-assert-fresh.sh", "edc-recover-context.sh"]) {
-    if (!fs.existsSync(`${cwd}/.edc/scripts/${requiredScript}`)) {
-      console.log("SCRIPT_INSTALL_FAIL:" + requiredScript);
-      process.exit(1);
-    }
-  }
-  for (const requiredRuntime of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
-    if (!fs.existsSync(`${cwd}/.edc/hooks/lib/${requiredRuntime}`)) {
-      console.log("CLASSIFIER_RUNTIME_INSTALL_FAIL:" + requiredRuntime);
-      process.exit(1);
-    }
-  }
-  for (const requiredSkill of ["edc-review", "edc-audit", "edc-delivery-review", "edc-build-impl", "edc-update-impl", "edc-module-context-impl"]) {
-    if (!fs.existsSync(`${cwd}/.edc/skills/${requiredSkill}/SKILL.md`)) {
-      console.log("PRIVATE_SKILL_INSTALL_FAIL:" + requiredSkill);
-      process.exit(1);
-    }
-  }
-
   // 6. tool_call extends bash timeout for long-running edc orchestrators
   const tc = calls.events.find(e => e.event === "tool_call");
   const fakeCtx = { cwd, sessionManager: { getSessionId: () => sid } };

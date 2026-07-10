@@ -146,6 +146,29 @@ function resultOutputs(result) {
   return outputs;
 }
 
+function validatePromotionCheckResult(resultPath, expectedReportPath) {
+  let result;
+  try {
+    result = readJson(resultPath);
+  } catch (error) {
+    die(`promotion-check result is not valid JSON: ${error.message}`);
+  }
+  const errors = [];
+  if (result.schemaVersion !== 1) errors.push("schemaVersion must equal 1");
+  if (result.kind !== "contextless-promotion-check") errors.push("kind must equal contextless-promotion-check");
+  if (result.status !== "success") errors.push("status must equal success");
+  if (!["promote", "keep-contextless"].includes(result.promotionDecision)) {
+    errors.push("promotionDecision must be promote or keep-contextless");
+  }
+  if (typeof result.reportPath !== "string" || result.reportPath !== expectedReportPath) {
+    errors.push(`reportPath must equal ${expectedReportPath}`);
+  }
+  if (result.promotionDecision === "promote" && !(typeof result.targetModule === "string" && result.targetModule.length > 0)) {
+    errors.push("targetModule is required when promotionDecision is promote");
+  }
+  if (errors.length > 0) die(`promotion-check result invalid: ${errors.join("; ")}`);
+}
+
 function normalizeReviewAllPhase(phase, resultFile, childExitCode) {
   const childRc = Number(childExitCode);
   if (!existsSync(resultFile)) {
@@ -343,6 +366,18 @@ function command() {
     case "review-context-mode": {
       const json = readJson(args[0]);
       process.stdout.write(json.contextMode || "context");
+      return;
+    }
+    case "review-module-policy": {
+      const [manifestPath, moduleName] = args;
+      const json = readJson(manifestPath);
+      const module = array(json.modules).find((candidate) => candidate.name === moduleName);
+      process.stdout.write(module?.reviewPolicy || "");
+      return;
+    }
+    case "review-promotion-result-valid": {
+      const [resultPath, expectedReportPath] = args;
+      validatePromotionCheckResult(resultPath, expectedReportPath);
       return;
     }
     case "unmatched-policy": {

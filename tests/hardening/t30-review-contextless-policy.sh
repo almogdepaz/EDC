@@ -121,5 +121,61 @@ else
   cat edc-context/review-tasks/manifest.json 2>/dev/null || true
 fi
 
+# ── 30.5: promotion-check uses structured sidecar, not markdown headings ──
+AUTO="$TMP/auto"
+setup_repo "$AUTO"
+mkdir -p config .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review
+printf 'config\n' > config/app.yml
+git add config/app.yml
+git commit -q -m 'add promotion candidate'
+write_context
+printf 'edc-build\n' > .edc/skills/edc-build-impl/SKILL.md
+printf 'edc-update-impl\n# Update Context (v2)\n' > .edc/skills/edc-update-impl/SKILL.md
+printf 'edc-review\n' > .edc/skills/edc-review/SKILL.md
+printf '# methodology\n' > .edc/skills/edc-review/methodology.md
+printf '# adversarial\n' > .edc/skills/edc-review/adversarial.md
+printf '# reporting\n' > .edc/skills/edc-review/reporting.md
+printf '# patterns\n' > .edc/skills/edc-review/patterns.md
+mkdir -p fake-bin
+cat > fake-bin/claude <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+prompt=$(cat)
+case "$prompt" in
+  *"TASK FILE: "*)
+    task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
+    module=$(basename "$task_path" .md)
+    task_dir=$(dirname "$task_path")
+    mkdir -p "$task_dir"
+    if [ "$module" = "contextless-promotion-check" ]; then
+      printf '# Promotion Check\n\n## Decision\n\nPROMOTE\n' > "$task_dir/report-${module}.md"
+      cat > "$task_dir/result-${module}.json" <<JSON
+{"schemaVersion":1,"kind":"contextless-promotion-check","status":"success","promotionDecision":"promote","targetModule":"core","reportPath":"$task_dir/report-${module}.md"}
+JSON
+    else
+      printf '## Findings\n\nMock review for %s.\n' "$module" > "$task_dir/report-${module}.md"
+    fi
+    ;;
+  *) ;;
+esac
+MOCK
+chmod +x fake-bin/claude
+set +e
+PATH="$PWD/fake-bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --no-context-refresh >auto.out 2>auto.err
+auto_rc=$?
+set -e
+if [ "$auto_rc" -eq 0 ] \
+   && [ -f edc-context/review-tasks/result-contextless-promotion-check.json ] \
+   && grep -q 'Promotion Check' edc-context/review-tasks/report-contextless-promotion-check.md \
+   && ! grep -q '^## Findings' edc-context/review-tasks/report-contextless-promotion-check.md; then
+  check "30.5: promotion-check validates structured sidecar instead of markdown findings" 1
+else
+  check "30.5: promotion-check validates structured sidecar instead of markdown findings" 0
+  cat auto.out 2>/dev/null || true
+  cat auto.err 2>/dev/null || true
+  cat edc-context/review-tasks/report-contextless-promotion-check.md 2>/dev/null || true
+  cat edc-context/review-tasks/result-contextless-promotion-check.json 2>/dev/null || true
+fi
+
 cd "$ROOT"
 check_summary "T30"

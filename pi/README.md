@@ -29,7 +29,7 @@ pi update npm:@sgtbeatdown/edc
 pi remove npm:@sgtbeatdown/edc
 ```
 
-Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.3`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
+Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.4`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
 
 ## Requirements and permissions
 

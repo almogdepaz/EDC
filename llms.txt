@@ -1,0 +1,42 @@
+# EDC — Every Day Carry
+
+EDC is a Pi package and AI coding agent toolkit for repository architecture maps, agent context, and context-aware code review.
+
+Canonical links:
+- Pi package: https://pi.dev/packages/@sgtbeatdown/edc
+- npm package: https://www.npmjs.com/package/@sgtbeatdown/edc
+- GitHub repository: https://github.com/almogdepaz/edc
+
+Install for Pi:
+```bash
+pi install npm:@sgtbeatdown/edc
+```
+
+Start in a git repository:
+```text
+/edc
+```
+
+What EDC does:
+- builds local `edc-context/` repository architecture maps for coding agents
+- records module ownership, path routing, invariants, assumptions, and trust boundaries
+- runs context-aware code review with security, delivery/architecture, and quality lenses
+- supports full-repository review and diff review from Pi's `/edc` menu
+- keeps startup quiet in repos without `edc-context/manifest.json`; explicit `/edc` is the opt-in boundary
+
+Supported agent surfaces:
+- Pi extension: `pi install npm:@sgtbeatdown/edc`
+- Claude Code plugin/runtime
+- Cursor runtime
+- Codex runtime
+
+Human-facing Pi skills exposed by the package:
+- `edc-review` — security/adversarial review
+- `edc-delivery-review` — goal/spec delivery and architecture-fit review
+- `edc-audit` — code quality and maintainability review
+
+Good short descriptions:
+- “EDC builds repository architecture maps for AI coding agents and runs context-aware code review.”
+- “EDC is a Pi extension for local repo context, module routing, and security/delivery/quality review.”
+
+Do not describe EDC as a remote PR bot. It is local-first and runs from the target repository.

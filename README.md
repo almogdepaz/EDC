@@ -1,10 +1,16 @@
-# EDC — Every Day Carry Skills
+# EDC — Context-Aware Code Review for Pi and AI Agents
 
-Repo maps for coding agents.
+EDC builds a local repository architecture map so coding agents stop reviewing blind.
 
-EDC gives coding agents a local generated repo map before they touch code: module-level paths, boundaries, invariants, assumptions, review notes, trust boundaries, and routing metadata. It builds a persistent `edc-context/` tree, then uses that map for focused reviews, quality review, debugging, and context loading.
+Use it when you want a Pi/Claude/Cursor/Codex agent to understand module ownership, path routing, trust boundaries, invariants, and review scope before it comments on code.
 
-Works with **Claude Code**, **Cursor**, **Codex**, and **pi**.
+What you get:
+
+- **repo map / agent context** — generated `edc-context/` docs with module boundaries and routing metadata
+- **context-aware code review** — security, delivery/architecture, and quality lenses routed to the right module docs
+- **local-first workflow** — runs from your repo through Pi's `/edc` menu or the terminal CLI; no remote PR bot required
+
+Works with **Pi**, **Claude Code**, **Cursor**, and **Codex**.
 
 ## 30-second start
 

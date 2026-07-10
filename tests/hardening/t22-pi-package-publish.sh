@@ -17,7 +17,18 @@ function ok(name, cond) {
   console.log(`${name}\t${cond ? '1' : '0'}`);
 }
 ok('scoped npm package name is @sgtbeatdown/edc', pkg.name === '@sgtbeatdown/edc');
-ok('package version is aligned to EDC 1.1.2', pkg.version === '1.1.2');
+ok('package version is aligned to EDC 1.1.3', pkg.version === '1.1.3');
+ok('package description is pi.dev-searchable', /pi/i.test(pkg.description || '') && /context-aware code review/i.test(pkg.description || '') && /repository architecture/i.test(pkg.description || ''));
+for (const keyword of [
+  'ai-agent',
+  'agent-context',
+  'repo-map',
+  'repository-architecture',
+  'security-review',
+  'quality-review',
+]) {
+  ok(`package keyword includes ${keyword}`, Array.isArray(pkg.keywords) && pkg.keywords.includes(keyword));
+}
 ok('package is public (not private)', pkg.private !== true);
 ok('package declares author', typeof pkg.author === 'string' && pkg.author.length > 0);
 ok('package declares bugs url', pkg.bugs?.url === 'https://github.com/almogdepaz/edc/issues');

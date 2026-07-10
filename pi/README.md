@@ -1,6 +1,6 @@
-# EDC for pi
+# EDC for Pi
 
-EDC adds repository architecture context and context-aware review workflows to [pi](https://pi.dev).
+EDC adds repository architecture maps, agent context, and context-aware code review workflows to [Pi](https://pi.dev). Run `/edc` to build context, then review full repos or diffs through security, delivery/architecture, and quality lenses.
 
 ## Install
 
@@ -29,7 +29,7 @@ pi update npm:@sgtbeatdown/edc
 pi remove npm:@sgtbeatdown/edc
 ```
 
-Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.2`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
+Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.3`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
 
 ## Requirements and permissions
 

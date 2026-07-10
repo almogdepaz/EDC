@@ -99,7 +99,7 @@ Both paths are resolved with `git rev-parse --git-path`, so they work with norma
 
 ## Skills
 
-In repos with existing EDC context, Pi exposes only the human-facing EDC methodology skills:
+Pi exposes only the human-facing EDC methodology skills globally:
 
 | Skill | Use |
 |---|---|
@@ -107,7 +107,7 @@ In repos with existing EDC context, Pi exposes only the human-facing EDC methodo
 | `edc-audit` | Apply the EDC quality-review methodology directly in chat. |
 | `edc-delivery-review` | Apply the EDC goal/spec delivery + architecture-fit review methodology directly in chat. |
 
-Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. In plain repos without `edc-context/manifest.json`, EDC does not advertise skills at session startup. The extension copies runtime scripts/private prompt bundles into a project-local `.edc/` cache only after an explicit `/edc` command invocation, so ordinary Pi session startup in unrelated repos stays quiet and does not create EDC project files.
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension copies runtime scripts/private prompt bundles into a project-local `.edc/` cache only after an explicit `/edc` command invocation, so ordinary Pi session startup in unrelated repos stays quiet and does not create EDC project files.
 
 ## Compatibility with other pi packages
 

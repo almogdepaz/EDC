@@ -540,13 +540,14 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 4a. plain repos do not advertise EDC skills passively.
+  // 4a. installed EDC pi skills are globally discoverable, even in plain repos.
   const plainSkillRepo = `${cwd}/plain-skill-repo`;
   fs.mkdirSync(plainSkillRepo, { recursive: true });
   childProcess.execFileSync("git", ["init", "-q"], { cwd: plainSkillRepo });
   const plainResources = await rd.handler({ type: "resources_discover", cwd: plainSkillRepo, reason: "startup" }, { cwd: plainSkillRepo });
-  if (plainResources?.skillPaths?.length) {
-    console.log("PLAIN_SKILLS_CONTAMINATION_FAIL:" + JSON.stringify(plainResources));
+  const plainSkillNames = (plainResources.skillPaths || []).map(p => p.split("/").pop()).sort();
+  if (JSON.stringify(plainSkillNames) !== JSON.stringify(expectedSkills)) {
+    console.log("PLAIN_GLOBAL_SKILLS_FAIL:" + plainSkillNames.join(","));
     process.exit(1);
   }
 

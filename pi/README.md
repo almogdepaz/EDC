@@ -99,7 +99,7 @@ Both paths are resolved with `git rev-parse --git-path`, so they work with norma
 
 ## Skills
 
-Pi exposes only the human-facing EDC methodology skills:
+In repos with existing EDC context, Pi exposes only the human-facing EDC methodology skills:
 
 | Skill | Use |
 |---|---|
@@ -107,7 +107,7 @@ Pi exposes only the human-facing EDC methodology skills:
 | `edc-audit` | Apply the EDC quality-review methodology directly in chat. |
 | `edc-delivery-review` | Apply the EDC goal/spec delivery + architecture-fit review methodology directly in chat. |
 
-Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension may also copy runtime scripts/private prompt bundles into a project-local `.edc/` cache so spawned subprocesses can resolve the same orchestrators from inside the target repo.
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. In plain repos without `edc-context/manifest.json`, EDC does not advertise skills at session startup. The extension copies runtime scripts/private prompt bundles into a project-local `.edc/` cache only after an explicit `/edc` command invocation, so ordinary Pi session startup in unrelated repos stays quiet and does not create EDC project files.
 
 ## Compatibility with other pi packages
 
@@ -124,7 +124,7 @@ Known interactions:
 EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.defaultMode`:
 
 - **`advisory`** (default) — pure docs. Hooks no-op. Zero per-tool token overhead.
-- **`inject`** — `session_start` surfaces `edc-context/index.md`; `tool_call` (bash/edit/write) auto-injects the relevant `edc-context/modules/<name>.md` once per session.
+- **`inject`** — when `edc-context/manifest.json` exists and opts into inject mode, `session_start` surfaces `edc-context/index.md`; `tool_call` (bash/edit/write) auto-injects the relevant `edc-context/modules/<name>.md` once per session. Missing EDC context is silent; use `/edc` explicitly to build or manage context.
 
 Toggle:
 

@@ -1207,7 +1207,10 @@ export default async function edcExtension(pi) {
   if (process.env.EDC_PI_SUBPROCESS === "1") return;
 
   // -- skills ---------------------------------------------------------------
-  pi.on("resources_discover", async () => {
+  pi.on("resources_discover", async (_event, ctx = {}) => {
+    const freshness = buildSessionStartContent(ctx.cwd || "");
+    if (freshness.mode === "no-context") return {};
+
     const skillsDir = join(PLUGIN_ROOT, "skills");
     const skillPaths = VISIBLE_SKILLS.map((name) => join(skillsDir, name)).filter(
       (path) => existsSync(join(path, "SKILL.md")),
@@ -1218,11 +1221,6 @@ export default async function edcExtension(pi) {
 
   // -- session start --------------------------------------------------------
   pi.on("session_start", async (_event, ctx) => {
-    try {
-      installOrchestratorScript(ctx.cwd, PLUGIN_ROOT);
-    } catch {
-      // best effort
-    }
     startBackgroundStatusWatcher(ctx);
     const { mode, content } = buildSessionStartContent(ctx.cwd);
     if (mode === "advisory" || !content) return;
@@ -1279,6 +1277,11 @@ export default async function edcExtension(pi) {
   pi.registerCommand(EDC_COMMAND.name, {
     description: EDC_COMMAND.description,
     handler: async (args, ctx) => {
+      try {
+        installOrchestratorScript(ctx.cwd, PLUGIN_ROOT);
+      } catch {
+        // best effort; menu actions will surface missing runtime scripts if install fails
+      }
       await handleEdcMenu(pi, args, ctx);
     },
   });

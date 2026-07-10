@@ -17,7 +17,7 @@ function ok(name, cond) {
   console.log(`${name}\t${cond ? '1' : '0'}`);
 }
 ok('scoped npm package name is @sgtbeatdown/edc', pkg.name === '@sgtbeatdown/edc');
-ok('package version is aligned to EDC 1.1.3', pkg.version === '1.1.3');
+ok('package version is aligned to EDC 1.1.4', pkg.version === '1.1.4');
 ok('package description is pi.dev-searchable', /pi/i.test(pkg.description || '') && /context-aware code review/i.test(pkg.description || '') && /repository architecture/i.test(pkg.description || ''));
 for (const keyword of [
   'ai-agent',
@@ -48,6 +48,9 @@ for (const required of [
   'README.md',
   'CONTRIBUTING.md',
   'LICENSE',
+  'llms.txt',
+  'docs/**',
+  'examples/**',
 ]) {
   ok(`files allowlist includes ${required}`, files.has(required));
 }

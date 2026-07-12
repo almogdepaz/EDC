@@ -95,7 +95,12 @@ EOF
 }
 finish_ok() {
   printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  if [ "${PI_FAKE_AGENT_END_ERROR:-0}" = "1" ]; then
+  if [ "${PI_FAKE_AGENT_END_RETRY:-0}" = "1" ]; then
+    printf '{"type":"agent_end","willRetry":true,"messages":[{"role":"assistant","stopReason":"error","errorMessage":"WebSocket error","content":[{"type":"text","text":""}]}]}\n'
+    printf '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":1,"errorMessage":"WebSocket error"}\n'
+    printf '{"type":"auto_retry_end","success":true,"attempt":1}\n'
+    printf '{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
+  elif [ "${PI_FAKE_AGENT_END_ERROR:-0}" = "1" ]; then
     printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"provider down","content":[{"type":"text","text":""}]}]}\n'
   else
     printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
@@ -273,6 +278,15 @@ else
   cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
 fi
 
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/agent-end-retry.out"; then
+  check "18.12: pi backend allows retryable agent_end to recover" 1
+else
+  check "18.12: pi backend allows retryable agent_end to recover" 0
+  cat "$LOG_DIR/agent-end-retry.out" "$LOG_DIR/agent-end-retry.err"
+fi
+
 auth_start=$(date +%s)
 PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
 rc=$?
@@ -281,9 +295,9 @@ if [ "$rc" -ne 0 ] \
    && [ "$auth_duration" -lt 3 ] \
    && grep -q 'No API key found for azure-openai-responses' "$LOG_DIR/plain-auth.err" \
    && ! grep -q "timed out" "$LOG_DIR/plain-auth.err"; then
-  check "18.12: pi backend fails fast on plaintext provider auth errors" 1
+  check "18.13: pi backend fails fast on plaintext provider auth errors" 1
 else
-  check "18.12: pi backend fails fast on plaintext provider auth errors" 0
+  check "18.13: pi backend fails fast on plaintext provider auth errors" 0
   printf 'duration=%s rc=%s\n' "$auth_duration" "$rc"
   cat "$LOG_DIR/plain-auth.out" "$LOG_DIR/plain-auth.err"
 fi

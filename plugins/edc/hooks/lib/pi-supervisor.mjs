@@ -121,6 +121,9 @@ lines.on("line", (line) => {
   }
 
   if (event.type === "agent_end") {
+    // Pi emits agent_end before its built-in provider retry begins.
+    if (event.willRetry === true) return;
+
     const result = classifyAgentEnd(event);
     if (!result.ok) {
       process.stderr.write(`ERROR: pi subprocess: ${result.reason}\n`);

@@ -573,9 +573,9 @@ auto_mode() {
     changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
     rm -f "$before_snapshot" "$after_snapshot"
     if [ -n "$changed_forbidden" ]; then
-      echo "ERROR: review subagent touched forbidden paths for module $module:" >&2
+      echo "ERROR: forbidden paths changed during review for module $module:" >&2
       echo "$changed_forbidden" | sed 's/^/  /' >&2
-      edc_write_review_result 1 "review-write-containment" "review subagent touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module" ""
+      edc_write_review_result 1 "review-write-containment" "forbidden paths changed during review for module $module" "inspect the log for the writer or concurrent phase; rerun in a disposable checkout if reviewing untrusted input" "$module" ""
       exit 1
     fi
     assert_report_valid "$module" \

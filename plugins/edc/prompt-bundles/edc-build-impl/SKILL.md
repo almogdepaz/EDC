@@ -36,6 +36,8 @@ Routing is decided by `plugins/edc/scripts/edc-build.sh` BEFORE this skill is in
 
 **CRITICAL — Clean Slate Rule:** All analysis (`edc-module-context-impl`, `edc-review`, `edc-audit`) MUST run in subagents that do NOT inherit the parent conversation. Findings must be based purely on code analysis, not influenced by what the user said or what files were previously discussed. The subagent sees only: the code, the skill instructions, and the task prompt. Nothing else.
 
+**CRITICAL — Worker Lifecycle Rule:** Do not launch detached or background processes that outlive the tool call which created them. For parallel batches, use one foreground command that installs signal/exit traps, starts the workers, waits for every worker, and kills any remaining worker before returning. Do not use a separate polling command after the spawning shell exits. A timed-out build must leave no process capable of writing `edc-context/`.
+
 ## Full Build
 
 A v2 full build emits the complete canonical layout in one pass. There is no separate split step.

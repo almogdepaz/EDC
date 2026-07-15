@@ -57,6 +57,9 @@ mkdir -p edc-context/review-tasks
 if [ "${EDC_T39_FORBIDDEN_WRITE:-0}" = "1" ]; then
   printf 'pwned\n' >> src/a.txt
 fi
+if [ "${EDC_T39_FORBIDDEN_CANONICAL_REPORT_WRITE:-0}" = "1" ]; then
+  printf 'pwned\n' >> edc-context/reports/issues.md
+fi
 if [ "${EDC_T39_FORBIDDEN_GIT_HOOK_WRITE:-0}" = "1" ]; then
   mkdir -p .git/hooks
   printf '#!/usr/bin/env bash\necho pwned\n' > .git/hooks/pre-commit
@@ -129,7 +132,7 @@ set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/bad.out" 2>"$LOG_DIR/bad.err"
 bad_rc=$?
 set -e
-if [ "$bad_rc" -ne 0 ] && grep -q 'review subagent touched forbidden paths' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
+if [ "$bad_rc" -ne 0 ] && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
   echo "PASS: review containment blocks source writes"
 else
   echo "FAIL: review containment did not block source writes"
@@ -152,10 +155,26 @@ echo "PASS: review containment writes structured failure result"
 git checkout -- src/a.txt
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_CANONICAL_REPORT_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/canonical-report.out" 2>"$LOG_DIR/canonical-report.err"
+canonical_report_rc=$?
+set -e
+if [ "$canonical_report_rc" -ne 0 ] \
+  && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/canonical-report.err" \
+  && grep -q 'edc-context/reports/issues.md' "$LOG_DIR/canonical-report.err"; then
+  echo "PASS: security review protects canonical reports as phase-owned state"
+else
+  echo "FAIL: security review did not protect canonical reports"
+  echo "--- stdout ---"; cat "$LOG_DIR/canonical-report.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/canonical-report.err"
+  exit 1
+fi
+printf '## Issues\n' > edc-context/reports/issues.md
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_GIT_HOOK_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/git-hook.out" 2>"$LOG_DIR/git-hook.err"
 git_hook_rc=$?
 set -e
-if [ "$git_hook_rc" -ne 0 ] && grep -q 'review subagent touched forbidden paths' "$LOG_DIR/git-hook.err" && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err"; then
+if [ "$git_hook_rc" -ne 0 ] && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/git-hook.err" && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err"; then
   echo "PASS: review containment blocks git hook writes"
 else
   echo "FAIL: review containment did not block git hook writes"

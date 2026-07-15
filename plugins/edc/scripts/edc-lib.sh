@@ -227,7 +227,7 @@ run_with_timeout() {
     local rc=$?
     if [ $rc -eq 124 ]; then
       echo "ERROR: phase '$label' timed out after ${secs}s" >&2
-      return 1
+      return 124
     fi
     return $rc
   fi
@@ -240,23 +240,30 @@ run_with_timeout() {
   # when it fires; we just forward the command's exit code.
   # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
   # non-interactive scripts, which swallows here-strings passed to the caller.
+  local timeout_marker
+  timeout_marker=$(mktemp "${TMPDIR:-/tmp}/edc-timeout-$$.XXXXXX") || return 1
+  rm -f "$timeout_marker"
   exec 3<&0
   "$@" <&3 &
   local cmd_pid=$!
   local watchdog_pid=""
-  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; exit 143' TERM INT
+  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; rm -f "${timeout_marker:-}"; exit 143' TERM INT
   exec 3<&-
   # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
   # the pipe write-end. If it did, the sleep (reparented to init when the
   # subshell dies on kill) would keep the downstream `stream_filter` reader
   # blocked for the full watchdog duration after the real command already exited.
   (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
-    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
+    { : > "$timeout_marker"; echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2; }) >/dev/null &
   watchdog_pid=$!
   wait "$cmd_pid"
   local rc=$?
   kill "$watchdog_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
+  if [ -f "$timeout_marker" ]; then
+    rc=124
+  fi
+  rm -f "$timeout_marker"
   trap - TERM INT
   return $rc
 }
@@ -1010,6 +1017,9 @@ edc_diff_curator_forbidden_paths() {
   return 1
 }
 
+# Security reviewers own only their assigned module report/result plus runtime
+# telemetry. Canonical context and audit reports are shared phase inputs here;
+# their generated/untracked status does not make them writable by this phase.
 edc_review_write_allowed_path() {
   local path="$1"
   shift || true

@@ -84,13 +84,26 @@ else
 fi
 
 # ── 4e: run_with_timeout fires on exceeded time ───────────────────────────────
-timeout_fired=0
-run_with_timeout 1 "slow-test" sleep 5 2>/tmp/t4-timeout-err.txt || timeout_fired=1
-if [ "$timeout_fired" -eq 1 ] && grep -q 'timed out' /tmp/t4-timeout-err.txt; then
-  echo "PASS: run_with_timeout fires on exceeded time"
+timeout_rc=0
+run_with_timeout 1 "slow-test" sleep 5 2>/tmp/t4-timeout-err.txt || timeout_rc=$?
+if [ "$timeout_rc" -eq 124 ] && grep -q 'timed out' /tmp/t4-timeout-err.txt; then
+  echo "PASS: run_with_timeout preserves distinct timeout status"
 else
-  echo "FAIL: run_with_timeout did not fire on slow command (exit: $timeout_fired)"
+  echo "FAIL: run_with_timeout did not return timeout status 124 (exit: $timeout_rc)"
   cat /tmp/t4-timeout-err.txt
+  exit 1
+fi
+
+native_timeout_bin="$TIMEOUT_BIN"
+TIMEOUT_BIN=""
+fallback_timeout_rc=0
+run_with_timeout 1 "fallback-slow-test" sleep 5 2>/tmp/t4-fallback-timeout-err.txt || fallback_timeout_rc=$?
+TIMEOUT_BIN="$native_timeout_bin"
+if [ "$fallback_timeout_rc" -eq 124 ] && grep -q 'timed out' /tmp/t4-fallback-timeout-err.txt; then
+  echo "PASS: fallback watchdog preserves distinct timeout status"
+else
+  echo "FAIL: fallback watchdog did not return timeout status 124 (exit: $fallback_timeout_rc)"
+  cat /tmp/t4-fallback-timeout-err.txt
   exit 1
 fi
 

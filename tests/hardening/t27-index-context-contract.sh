@@ -58,6 +58,8 @@ check "build prompt explains contextless entries are machine coverage" \
   "$(contains "$BUILD_PROMPT" "contextless.entries" && contains "$BUILD_PROMPT" "must not appear in the human index read path" && echo 1 || echo 0)"
 check "build prompt detects gitlink submodule boundaries" \
   "$(contains "$BUILD_PROMPT" "git ls-files -s" && contains "$BUILD_PROMPT" "mode 160000" && contains "$BUILD_PROMPT" "submodule/gitlink" && echo 1 || echo 0)"
+check "build prompt keeps analysis workers attached to foreground lifecycle" \
+  "$(contains "$BUILD_PROMPT" "Do not launch detached or background processes" && contains "$BUILD_PROMPT" "one foreground command" && echo 1 || echo 0)"
 
 check "update prompt preserves routing-first index sections without reports" \
   "$(contains "$UPDATE_PROMPT" "preserve this section order" && contains "$UPDATE_PROMPT" "Route by path/task" && contains "$UPDATE_PROMPT" "Cross-module coupling / blast radius" && contains "$UPDATE_PROMPT" "Do not add a Reports section" && echo 1 || echo 0)"

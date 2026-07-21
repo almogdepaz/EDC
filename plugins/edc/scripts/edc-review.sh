@@ -54,6 +54,15 @@ final_review_filename() {
   echo "review-$(echo "$target" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-40).md"
 }
 
+review_output_path() {
+  local target="$1"
+  if [ -n "${EDC_REVIEW_FINAL_OUTPUT:-}" ]; then
+    echo "$EDC_REVIEW_FINAL_OUTPUT"
+  else
+    final_review_filename "$target"
+  fi
+}
+
 tracked_dirty_files() {
   {
     git diff --name-only
@@ -368,7 +377,7 @@ consolidate_mode() {
 
   local target final modules missing=0
   target=$(manifest_target)
-  final=$(final_review_filename "$target")
+  final=$(review_output_path "$target")
   modules=$(manifest_modules)
 
   if [ -z "$modules" ]; then
@@ -424,7 +433,7 @@ verify_mode() {
 
   local target final modules missing=0
   target=$(manifest_target)
-  final=$(final_review_filename "$target")
+  final=$(review_output_path "$target")
   modules=$(manifest_modules)
 
   while IFS= read -r module; do
@@ -507,10 +516,20 @@ auto_mode() {
       || { edc_write_review_result 1 "context-recovery-failed" "context recovery failed before security review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force" "" ""; exit 1; }
   fi
 
+  # All worker IPC and the pre-promotion consolidated report live under git
+  # state. Only a fully validated consolidated report is promoted to the root.
+  local run_dir run_id
+  edc_create_worker_run "security" run_dir run_id || exit $?
+  local EDC_REVIEW_TASKS_DIR="$run_dir/staged/review-tasks"
+  local EDC_REVIEW_TASKS_MANIFEST="$EDC_REVIEW_TASKS_DIR/manifest.json"
+  local canonical_review staged_review
+  canonical_review=$(final_review_filename "$target")
+  staged_review="$run_dir/staged/$canonical_review"
+  local EDC_REVIEW_FINAL_OUTPUT="$staged_review"
+
   # Build review tasks now that context is fresh. Run the function in-process
-  # instead of shelling out to `$0 --build`; build_mode still exits, but command
-  # substitution confines that exit to the subshell while preserving filesystem
-  # outputs under $EDC_REVIEW_TASKS_DIR.
+  # instead of shelling out to `$0 --build`; command substitution confines its
+  # exits while preserving outputs under the git-private task directory.
   local out build_rc=0
   out=$(build_mode "$target" ${extra_args[@]+"${extra_args[@]}"} 2>&1) || build_rc=$?
 
@@ -549,57 +568,85 @@ auto_mode() {
 
   local had_warning=0
 
-  # Spawn one agent subprocess per module.
-  # The here-string on each spawn provides the prompt via stdin, overriding
-  # the loop's <<< "$tasks" so it doesn't leak into the subprocess.
-  while IFS= read -r task_path; do
-    [ -z "$task_path" ] && continue
-    local module
-    module=$(basename "$task_path" .md)
-    echo "→ reviewing module: $module"
-    local review_prompt before_snapshot after_snapshot changed_forbidden allowed_report allowed_result spawn_rc
-    allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
-    allowed_result="$EDC_REVIEW_TASKS_DIR/result-${module}.json"
+  if [ -n "$tasks" ]; then
+    local prompts_dir="$run_dir/prompts" tasks_jsonl="$run_dir/review-tasks.jsonl" worker_manifest="$run_dir/review-manifest.json"
+    : > "$tasks_jsonl"
+    local -a review_modules=() review_task_ids=()
+    local task_path module prompt_path allowed_report allowed_result task_id
+    local task_count=0
+    while IFS= read -r task_path; do
+      [ -z "$task_path" ] && continue
+      task_count=$((task_count + 1))
+      module=$(basename "$task_path" .md)
+      task_id="review-module-$task_count"
+      prompt_path="$prompts_dir/$task_id.md"
+      allowed_report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+      allowed_result="$EDC_REVIEW_TASKS_DIR/result-${module}.json"
+      echo "→ planning review module: $module"
+      resolve_prompt review "$task_path" > "$prompt_path" || exit 1
+      if [ "$(manifest_module_policy "$module")" = "promotion-check" ]; then
+        edc_worker_task_append "$tasks_jsonl" "$task_id" "edc-review/$module" "$module" "$prompt_path" "${EDC_REVIEW_TIMEOUT:-1800}" continue "$allowed_report" "$allowed_result" || exit 1
+      else
+        edc_worker_task_append "$tasks_jsonl" "$task_id" "edc-review/$module" "$module" "$prompt_path" "${EDC_REVIEW_TIMEOUT:-1800}" continue "$allowed_report" || exit 1
+      fi
+      review_modules+=("$module")
+      review_task_ids+=("$task_id")
+    done <<< "$tasks"
+
+    edc_worker_manifest_write "$worker_manifest" "$run_id" "$run_dir" "$tasks_jsonl" || exit 1
+    local pool_rc=0 before_snapshot after_snapshot changed_forbidden
     before_snapshot=$(mktemp)
     after_snapshot=$(mktemp)
-    edc_snapshot_review_forbidden_paths "$before_snapshot" "$allowed_report" "$allowed_result"
-    review_prompt=$(resolve_prompt review "$task_path") || { rm -f "$before_snapshot" "$after_snapshot"; exit 1; }
-    if edc_spawn "edc-review/$module" "${EDC_REVIEW_TIMEOUT:-1800}" "$review_prompt"; then
-      spawn_rc=0
-    else
-      spawn_rc=$?
-    fi
-    edc_snapshot_review_forbidden_paths "$after_snapshot" "$allowed_report" "$allowed_result"
+    edc_snapshot_review_forbidden_paths "$before_snapshot"
+    edc_worker_pool_run "$worker_manifest" || pool_rc=$?
+    edc_snapshot_review_forbidden_paths "$after_snapshot"
     changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
     rm -f "$before_snapshot" "$after_snapshot"
     if [ -n "$changed_forbidden" ]; then
-      echo "ERROR: forbidden paths changed during review for module $module:" >&2
+      echo "ERROR: forbidden paths changed during the security worker stage:" >&2
       echo "$changed_forbidden" | sed 's/^/  /' >&2
-      edc_write_review_result 1 "review-write-containment" "forbidden paths changed during review for module $module" "inspect the log for the writer or concurrent phase; rerun in a disposable checkout if reviewing untrusted input" "$module" ""
+      edc_write_review_result 1 "review-write-containment" "forbidden paths changed during the security worker stage" "inspect $run_dir for the writer; rerun in a disposable checkout if reviewing untrusted input" "" ""
       exit 1
     fi
-    assert_report_valid "$module" \
-      || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the module reviewer output in the log; the reviewer likely wrote an incomplete report" "$module" ""; exit 1; }
-    if [ "$spawn_rc" -ne 0 ]; then
-      if [ "$(manifest_module_policy "$module")" != "promotion-check" ]; then
-        assert_report_complete_after_failed_subprocess "$module" \
-          || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the module reviewer output in the log; failed subprocesses must produce the full security report contract before being accepted as warnings" "$module" ""; exit 1; }
+
+    local task_index=0 worker_status
+    while [ "$task_index" -lt "$task_count" ]; do
+      module="${review_modules[$task_index]}"
+      assert_report_valid "$module" \
+        || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the staged reviewer output under $run_dir" "$module" ""; exit 1; }
+      worker_status=$(node -e 'const j=require(process.argv[1]); const task=j.tasks.find((entry)=>entry.id===process.argv[2]); process.stdout.write(task?.status || "missing")' "$run_dir/stage-result.json" "${review_task_ids[$task_index]}")
+      if [ "$worker_status" != "success" ]; then
+        if [ "$(manifest_module_policy "$module")" != "promotion-check" ]; then
+          assert_report_complete_after_failed_subprocess "$module" \
+            || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the staged reviewer output under $run_dir; failed subprocesses must satisfy the full report contract" "$module" ""; exit 1; }
+        fi
+        had_warning=1
+        echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
+        echo "HINT: treating the validated report as success; inspect $run_dir for transport/provider diagnostics." >&2
       fi
-      had_warning=1
-      echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
-      echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
+      task_index=$((task_index + 1))
+    done
+    if [ "$pool_rc" -ne 0 ] && [ "$had_warning" -eq 0 ]; then
+      echo "ERROR: security worker pool failed without a failed task result" >&2
+      exit 1
     fi
-  done <<< "$tasks"
+  fi
 
-  # Consolidate + verify
-  bash "$0" --consolidate || { echo "ERROR: consolidation failed" >&2; edc_write_review_result 1 "consolidation-failed" "review consolidation failed" "inspect the log for report validation errors and rerun after fixing them" "" ""; exit 1; }
-  bash "$0" --verify     || { echo "ERROR: verification failed" >&2; edc_write_review_result 1 "verification-failed" "review verification failed" "inspect the log for missing or stale review artifacts" "" ""; exit 1; }
+  # Validate deterministic prewritten reports too, then consolidate to staging.
+  local module all_reports_invalid=0
+  while IFS= read -r module; do
+    [ -z "$module" ] && continue
+    assert_report_valid "$module" || all_reports_invalid=1
+  done <<< "$(manifest_modules)"
+  if [ "$all_reports_invalid" -ne 0 ]; then
+    edc_write_review_result 1 "report-validation" "one or more review reports failed validation" "inspect staged reports under $run_dir" "" ""
+    exit 1
+  fi
 
-  # Auto-cleanup: review tasks are pure IPC scaffolding; the consolidated
-  # review-<target>.md at the repo root is the durable artifact. On success,
-  # remove $EDC_REVIEW_TASKS_DIR/ so it doesn't clutter the tree. Failures
-  # exit non-zero above and leave the directory in place for inspection.
-  # Override with EDC_KEEP_REVIEW_TASKS=1 to keep the dir on success too.
+  consolidate_mode || { echo "ERROR: consolidation failed" >&2; edc_write_review_result 1 "consolidation-failed" "review consolidation failed" "inspect staged reports under $run_dir" "" ""; exit 1; }
+  verify_mode || { echo "ERROR: verification failed" >&2; edc_write_review_result 1 "verification-failed" "review verification failed" "inspect staged artifacts under $run_dir" "" ""; exit 1; }
+  edc_promote_file "$staged_review" "$canonical_review" || { edc_write_review_result 1 "promotion-failed" "review promotion failed" "inspect filesystem permissions and staged output under $run_dir" "" ""; exit 1; }
+
   if [ "${EDC_KEEP_REVIEW_TASKS:-0}" != "1" ]; then
     rm -rf "$EDC_REVIEW_TASKS_DIR"
   fi

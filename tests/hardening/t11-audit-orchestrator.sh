@@ -31,6 +31,14 @@ cat > "$MOCK_BIN/claude" <<MOCK
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=\$(cat)
+previous=""
+for arg in "\$@"; do
+  if [ "\$previous" = "--system-prompt-file" ]; then
+    prompt=\$(cat "\$arg")
+    break
+  fi
+  previous="\$arg"
+done
 SCENARIO_FILE="$TMPDIR_T11/scenario"
 LOG_FILE="$TMPDIR_T11/audit-log"
 scenario="valid"
@@ -41,6 +49,14 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
   report_path=\$(printf '%s\n' "\$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
   mkdir -p "\$(dirname "\$report_path")"
   printf 'worker:%s\n' "\$module" >> "\$LOG_FILE"
+  if [ "\${AUDIT_PARALLEL_PROBE:-0}" = "1" ]; then
+    mkdir -p "$TMPDIR_T11/active"
+    : > "$TMPDIR_T11/active/\$module"
+    active=\$(find "$TMPDIR_T11/active" -type f | wc -l | tr -d ' ')
+    printf '%s\n' "\$active" >> "$TMPDIR_T11/overlap"
+    sleep 0.4
+    rm -f "$TMPDIR_T11/active/\$module"
+  fi
   printf '## Module Audit: %s\n\nScoped finding.\n' "\$module" > "\$report_path"
   if [ "\$scenario" = "valid-worker-exit-fail" ]; then
     exit 1
@@ -50,23 +66,25 @@ fi
 
 if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
   printf 'synthesis\n' >> "\$LOG_FILE"
-  mkdir -p edc-context/reports
+  complexity_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
+  issues_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
+  mkdir -p "\$(dirname "\$complexity_path")" "\$(dirname "\$issues_path")"
   case "\$scenario" in
     valid|valid-worker-exit-fail)
-      printf '## Summary\n\nSynthesized findings.\n' > edc-context/reports/complexity.md
-      printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
+      printf '## Summary\n\nSynthesized findings.\n' > "\$complexity_path"
+      printf '## Known Issues\n\nSynthesized findings.\n' > "\$issues_path"
       ;;
     missing-issues)
-      printf '## Summary\n\nSynthesized findings.\n' > edc-context/reports/complexity.md
+      printf '## Summary\n\nSynthesized findings.\n' > "\$complexity_path"
       # deliberately do NOT write issues.md
       ;;
     stub-complexity)
-      printf 'no headings here just plain text\n' > edc-context/reports/complexity.md
-      printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
+      printf 'no headings here just plain text\n' > "\$complexity_path"
+      printf '## Known Issues\n\nSynthesized findings.\n' > "\$issues_path"
       ;;
     valid-synthesis-exit-fail)
-      printf '## Summary\n\nSynthesized findings.\n' > edc-context/reports/complexity.md
-      printf '## Known Issues\n\nSynthesized findings.\n' > edc-context/reports/issues.md
+      printf '## Summary\n\nSynthesized findings.\n' > "\$complexity_path"
+      printf '## Known Issues\n\nSynthesized findings.\n' > "\$issues_path"
       exit 1
       ;;
   esac
@@ -255,6 +273,26 @@ if [ "$result" -ne 0 ] && echo "$out" | grep -q "no '## ' headings"; then
   echo "PASS: structureless report rejected with descriptive error"
 else
   echo "FAIL (11g): expected non-zero exit + 'no ## headings' error. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11h: module workers use the bounded pool and stage outside the checkout ─
+setup_repo "fresh"
+rm -rf "$TMPDIR_T11/active"
+rm -f "$TMPDIR_T11/overlap"
+echo "valid" > "$TMPDIR_T11/scenario"
+result=0
+out=$(AUDIT_PARALLEL_PROBE=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+max_overlap=$(sort -nr "$TMPDIR_T11/overlap" 2>/dev/null | head -1 || echo 0)
+run_reports=0
+if [ -d .git/edc/runs ]; then
+  run_reports=$(find .git/edc/runs -path '*/staged/audit-tasks/*.md' -type f | wc -l | tr -d ' ')
+fi
+if [ "$result" -eq 0 ] && [ "$max_overlap" -eq 2 ] && [ "$run_reports" -eq 2 ] && [ ! -d edc-context/audit-tasks ]; then
+  echo "PASS: audit workers overlap at configured bound and stage under git state"
+else
+  echo "FAIL (11h): expected two-worker overlap and git-state staging. exit=$result overlap=$max_overlap staged=$run_reports"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi

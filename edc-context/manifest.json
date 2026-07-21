@@ -17,7 +17,7 @@
     {
       "name": "runtime-cli",
       "doc": "edc-context/modules/runtime-cli.md",
-      "summary": "Terminal CLI, shell orchestrators, and deterministic build/update/review/audit control plane.",
+      "summary": "Terminal CLI, shell orchestrators, and deterministic build/update/review-all/security/delivery/quality control plane.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -32,12 +32,13 @@
     {
       "name": "plugin-surface",
       "doc": "edc-context/modules/plugin-surface.md",
-      "summary": "Package metadata, Claude/Cursor hook surface, and shared JavaScript routing/context injection runtime.",
+      "summary": "Package metadata/docs, Claude/Cursor hook surface, and shared JavaScript routing/context injection runtime.",
       "priority": 100,
       "match": {
         "exactFiles": [
-          "package.json",
           ".claude-plugin/marketplace.json",
+          "README.md",
+          "package.json",
           "plugins/edc/README.md"
         ],
         "prefixes": [
@@ -61,7 +62,7 @@
     {
       "name": "agent-wrappers",
       "doc": "edc-context/modules/agent-wrappers.md",
-      "summary": "Pi extension wrapper, interactive menu, background reviews, Pi install documentation, and Pi media.",
+      "summary": "Pi extension wrapper, review scope menu, background jobs, visible skills, Pi install documentation, and Pi media.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -75,13 +76,15 @@
     {
       "name": "hardening-tests",
       "doc": "edc-context/modules/hardening-tests.md",
-      "summary": "Shell, Node, and CI hardening tests pinning runtime, routing, install, package, and Pi contracts.",
+      "summary": "Shell, Node, CI, package, Pi, prompt-contract, phase-result, and skill-fixture tests pinning public behavior.",
       "priority": 100,
       "match": {
         "exactFiles": [
-          ".github/workflows/ci.yml"
+          ".github/workflows/ci.yml",
+          ".shellcheckrc"
         ],
         "prefixes": [
+          "tests/fixtures/skill-evals/",
           "tests/hardening/"
         ]
       }
@@ -93,6 +96,7 @@
       "priority": 100,
       "match": {
         "exactFiles": [
+          "benchmark/PI_EDC_X_THREAD.md",
           "benchmark/audit.py",
           "benchmark/autoresearch-log.tsv",
           "benchmark/autoresearch.sh",
@@ -119,23 +123,57 @@
     }
   ],
   "unmapped": {
-    "allowedGlobs": [
-      "AGENTS.md",
-      "edc-context/**",
-      "review-tasks/**",
-      "*.md",
-      ".gitignore",
-      ".edcignore",
-      "LICENSE",
-      "benchmark/curl/**",
-      "benchmark/redis/**"
+    "allowedGlobs": []
+  },
+  "contextless": {
+    "entries": [
+      {
+        "id": "generated-context",
+        "globs": [
+          "AGENTS.md",
+          "edc-context/**"
+        ],
+        "reason": "Generated EDC orientation/context artifacts are maintained by EDC workflows, not reviewed as source modules.",
+        "reviewPolicy": "account-only"
+      },
+      {
+        "id": "repo-metadata",
+        "globs": [
+          ".gitignore",
+          ".edcignore",
+          "CHANGELOG.md",
+          "CONTRIBUTING.md",
+          "SECURITY.md",
+          "LICENSE"
+        ],
+        "reason": "Repository metadata and policy docs are tracked for accounting but do not need deep module context by default.",
+        "reviewPolicy": "account-only"
+      },
+      {
+        "id": "benchmark-corpora",
+        "globs": [
+          "benchmark/curl/**",
+          "benchmark/redis/**"
+        ],
+        "reason": "Large external benchmark target/corpus trees are intentionally outside production context coverage.",
+        "reviewPolicy": "no-context-review"
+      }
     ]
   },
-  "generatedAt": "2026-06-17T10:03:34Z",
-  "sourceCommit": "acd02464901ac464c7d673a80859773a105671f8",
+  "generatedAt": "2026-07-07T08:31:13Z",
+  "sourceCommit": "3a8f94363d793519a3eb87f50e7540c72b0973c0",
   "coverage": {
-    "mappedFileCount": 99,
-    "unmappedFileCount": 36,
-    "ambiguousPathCount": 0
+    "contextMappedFileCount": 175,
+    "contextlessFileCount": 18,
+    "uncoveredFileCount": 0,
+    "ambiguousPathCount": 0,
+    "ignoredFileCount": 16,
+    "ignoreSource": "file",
+    "ignoreGlobs": [
+      "benchmark/curl/**",
+      "benchmark/redis/**"
+    ],
+    "mappedFileCount": 175,
+    "unmappedFileCount": 18
   }
 }

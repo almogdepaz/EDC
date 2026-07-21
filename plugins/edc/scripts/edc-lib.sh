@@ -346,7 +346,7 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
         # Only set if not already exported by the caller.
         if [ -z "${!key:-}" ]; then
           export "$key=$val"
@@ -380,7 +380,96 @@ resolve_model_for_phase() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. COST LOG — per-spawn telemetry (model_observed, tokens, cost).
+# 4. WORKER COORDINATION — isolated run storage and bounded task manifests.
+# ════════════════════════════════════════════════════════════════════════════
+
+EDC_WORKER_POOL_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-pool.mjs"
+EDC_WORKER_MANIFEST_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-manifest.mjs"
+EDC_WORKER_RUNNER="$EDC_SCRIPTS_DIR/edc-worker.sh"
+
+edc_worker_max_concurrency() {
+  local value="${EDC_MAX_CONCURRENCY:-4}"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
+      return 2
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 64 ]; then
+    echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
+    return 2
+  fi
+  echo "$value"
+}
+
+# edc_create_worker_run <phase> <out-dir-var> <out-id-var>
+edc_create_worker_run() {
+  local phase="$1" out_dir_var="$2" out_id_var="$3"
+  local __worker_git_dir __worker_run_id __worker_run_dir
+  __worker_git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) \
+    || { echo "ERROR: worker coordination requires a git repository" >&2; return 2; }
+  __worker_run_id="${phase}-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
+  __worker_run_dir="$__worker_git_dir/edc/runs/$__worker_run_id"
+  mkdir -p "$__worker_run_dir/prompts" "$__worker_run_dir/staged" "$__worker_run_dir/tasks" || return 1
+  printf -v "$out_dir_var" '%s' "$__worker_run_dir"
+  printf -v "$out_id_var" '%s' "$__worker_run_id"
+}
+
+# edc_worker_task_append <jsonl> <id> <phase> <module> <prompt> <timeout>
+#                        <failure-policy> <output>...
+edc_worker_task_append() {
+  local tasks_file="$1" id="$2" phase="$3" module="$4" prompt_file="$5" timeout_secs="$6" failure_policy="$7"
+  shift 7
+  # shellcheck disable=SC2016 # JavaScript template literals must not expand in Bash.
+  node -e '
+    const [id, phase, module, promptFile, timeoutText, failurePolicy, ...outputs] = process.argv.slice(1);
+    process.stdout.write(`${JSON.stringify({
+      id,
+      phase,
+      ...(module ? { module } : {}),
+      promptFile,
+      timeoutSeconds: Number(timeoutText),
+      failurePolicy,
+      outputs,
+    })}\n`);
+  ' "$id" "$phase" "$module" "$prompt_file" "$timeout_secs" "$failure_policy" "$@" >> "$tasks_file"
+}
+
+edc_worker_manifest_write() {
+  local manifest_path="$1" run_id="$2" run_dir="$3" tasks_file="$4"
+  local max_concurrency
+  max_concurrency=$(edc_worker_max_concurrency) || return $?
+  node "$EDC_WORKER_MANIFEST_CLI" "$manifest_path" "$run_id" "$run_dir" "$max_concurrency" "$tasks_file"
+}
+
+edc_worker_pool_run() {
+  local manifest_path="$1"
+  [ -f "$EDC_WORKER_POOL_CLI" ] || { echo "ERROR: worker pool not found: $EDC_WORKER_POOL_CLI" >&2; return 2; }
+  [ -x "$EDC_WORKER_RUNNER" ] || { echo "ERROR: worker runner not executable: $EDC_WORKER_RUNNER" >&2; return 2; }
+  node "$EDC_WORKER_POOL_CLI" --runner "$EDC_WORKER_RUNNER" "$manifest_path"
+}
+
+# edc_worker_run_single <run-dir> <run-id> <task-id> <phase> <module>
+#                       <prompt> <timeout> <failure-policy> <output>...
+edc_worker_run_single() {
+  local run_dir="$1" run_id="$2" task_id="$3" phase="$4" module="$5" prompt_file="$6" timeout_secs="$7" failure_policy="$8"
+  shift 8
+  local tasks_file="$run_dir/$task_id.jsonl" manifest_file="$run_dir/$task_id-manifest.json"
+  : > "$tasks_file"
+  edc_worker_task_append "$tasks_file" "$task_id" "$phase" "$module" "$prompt_file" "$timeout_secs" "$failure_policy" "$@" || return 1
+  edc_worker_manifest_write "$manifest_file" "$run_id" "$run_dir" "$tasks_file" || return 1
+  edc_worker_pool_run "$manifest_file"
+}
+
+edc_promote_file() {
+  local staged="$1" canonical="$2" temporary
+  temporary="${canonical}.$$"
+  mkdir -p "$(dirname "$canonical")"
+  cp "$staged" "$temporary" && mv "$temporary" "$canonical"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 5. COST LOG — per-spawn telemetry (model_observed, tokens, cost).
 # ════════════════════════════════════════════════════════════════════════════
 # Appends one JSON line per spawn to $EDC_SPAWN_LOG (default:
 # edc-context/build/spawn-log.jsonl, fallback /tmp/edc-spawn-log.jsonl).
@@ -616,7 +705,25 @@ edc_spawn() {
         printf '%s' "$prompt" > "$effective_prompt_file"
         cleanup_prompt_file=1
       fi
-      local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
+      local pi_extension="${EDC_PI_EXTENSION_PATH:-}"
+      if [ -n "$pi_extension" ]; then
+        case "$pi_extension" in
+          /*) ;;
+          *)
+            echo "ERROR: EDC_PI_EXTENSION_PATH must be an absolute readable file: $pi_extension" >&2
+            [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
+            return 2
+            ;;
+        esac
+        if [[ "$pi_extension" == *$'\n'* ]] || [[ "$pi_extension" == *$'\r'* ]] || [ ! -f "$pi_extension" ] || [ ! -r "$pi_extension" ]; then
+          echo "ERROR: EDC_PI_EXTENSION_PATH must be an absolute readable file: $pi_extension" >&2
+          [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
+          return 2
+        fi
+      fi
+      local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates --no-extensions)
+      [ -n "$pi_extension" ] && cmd+=(-e "$pi_extension")
+      cmd+=(-p)
       [ -n "$model" ] && cmd+=(--model "$model")
       cmd+=("@$effective_prompt_file")
       local pi_supervisor="$EDC_SCRIPTS_DIR/../hooks/lib/pi-supervisor.mjs"

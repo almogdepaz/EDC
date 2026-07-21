@@ -4,12 +4,12 @@
 ## Scope
 Owns the CVE benchmark harness, scoring tools, judge audits, transcript recovery helpers, GEPA integration, and autonomous skill-tuning experiments.
 
-**Primary paths:** selected tracked `benchmark/` sources plus `benchmark/gepa/`, `benchmark/pr-review/`, and `benchmark/regression/`; large target/artifact trees such as `benchmark/curl/**`, `benchmark/redis/**`, and scratch `.edc-bench` output are intentionally outside context coverage.
+**Primary paths:** selected tracked `benchmark/` sources plus `benchmark/gepa/`, `benchmark/pr-review/`, and `benchmark/regression/`; large target/artifact trees such as `benchmark/curl/**`, `benchmark/redis/**`, and scratch `.edc-bench` output are intentionally outside normal context coverage.
 
 ## Purpose
 This module measures whether EDC review/build prompts find known security vulnerabilities. It runs agent analyses against vulnerable historical revisions, scores findings against ground truth, audits judge failures, and supports autoresearch loops that mutate review methodology and keep only changes that improve benchmark outcomes.
 
-This module is not directly changed by the current Pi/package branch, but it remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. Package/CI changes intentionally exclude benchmark corpora from npm package contents and normal hardening execution.
+This module is not directly changed by the current workflow/skill branch, but it remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. The important shift is conceptual: benchmark scoring should evaluate the security/adversarial lens (`edc-review` skill or `security-review` command), not the CLI's combined `review`/`review-all` command. Delivery/spec review and code-quality audit findings belong to separate workflows and should not be treated as security benchmark wins.
 
 ## Key files and flows
 - `benchmark/run.sh`: legacy per-CVE runner. It clones/reuses target repos, checks out vulnerable revisions, prompts Claude over affected files, writes/falls back to `edc-context/reports/issues.md`, then invokes `score.py`.
@@ -27,6 +27,7 @@ This module is not directly changed by the current Pi/package branch, but it rem
 - Dual-phase scoring distinguishes build-context leakage from true review-phase discovery.
 - Autoresearch must hash tried prompt states, keep logs, and revert unsuccessful prompt mutations without losing unrelated work.
 - Benchmark worktrees/transcripts are scratch artifacts and should not be treated as source modules or production context.
+- Security benchmark prompts should stay aligned with the `edc-review` skill / `security-review` command; delivery-review, quality-review, audit, and combined review-all outputs are different products unless a benchmark explicitly opts into those lenses.
 - npm/package publication must not include large benchmark corpora, generated context, tests, or review-task scratch output.
 
 ## Trust boundaries
@@ -36,11 +37,11 @@ This module is not directly changed by the current Pi/package branch, but it rem
 - External repos are cloned into private temp/scratch locations and may be large or unavailable.
 
 ## Coupling
-- Mutates/evaluates `canonical-skills`, especially review methodology.
+- Mutates/evaluates `canonical-skills`, especially security review methodology. Skill-boundary changes can affect benchmark comparability by reducing generic findings that are no longer security-scored.
 - Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric).
-- Review-routing changes such as direct context-skip modes and allowed-unmapped accounting can affect benchmark comparability if the harness starts using the production review pipeline directly.
+- Review-routing changes such as direct context-skip modes, allowed-unmapped/contextless accounting, default-base/scope selection, dirty-file inclusion, or delivery/quality split-outs can affect benchmark comparability if the harness starts using the production review pipeline directly.
 - Transcript reconstruction knows Claude Code JSONL shapes also consumed by `edc-spawn-analyze.sh`-style analysis.
-- Status plans at repo root document benchmark-driven prompt changes and are intentionally allowed/unmapped in manifest coverage.
+- Benchmark status/launch notes such as `benchmark/PI_EDC_X_THREAD.md` are mapped here when tracked, while large target corpora remain ignored/contextless.
 - `plugin-surface` package allowlists intentionally exclude `benchmark/**`; `hardening-tests` pin that distribution boundary.
 
 ## Fragility points
@@ -48,3 +49,4 @@ This module is not directly changed by the current Pi/package branch, but it rem
 - Automated scoring is only as good as the judge model and evidence reconstruction; refusals and parse errors require human rejudging.
 - Large scratch directories can dominate local filesystem scans if accidentally tracked or added to manifest coverage.
 - Benchmark workflows can be expensive and long-running; they are not part of normal hardening-test execution.
+- Prompt-scope boundaries now matter: if autoresearch edits delivery/audit wording or invokes combined `review` while optimizing security CVE recall, it may produce changes irrelevant to the scored security workflow.

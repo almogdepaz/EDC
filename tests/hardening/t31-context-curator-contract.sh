@@ -42,8 +42,8 @@ check "curator prefers internal routing before oversized module split" \
 check "curator treats comparator docs as optional non-authoritative guidance" \
   "$(contains "$CURATOR" "optional curated comparator" && contains "$CURATOR" "never authoritative" && echo 1 || echo 0)"
 
-check "build prompt delegates curator to shell runtime step" \
-  "$(contains "$BUILD_PROMPT" 'shell orchestrator runs `edc-context-curator-impl` as a separate runtime report-only step' && contains "$BUILD_PROMPT" "Do not invoke the curator from inside this build skill" && echo 1 || echo 0)"
+check "build prompt delegates curator to deterministic coordinator" \
+  "$(contains "$BUILD_PROMPT" "coordinator owns" && contains "$BUILD_PROMPT" "Do not run doctor or curator" && echo 1 || echo 0)"
 check "update prompt delegates curator to shell runtime step" \
   "$(contains "$UPDATE_PROMPT" 'shell orchestrator runs `edc-context-curator-impl` as a separate runtime report-only step' && contains "$UPDATE_PROMPT" "Do not invoke the curator from inside this update skill" && echo 1 || echo 0)"
 check "package allowlist ships private curator prompt bundle" \

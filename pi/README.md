@@ -119,6 +119,18 @@ Known interactions:
 - Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
 - Build/update/review/delivery-review/quality-review need the requirements and write permissions listed above.
 
+### Observing EDC pi workers
+
+EDC pi workers use `--no-extensions` to prevent arbitrary extension discovery. To load one explicitly approved prompt-neutral observer, configure its absolute entrypoint:
+
+```text
+# ~/.edc/config
+EDC_PI_EXTENSION_PATH=/absolute/path/to/agent_observer/src/extension.ts
+EDC_MAX_CONCURRENCY=4
+```
+
+EDC then invokes each worker with `--no-extensions -e <path>`. The observer can register every coordinator-launched worker while unrelated global/project extensions remain disabled. Run/task/phase/module provenance is also available in `EDC_RUN_ID`, `EDC_TASK_ID`, `EDC_TASK_PHASE`, and `EDC_TASK_MODULE`. Worker artifacts live under `.git/edc/runs/<run-id>/`.
+
 ## Modes
 
 EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.defaultMode`:

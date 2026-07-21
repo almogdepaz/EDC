@@ -141,6 +141,14 @@ cat > fake-bin/claude <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=$(cat)
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--system-prompt-file" ]; then
+    prompt=$(cat "$arg")
+    break
+  fi
+  previous="$arg"
+done
 case "$prompt" in
   *"TASK FILE: "*)
     task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
@@ -161,20 +169,22 @@ esac
 MOCK
 chmod +x fake-bin/claude
 set +e
-PATH="$PWD/fake-bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --no-context-refresh >auto.out 2>auto.err
+PATH="$PWD/fake-bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --no-context-refresh >.git/t30-auto.out 2>.git/t30-auto.err
 auto_rc=$?
 set -e
+run_dir=$(find .git/edc/runs -maxdepth 1 -type d -name 'security-*' | sort | tail -1)
+tasks_dir="$run_dir/staged/review-tasks"
 if [ "$auto_rc" -eq 0 ] \
-   && [ -f edc-context/review-tasks/result-contextless-promotion-check.json ] \
-   && grep -q 'Promotion Check' edc-context/review-tasks/report-contextless-promotion-check.md \
-   && ! grep -q '^## Findings' edc-context/review-tasks/report-contextless-promotion-check.md; then
+   && [ -f "$tasks_dir/result-contextless-promotion-check.json" ] \
+   && grep -q 'Promotion Check' "$tasks_dir/report-contextless-promotion-check.md" \
+   && ! grep -q '^## Findings' "$tasks_dir/report-contextless-promotion-check.md"; then
   check "30.5: promotion-check validates structured sidecar instead of markdown findings" 1
 else
   check "30.5: promotion-check validates structured sidecar instead of markdown findings" 0
-  cat auto.out 2>/dev/null || true
-  cat auto.err 2>/dev/null || true
-  cat edc-context/review-tasks/report-contextless-promotion-check.md 2>/dev/null || true
-  cat edc-context/review-tasks/result-contextless-promotion-check.json 2>/dev/null || true
+  cat .git/t30-auto.out 2>/dev/null || true
+  cat .git/t30-auto.err 2>/dev/null || true
+  cat "$tasks_dir/report-contextless-promotion-check.md" 2>/dev/null || true
+  cat "$tasks_dir/result-contextless-promotion-check.json" 2>/dev/null || true
 fi
 
 cd "$ROOT"

@@ -53,7 +53,17 @@ MOCK
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=$(cat)
-mkdir -p edc-context/review-tasks
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--system-prompt-file" ]; then
+    prompt=$(cat "$arg")
+    break
+  fi
+  previous="$arg"
+done
+task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
+report_path="$(dirname "$task_path")/report-core.md"
+mkdir -p "$(dirname "$report_path")"
 if [ "${EDC_T39_FORBIDDEN_WRITE:-0}" = "1" ]; then
   printf 'pwned\n' >> src/a.txt
 fi
@@ -65,7 +75,7 @@ if [ "${EDC_T39_FORBIDDEN_GIT_HOOK_WRITE:-0}" = "1" ]; then
   printf '#!/usr/bin/env bash\necho pwned\n' > .git/hooks/pre-commit
 fi
 if [ "${EDC_T39_COMPLETE_REPORT:-0}" = "1" ]; then
-  cat > edc-context/review-tasks/report-core.md <<'REPORT'
+  cat > "$report_path" <<'REPORT'
 # Security Review Report
 
 ## What Changed
@@ -114,7 +124,7 @@ Limitations:
 APPROVE
 REPORT
 else
-  printf '## Findings\n\nmock review\n' > edc-context/review-tasks/report-core.md
+  printf '## Findings\n\nmock review\n' > "$report_path"
 fi
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
@@ -132,7 +142,7 @@ set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/bad.out" 2>"$LOG_DIR/bad.err"
 bad_rc=$?
 set -e
-if [ "$bad_rc" -ne 0 ] && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
+if [ "$bad_rc" -ne 0 ] && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
   echo "PASS: review containment blocks source writes"
 else
   echo "FAIL: review containment did not block source writes"
@@ -148,7 +158,7 @@ const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'
 assert.equal(result.kind, 'review');
 assert.equal(result.exitCode, 1);
 assert.equal(result.reasonCode, 'review-write-containment');
-assert.equal(result.failedModule, 'core');
+assert.equal(Object.hasOwn(result, 'failedModule'), false);
 NODE
 echo "PASS: review containment writes structured failure result"
 
@@ -159,7 +169,7 @@ PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBI
 canonical_report_rc=$?
 set -e
 if [ "$canonical_report_rc" -ne 0 ] \
-  && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/canonical-report.err" \
+  && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/canonical-report.err" \
   && grep -q 'edc-context/reports/issues.md' "$LOG_DIR/canonical-report.err"; then
   echo "PASS: security review protects canonical reports as phase-owned state"
 else
@@ -174,7 +184,7 @@ set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_GIT_HOOK_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/git-hook.out" 2>"$LOG_DIR/git-hook.err"
 git_hook_rc=$?
 set -e
-if [ "$git_hook_rc" -ne 0 ] && grep -q 'forbidden paths changed during review for module core' "$LOG_DIR/git-hook.err" && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err"; then
+if [ "$git_hook_rc" -ne 0 ] && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/git-hook.err" && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err"; then
   echo "PASS: review containment blocks git hook writes"
 else
   echo "FAIL: review containment did not block git hook writes"

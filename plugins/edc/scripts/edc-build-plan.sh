@@ -24,12 +24,18 @@ json_cli="$_edc_build_plan_dir/../hooks/lib/json-cli.mjs"
 command -v node >/dev/null 2>&1 || { echo "edc-build-plan: node required" >&2; exit 64; }
 
 changed_filter=""
+modules_dir="$EDC_MODULES_DIR"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --changed)
       [[ $# -ge 2 ]] || { echo "edc-build-plan: --changed requires an argument" >&2; exit 64; }
       changed_filter="$2"
+      shift 2
+      ;;
+    --modules-dir)
+      [[ $# -ge 2 ]] || { echo "edc-build-plan: --modules-dir requires an argument" >&2; exit 64; }
+      modules_dir="$2"
       shift 2
       ;;
     *)
@@ -44,4 +50,4 @@ trap 'rm -rf "$tmp_dir"' EXIT
 input="$tmp_dir/in.json"
 cat > "$input"
 
-node "$json_cli" build-plan "$EDC_MODULES_DIR" "$changed_filter" < "$input"
+node "$json_cli" build-plan "$modules_dir" "$changed_filter" < "$input"

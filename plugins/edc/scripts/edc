@@ -33,6 +33,8 @@ Notes:
   --agent is required for build, update, review, security, delivery, and quality.
   --model is optional and applies to spawned build/review/delivery/audit phases. Per-phase
     overrides via EDC_BUILD_MODEL / EDC_REVIEW_MODEL (env or ~/.edc/config).
+    Pi workers disable extension discovery; set EDC_PI_EXTENSION_PATH to one
+    approved absolute extension entrypoint (for example, agent-observer).
     Slugs are passed verbatim to the agent CLI (claude: 'haiku' / 'sonnet' /
     'claude-haiku-4-5'; cursor: 'sonnet-4'; etc).
   build defaults path to the current directory.
@@ -461,8 +463,8 @@ mode_cmd() {
   echo "policy.defaultMode set to $mode in $manifest"
 }
 
-# Load ~/.edc/config (recognized keys: EDC_BUILD_MODEL, EDC_REVIEW_MODEL,
-# EDC_AGENT_CLI, EDC_PROVIDER). Caller's env always wins.
+# Load ~/.edc/config (recognized keys include model/backend settings and the
+# optional EDC_PI_EXTENSION_PATH). Caller's env always wins.
 _load_config() {
   local lib
   for lib in \

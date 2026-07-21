@@ -225,8 +225,13 @@ else
 fi
 
 # ── 5f2: terminal runtime install derives copy/chmod from one table ────────
-if grep -q 'runtime_install_entries=(' install.sh \
+if bash -n install.sh \
+  && grep -q 'runtime_install_entries=(' install.sh \
   && grep -q "IFS='|' read -r src dst executable" install.sh \
+  && grep -q 'worker-pool.mjs' install.sh \
+  && grep -q 'worker-manifest.mjs' install.sh \
+  && grep -q 'build-dag.mjs' install.sh \
+  && grep -q 'edc-worker.sh' install.sh \
   && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
   echo "PASS: terminal runtime install derives copy/chmod from one table"
 else

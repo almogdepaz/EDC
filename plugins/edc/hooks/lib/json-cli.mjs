@@ -312,6 +312,10 @@ function command() {
       if (!Array.isArray(input.modules) || input.modules.length === 0) buildPlanReject("modules must be a non-empty array");
       const invalid = input.modules.filter((module) => !hasOwn(module, "name") || !hasOwn(module, "paths")).map((module) => module.name || "<unnamed>");
       if (invalid.length > 0) buildPlanReject(`modules missing required fields (name/paths): ${invalid.join("\n")}`);
+      const invalidNames = input.modules.filter((module) => typeof module.name !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(module.name)).map((module) => module.name || "<unnamed>");
+      if (invalidNames.length > 0) buildPlanReject(`module names must be kebab-case: ${invalidNames.join("\n")}`);
+      const invalidPaths = input.modules.filter((module) => !Array.isArray(module.paths) || module.paths.length === 0 || module.paths.some((path) => typeof path !== "string" || path.length === 0));
+      if (invalidPaths.length > 0) buildPlanReject(`modules must declare non-empty string paths: ${invalidPaths.map((module) => module.name).join("\n")}`);
       const seen = new Set();
       const duplicates = [];
       for (const module of input.modules) {
@@ -328,7 +332,7 @@ function command() {
           module: module.name,
           paths: module.paths,
           out: `${modulesDir}/${kebab(module.name)}.md`,
-          prompt: `Build deep architectural context for module \`${module.name}\`. Files in scope: \`${array(module.paths).join(", ")}\`. Invoke the \`edc-module-context-impl\` skill on these files. Use sibling-module signatures/index context for cross-module boundaries; do not read sibling source bodies. Write distilled high-signal context directly to \`${modulesDir}/${kebab(module.name)}.md\`; include decision-useful read boundaries and source-truth pointers for exact details, but do not dump scratch analysis, empty template sections, or obvious code inventory. Return a ≤500-token summary for the orchestrator.`,
+          prompt: `Build deep architectural context for module \`${module.name}\`. Files in scope: \`${array(module.paths).join(", ")}\`. Follow the embedded module-context methodology on these files. Use sibling-module signatures/index context for cross-module boundaries; do not read sibling source bodies. Write distilled high-signal context directly to \`${modulesDir}/${kebab(module.name)}.md\`; include decision-useful read boundaries and source-truth pointers for exact details, but do not dump scratch analysis, empty template sections, or obvious code inventory. Return a ≤500-token summary for the coordinator.`,
         })),
       });
       return;

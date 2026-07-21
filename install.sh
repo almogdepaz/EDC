@@ -168,6 +168,9 @@ install_terminal_cli() {
     "plugins/edc/scripts/edc-manifest.sh|$scripts_target/edc-manifest.sh|x"
     "plugins/edc/hooks/lib/classify-cli.mjs|$hooks_target/classify-cli.mjs|x"
     "plugins/edc/hooks/lib/json-cli.mjs|$hooks_target/json-cli.mjs|x"
+    "plugins/edc/hooks/lib/build-dag.mjs|$hooks_target/build-dag.mjs|x"
+    "plugins/edc/hooks/lib/worker-manifest.mjs|$hooks_target/worker-manifest.mjs|x"
+    "plugins/edc/hooks/lib/worker-pool.mjs|$hooks_target/worker-pool.mjs|x"
     "plugins/edc/hooks/lib/pi-supervisor.mjs|$hooks_target/pi-supervisor.mjs|x"
     "plugins/edc/hooks/lib/stream-filter.mjs|$hooks_target/stream-filter.mjs|x"
     "plugins/edc/hooks/lib/route.mjs|$hooks_target/route.mjs|"
@@ -177,6 +180,7 @@ install_terminal_cli() {
     "plugins/edc/scripts/edc-assert-fresh.sh|$scripts_target/edc-assert-fresh.sh|x"
     "plugins/edc/scripts/edc-recover-context.sh|$scripts_target/edc-recover-context.sh|x"
     "plugins/edc/scripts/edc-build-plan.sh|$scripts_target/edc-build-plan.sh|x"
+    "plugins/edc/scripts/edc-worker.sh|$scripts_target/edc-worker.sh|x"
   )
 
   local entry src dst executable

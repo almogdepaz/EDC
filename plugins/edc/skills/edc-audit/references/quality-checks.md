@@ -2,6 +2,66 @@
 
 Run these checks against the assigned audit scope. Keep findings code-quality focused: correctness, maintainability, test value, interface clarity, and simplicity.
 
+## Simplification ladder
+
+Before recommending new code, climb this ladder and stop at the first rung that honestly fits the scoped evidence:
+
+1. **Delete it** — does this need to exist at all, or is it dead/speculative surface?
+2. **Existing repo helper** — does this codebase already have the helper, util, type, route, adapter, or pattern?
+3. **Standard library** — does the language/runtime already solve it clearly?
+4. **Native platform** — does the browser, database, shell, OS, framework, or package manager already provide the behavior?
+5. **Installed dependency** — is an already-installed dependency the appropriate owner?
+6. **One line** — can the same behavior be expressed directly without hiding intent?
+7. **Minimum custom code** — only then recommend the smallest custom implementation that preserves documented behavior.
+
+Use these tags for simplification findings when they fit:
+
+- `delete:` dead code, unused flexibility, speculative feature, stale config, or boat anchor. Replacement: nothing.
+- `stdlib:` hand-rolled behavior replaced by a standard library/runtime call.
+- `native:` dependency or custom code replaced by a native platform capability.
+- `yagni:` abstraction/config/extension point with no real second use.
+- `shrink:` same behavior, fewer moving parts.
+
+Rank biggest cuts first when findings have similar risk. Include estimated removal only when it is obvious from the diff or file read (`estimated removal: ~N lines / M deps`). Do not invent precision.
+
+## Sharp simplification hunt list
+
+Actively look for:
+- dependencies that stdlib or native platform already covers
+- single-implementation interfaces/classes/factories
+- wrappers that only delegate
+- files exporting one tiny thing with no boundary value
+- dead flags, config, options, compatibility branches, or feature gates
+- hand-rolled parsing, formatting, UUID/date/base64/path/debounce/grouping helpers
+- custom queues/state machines/DSLs where the host platform already has the primitive
+
+## Antipattern catalog overlap
+
+Use these antipattern names as compatible code-quality heuristics when evidence survives context verification:
+
+- **boat anchor** — kept code/config with no current use or owner.
+- **cargo cult** — copied ceremony with no semantic value.
+- **error hiding** — swallowed failure or vague fallback that callers treat as success.
+- **action at a distance** — global/module state mutation that changes unrelated behavior later.
+- **race hazard** — shared async state updated without a coherent owner/guard.
+- **inner-platform** — custom DSL/interpreter/framework that recreates host-language features.
+- **magic pushbutton** — UI/event handlers mixing validation, business rules, persistence, and side effects.
+- **soft code** — config so large or expressive that it becomes untyped business logic.
+- **shooting the messenger** — suppressing diagnostics (`@ts-ignore`, `eslint-disable`, type/lint silencing) instead of fixing the cause.
+- **premature generalization** — flexibility before real variation exists.
+
+Do not report catalog names by grep alone. Verify the code path, owner, and likely maintenance cost. Use LOW confidence when the pattern may be intentional.
+
+## Accepted debt markers
+
+Treat `edc-debt:` comments as intentional simplification/debt markers only when they name both the ceiling and the upgrade trigger, e.g.:
+
+```text
+edc-debt: global lock is enough for one worker; upgrade when parallel workers are enabled
+```
+
+Report markers missing `upgrade when` or another concrete trigger as maintainability risk. Do not automatically flag well-scoped markers with a clear trigger.
+
 ## LOC vs complexity estimate
 
 For each assigned module or module-like scope:
@@ -78,6 +138,8 @@ Look for correctness smells in scoped code:
 
 Promote these to `issues.md` when they can cause real wrong behavior, data loss, or broken code paths.
 
+For bug-fix shaped changes, prefer the root-cause fix over symptom patches: grep every caller of the function or boundary being changed. One guard or contract fix in the shared owner is usually simpler and safer than per-caller guards.
+
 ## Error handling
 
 Flag error handling problems:
@@ -117,6 +179,8 @@ Assess test value, not just test existence:
 - tests fail for the right reason when production behavior breaks
 - tests do not rely on arbitrary timing, excessive mocks, or implementation mirroring
 - public APIs and cross-module contracts have integration-level coverage where unit tests cannot prove delivery
+
+For non-trivial scoped logic, prefer the smallest runnable check that would fail if the behavior broke: one behavior test, integration assertion, command smoke, or self-contained reproduction. Do not demand fixture-heavy test suites when a smaller check proves the risk.
 
 Promote missing or low-value tests to `issues.md` only when the untested path creates concrete correctness risk. Otherwise keep it in `complexity.md` as maintainability risk.
 

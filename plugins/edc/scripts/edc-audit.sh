@@ -80,11 +80,15 @@ assert_markdown_report_valid() {
   fi
 }
 
-assert_audit_reports_valid() {
-  local rc=0
-  assert_markdown_report_valid "$EDC_COMPLEXITY" "complexity" || rc=1
-  assert_markdown_report_valid "$EDC_ISSUES" "issues" || rc=1
+assert_audit_report_pair_valid() {
+  local complexity_path="$1" issues_path="$2" rc=0
+  assert_markdown_report_valid "$complexity_path" "complexity" || rc=1
+  assert_markdown_report_valid "$issues_path" "issues" || rc=1
   return $rc
+}
+
+assert_audit_reports_valid() {
+  assert_audit_report_pair_valid "$EDC_COMPLEXITY" "$EDC_ISSUES"
 }
 
 build_audit_worker_prompt() {
@@ -109,19 +113,20 @@ EOF
 }
 
 build_audit_synthesis_prompt() {
+  local complexity_output="$1" issues_output="$2"
   cat <<EOF
 AUDIT SYNTHESIS TASK
 AUDIT_WORKER_REPORTS_DIR: $AUDIT_TASKS_DIR
-CANONICAL_COMPLEXITY_REPORT: $EDC_COMPLEXITY
-CANONICAL_ISSUES_REPORT: $EDC_ISSUES
+CANONICAL_COMPLEXITY_REPORT: $complexity_output
+CANONICAL_ISSUES_REPORT: $issues_output
 
 Synthesize the scoped module audit reports into the canonical EDC audit reports.
 
 Rules:
 1. Read every markdown report under $AUDIT_TASKS_DIR.
 2. Do not re-audit source code unless a worker report is ambiguous and a small verification read is necessary.
-3. Write $EDC_COMPLEXITY for maintainability/code-quality findings.
-4. Write $EDC_ISSUES only for concrete correctness risks surfaced by worker reports.
+3. Write $complexity_output for maintainability/code-quality findings.
+4. Write $issues_output only for concrete correctness risks surfaced by worker reports.
 5. Preserve module names and evidence from worker reports so findings remain traceable.
 6. Use the embedded edc-audit reporting contract below.
 
@@ -192,11 +197,15 @@ audit_main() {
   recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
     || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
 
-  # Spawn one scoped audit subprocess per real module, then synthesize the
-  # worker outputs into the canonical reports.
+  # Build a versioned task manifest in git-private run storage. Workers write
+  # only staged reports; the coordinator validates before canonical promotion.
   echo "→ running per-module audit via $EDC_AGENT_CLI..."
-  rm -rf "$AUDIT_TASKS_DIR"
-  mkdir -p "$AUDIT_TASKS_DIR" "$EDC_REPORTS_DIR"
+  local run_dir run_id
+  edc_create_worker_run "audit" run_dir run_id || exit $?
+  local AUDIT_TASKS_DIR="$run_dir/staged/audit-tasks"
+  local prompts_dir="$run_dir/prompts" tasks_jsonl="$run_dir/module-tasks.jsonl" worker_manifest="$run_dir/module-manifest.json"
+  mkdir -p "$AUDIT_TASKS_DIR" "$prompts_dir"
+  : > "$tasks_jsonl"
 
   local changed_files=""
   if [ -n "$target" ]; then
@@ -208,7 +217,8 @@ audit_main() {
     fi
   fi
 
-  local module module_doc safe report_path worker_prompt module_count=0 had_warning=0
+  local module module_doc safe report_path prompt_path task_id module_count=0 had_warning=0
+  local -a audit_modules=() audit_reports=() audit_task_ids=()
   while IFS=$'\t' read -r module module_doc; do
     [ -n "${module:-}" ] || continue
     module_count=$((module_count + 1))
@@ -218,34 +228,15 @@ audit_main() {
     fi
     safe=$(safe_audit_name "$module")
     [ -n "$safe" ] || safe="module_$module_count"
+    task_id="audit-module-$module_count"
     report_path="$AUDIT_TASKS_DIR/$safe.md"
-    echo "→ auditing module: $module"
-    worker_prompt=$(build_audit_worker_prompt "$module" "$module_doc" "$report_path") || exit 1
-    local worker_rc before_snapshot after_snapshot changed_forbidden
-    before_snapshot=$(mktemp)
-    after_snapshot=$(mktemp)
-    edc_snapshot_review_forbidden_paths "$before_snapshot" "$report_path"
-    if edc_spawn "edc-audit/$safe" "${EDC_AUDIT_TIMEOUT:-1800}" "$worker_prompt"; then
-      worker_rc=0
-    else
-      worker_rc=$?
-    fi
-    edc_snapshot_review_forbidden_paths "$after_snapshot" "$report_path"
-    changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
-    rm -f "$before_snapshot" "$after_snapshot"
-    if [ -n "$changed_forbidden" ]; then
-      echo "ERROR: audit worker touched forbidden paths for module $module:" >&2
-      echo "$changed_forbidden" | sed 's/^/  /' >&2
-      edc_result_failure 1 "audit-write-containment" "audit worker touched forbidden paths for module $module" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "$module"
-      exit 1
-    fi
-    assert_markdown_report_valid "$report_path" "module $module" \
-      || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the module audit output in the log; the report is missing or incomplete" "$module"; exit 1; }
-    if [ "$worker_rc" -ne 0 ]; then
-      had_warning=1
-      echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
-      echo "HINT: treating the validated module audit report as success; inspect the agent log for transport/provider diagnostics." >&2
-    fi
+    prompt_path="$prompts_dir/$task_id.md"
+    echo "→ planning audit module: $module"
+    build_audit_worker_prompt "$module" "$module_doc" "$report_path" > "$prompt_path" || exit 1
+    edc_worker_task_append "$tasks_jsonl" "$task_id" "edc-audit/$safe" "$module" "$prompt_path" "${EDC_AUDIT_TIMEOUT:-1800}" continue "$report_path" || exit 1
+    audit_modules+=("$module")
+    audit_reports+=("$report_path")
+    audit_task_ids+=("$task_id")
   done < <(if [ -n "$target" ]; then printf '%s\n' "$changed_files" | manifest_audit_modules_for_files; else manifest_audit_modules; fi)
 
   if [ "$module_count" -eq 0 ]; then
@@ -259,36 +250,76 @@ audit_main() {
     exit 1
   fi
 
-  rm -f "$EDC_COMPLEXITY" "$EDC_ISSUES"
-  echo "→ synthesizing audit reports..."
-  local synthesis_prompt
-  synthesis_prompt=$(build_audit_synthesis_prompt) || exit 1
-  local synthesis_rc before_snapshot after_snapshot changed_forbidden
+  edc_worker_manifest_write "$worker_manifest" "$run_id" "$run_dir" "$tasks_jsonl" || exit 1
+  local worker_pool_rc=0 before_snapshot after_snapshot changed_forbidden
   before_snapshot=$(mktemp)
   after_snapshot=$(mktemp)
-  edc_snapshot_review_forbidden_paths "$before_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
-  if edc_spawn "edc-audit/synthesis" "${EDC_AUDIT_TIMEOUT:-1800}" "$synthesis_prompt"; then
-    synthesis_rc=0
-  else
-    synthesis_rc=$?
-  fi
-  edc_snapshot_review_forbidden_paths "$after_snapshot" "$EDC_COMPLEXITY" "$EDC_ISSUES"
+  edc_snapshot_review_forbidden_paths "$before_snapshot"
+  edc_worker_pool_run "$worker_manifest" || worker_pool_rc=$?
+  edc_snapshot_review_forbidden_paths "$after_snapshot"
   changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
   rm -f "$before_snapshot" "$after_snapshot"
   if [ -n "$changed_forbidden" ]; then
-    echo "ERROR: audit synthesis touched forbidden paths:" >&2
+    echo "ERROR: forbidden paths changed during the audit worker stage:" >&2
     echo "$changed_forbidden" | sed 's/^/  /' >&2
-    edc_result_failure 1 "audit-write-containment" "audit synthesis touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input"
+    edc_result_failure 1 "audit-write-containment" "forbidden paths changed during the audit worker stage" "inspect the run logs for the writer; rerun in a disposable checkout if reviewing untrusted input"
     exit 1
   fi
 
-  # Validate reports.
-  assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output in the log; canonical reports are missing or incomplete"; exit 1; }
+  local index worker_status
+  index=0
+  while [ "$index" -lt "$module_count" ]; do
+    module="${audit_modules[$index]}"
+    report_path="${audit_reports[$index]}"
+    assert_markdown_report_valid "$report_path" "module $module" \
+      || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the staged module audit and task stderr under $run_dir" "$module"; exit 1; }
+    worker_status=$(node -e 'const j=require(process.argv[1]); const task=j.tasks.find((entry)=>entry.id===process.argv[2]); process.stdout.write(task?.status || "missing")' "$run_dir/stage-result.json" "${audit_task_ids[$index]}")
+    if [ "$worker_status" != "success" ]; then
+      had_warning=1
+      echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
+      echo "HINT: treating the validated module audit report as success; inspect $run_dir for transport/provider diagnostics." >&2
+    fi
+    index=$((index + 1))
+  done
+  if [ "$worker_pool_rc" -ne 0 ] && [ "$had_warning" -eq 0 ]; then
+    echo "ERROR: audit worker pool failed without a failed task result" >&2
+    exit 1
+  fi
+
+  echo "→ synthesizing audit reports..."
+  local staged_complexity="$run_dir/staged/complexity.md" staged_issues="$run_dir/staged/issues.md"
+  local synthesis_prompt_path="$prompts_dir/audit-synthesis.md" synthesis_tasks="$run_dir/synthesis-tasks.jsonl" synthesis_manifest="$run_dir/synthesis-manifest.json"
+  build_audit_synthesis_prompt "$staged_complexity" "$staged_issues" > "$synthesis_prompt_path" || exit 1
+  : > "$synthesis_tasks"
+  edc_worker_task_append "$synthesis_tasks" audit-synthesis edc-audit/synthesis "" "$synthesis_prompt_path" "${EDC_AUDIT_TIMEOUT:-1800}" continue "$staged_complexity" "$staged_issues" || exit 1
+  edc_worker_manifest_write "$synthesis_manifest" "$run_id" "$run_dir" "$synthesis_tasks" || exit 1
+
+  local synthesis_rc=0
+  before_snapshot=$(mktemp)
+  after_snapshot=$(mktemp)
+  edc_snapshot_review_forbidden_paths "$before_snapshot"
+  edc_worker_pool_run "$synthesis_manifest" || synthesis_rc=$?
+  edc_snapshot_review_forbidden_paths "$after_snapshot"
+  changed_forbidden=$(edc_diff_review_forbidden_paths "$before_snapshot" "$after_snapshot" || true)
+  rm -f "$before_snapshot" "$after_snapshot"
+  if [ -n "$changed_forbidden" ]; then
+    echo "ERROR: forbidden paths changed during audit synthesis:" >&2
+    echo "$changed_forbidden" | sed 's/^/  /' >&2
+    edc_result_failure 1 "audit-write-containment" "forbidden paths changed during audit synthesis" "inspect the run logs for the writer; rerun in a disposable checkout if reviewing untrusted input"
+    exit 1
+  fi
+
+  assert_audit_report_pair_valid "$staged_complexity" "$staged_issues" \
+    || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output under $run_dir; staged reports are missing or incomplete"; exit 1; }
   if [ "$synthesis_rc" -ne 0 ]; then
     had_warning=1
     echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but report validation passed." >&2
-    echo "HINT: treating the validated audit reports as success; inspect the agent log for transport/provider diagnostics." >&2
+    echo "HINT: treating the validated audit reports as success; inspect $run_dir for transport/provider diagnostics." >&2
   fi
+
+  edc_promote_file "$staged_complexity" "$EDC_COMPLEXITY" || exit 1
+  edc_promote_file "$staged_issues" "$EDC_ISSUES" || exit 1
+  assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "promoted audit report validation failed" "inspect canonical report promotion"; exit 1; }
 
   if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
     rm -rf "$AUDIT_TASKS_DIR"

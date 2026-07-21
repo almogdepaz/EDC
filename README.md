@@ -30,8 +30,8 @@ First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtim
 
 EDC separates deterministic orchestration from LLM analysis:
 
-- Shell scripts own routing, freshness checks, manifest updates, subprocess spawning, and validation.
-- Subagents write per-module architecture context and review reports.
+- Shell/Node coordinators own routing, freshness checks, task graphs, bounded subprocess pools, staging, promotion, and validation.
+- Clean workers write one staged module context or review report each; models never choose process commands or launch nested agents.
 - Agent integrations expose the same workflows through native commands, skills, hooks, or pi's interactive menu.
 
 The generated context lives in the target repository under `edc-context/`: an overview, module docs, routing manifest, build metadata, and audit/review reports. Build it once per repo, then update it from diffs as code moves. Security reviews are routed through the generated manifest so each changed path gets the relevant module context instead of a giant undifferentiated context dump.
@@ -91,6 +91,20 @@ edc doctor
 ```
 
 `--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target plus dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+
+### Worker concurrency and pi observability
+
+Build, security, and quality module work uses a coordinator-owned pool. Set `EDC_MAX_CONCURRENCY` to an integer from 1–64 (default `4`; use `1` for serial compatibility). Prompts, transcripts, task results, stderr, and staged outputs live under `.git/edc/runs/<run-id>/`. Canonical reports/context are written only after staged outputs validate.
+
+Pi workers always use `--no-extensions`, so arbitrary global/project extension discovery remains disabled. To observe EDC workers, explicitly allow one prompt-neutral extension entrypoint:
+
+```text
+# ~/.edc/config (environment variables override this file)
+EDC_MAX_CONCURRENCY=4
+EDC_PI_EXTENSION_PATH=/absolute/path/to/agent_observer/src/extension.ts
+```
+
+`EDC_PI_EXTENSION_PATH` must name an absolute readable file. EDC passes exactly `-e <path>` in addition to `--no-extensions`; no other extension is enabled. Worker processes also receive `EDC_RUN_ID`, `EDC_TASK_ID`, `EDC_TASK_PHASE`, and optional `EDC_TASK_MODULE` provenance.
 
 ## Install
 

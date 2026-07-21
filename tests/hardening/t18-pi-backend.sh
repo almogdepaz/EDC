@@ -28,7 +28,7 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-review .edc/skills/edc-audit/references
+  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-module-context-impl/resources .edc/skills/edc-review .edc/skills/edc-audit/references
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
   printf '## Complexity\n' > edc-context/reports/complexity.md
@@ -45,6 +45,7 @@ setup_repo() {
 EOF
   printf 'BUILD_SKILL_MARKER\n' > .edc/skills/edc-build-impl/SKILL.md
   printf 'UPDATE_SKILL_MARKER\n' > .edc/skills/edc-update-impl/SKILL.md
+  printf 'MODULE_SKILL_MARKER\n' > .edc/skills/edc-module-context-impl/SKILL.md
   printf 'CURATOR_SKILL_MARKER\n' > .edc/skills/edc-context-curator-impl/SKILL.md
   printf 'CURATOR_EDIT_SKILL_MARKER\n' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
   printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
@@ -95,7 +96,12 @@ EOF
 }
 finish_ok() {
   printf '{"type":"result","is_error":false,"result":"ok"}\n'
-  if [ "${PI_FAKE_AGENT_END_ERROR:-0}" = "1" ]; then
+  if [ "${PI_FAKE_AGENT_END_RETRY:-0}" = "1" ]; then
+    printf '{"type":"agent_end","willRetry":true,"messages":[{"role":"assistant","stopReason":"error","errorMessage":"WebSocket error","content":[{"type":"text","text":""}]}]}\n'
+    printf '{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":1,"errorMessage":"WebSocket error"}\n'
+    printf '{"type":"auto_retry_end","success":true,"attempt":1}\n'
+    printf '{"type":"agent_end","willRetry":false,"messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
+  elif [ "${PI_FAKE_AGENT_END_ERROR:-0}" = "1" ]; then
     printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"error","errorMessage":"provider down","content":[{"type":"text","text":""}]}]}\n'
   else
     printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
@@ -110,6 +116,39 @@ if [ "${PI_FAKE_AUTH_TEXT:-0}" = "1" ]; then
   printf 'No API key found for azure-openai-responses.\n\nUse /login to log into a provider via OAuth or API key.\n'
   sleep 30
   exit 1
+fi
+if printf '%s' "$prompt" | grep -q 'BUILD DISCOVERY TASK'; then
+  output=$(printf '%s\n' "$prompt" | grep '^DISCOVERY_OUTPUT: ' | sed 's/^DISCOVERY_OUTPUT: //')
+  mkdir -p "$(dirname "$output")"
+  printf '{"modules":[{"name":"core","paths":["src/"],"approxLoc":1}]}\n' > "$output"
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"discovered"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'MODULE CONTEXT TASK'; then
+  output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | head -1 | sed 's/^OUTPUT: //')
+  mkdir -p "$(dirname "$output")"
+  printf '# Core\n\n## Ownership\n\nMock module.\n' > "$output"
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"module"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'CROSS-MODULE SYNTHESIS TASK'; then
+  output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | sed 's/^OUTPUT: //')
+  printf '## Flows\n\nMock.\n' > "$output"
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"cross"}}\n'
+  finish_ok
+fi
+if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
+  index_output=$(printf '%s\n' "$prompt" | grep '^INDEX_OUTPUT: ' | sed 's/^INDEX_OUTPUT: //')
+  partial_output=$(printf '%s\n' "$prompt" | grep '^PARTIAL_MANIFEST_OUTPUT: ' | sed 's/^PARTIAL_MANIFEST_OUTPUT: //')
+  build_output=$(printf '%s\n' "$prompt" | grep '^BUILD_INFO_OUTPUT: ' | sed 's/^BUILD_INFO_OUTPUT: //')
+  agents_output=$(printf '%s\n' "$prompt" | grep '^AGENT_ENTRYPOINT_OUTPUT: ' | sed 's/^AGENT_ENTRYPOINT_OUTPUT: //')
+  mkdir -p "$(dirname "$index_output")" "$(dirname "$build_output")" "$(dirname "$agents_output")"
+  printf '# Repo\n\n## How to use\n\nRead routes.\n\n## Route by path/task\n\n- src: core\n\n## Critical global invariants\n\n- mock\n\n## Cross-module coupling / blast radius\n\n- mock\n' > "$index_output"
+  printf '{"schemaVersion":2,"edcVersion":"1.1.0","repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"core","doc":"edc-context/modules/core.md","summary":"mock","priority":10,"match":{"prefixes":["src/"]}}],"unmapped":{"allowedGlobs":["*"]}}\n' > "$partial_output"
+  printf '{}\n' > "$build_output"
+  printf '# Agent Instructions\n\nThis repo ships deep architectural context generated by EDC.\n\nSee [`edc-context/index.md`](edc-context/index.md).\nSee [`edc-context/manifest.json`](edc-context/manifest.json).\n' > "$agents_output"
+  printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"assembled"}}\n'
+  finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'BUILD_SKILL_MARKER'; then
   write_context
@@ -132,8 +171,10 @@ if printf '%s' "$prompt" | grep -q 'CURATOR_SKILL_MARKER'; then
   finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
-  mkdir -p edc-context/review-tasks
-  printf '## Findings\n\nmock pi review\n' > edc-context/review-tasks/report-core.md
+  task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
+  report_path="$(dirname "$task_path")/report-$(basename "$task_path" .md).md"
+  mkdir -p "$(dirname "$report_path")"
+  printf '## Findings\n\nmock pi review\n' > "$report_path"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
   finish_ok
 fi
@@ -145,9 +186,11 @@ if printf '%s' "$prompt" | grep -q 'AUDIT WORKER TASK'; then
   finish_ok
 fi
 if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
-  mkdir -p edc-context/reports
-  printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
-  printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
+  complexity_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
+  issues_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
+  mkdir -p "$(dirname "$complexity_path")" "$(dirname "$issues_path")"
+  printf '## Complexity\n\nmock pi audit\n' > "$complexity_path"
+  printf '## Issues\n\nmock pi audit\n' > "$issues_path"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
   finish_ok
 fi
@@ -181,6 +224,38 @@ if [ -f "$PI_CALLS_LOG" ] && grep -q -- '--mode json' "$PI_CALLS_LOG" && grep -q
 else
   check "18.2: pi backend uses json clean-slate CLI mode" 0
   cat "$PI_CALLS_LOG" 2>/dev/null || true
+fi
+
+if [ -f "$PI_CALLS_LOG" ] && grep -q -- '--no-extensions' "$PI_CALLS_LOG"; then
+  check "18.2a: pi backend disables extension discovery" 1
+else
+  check "18.2a: pi backend disables extension discovery" 0
+  cat "$PI_CALLS_LOG" 2>/dev/null || true
+fi
+
+observer_extension="$TMP/observer-extension.ts"
+printf 'export default function observer() {}\n' > "$observer_extension"
+extension_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH="$observer_extension" "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/extension-update.out" 2>"$LOG_DIR/extension-update.err"
+rc=$?
+extension_call=$(tail -n +$((extension_before + 1)) "$PI_CALLS_LOG" | head -1)
+if [ "$rc" -eq 0 ] && printf '%s\n' "$extension_call" | grep -Fq -- "--no-extensions -e $observer_extension"; then
+  check "18.2b: pi backend loads only the explicit extension" 1
+else
+  check "18.2b: pi backend loads only the explicit extension" 0
+  cat "$LOG_DIR/extension-update.out" "$LOG_DIR/extension-update.err"
+  printf 'call=%s\n' "$extension_call"
+fi
+
+invalid_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH=relative-extension.ts "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/invalid-extension.out" 2>"$LOG_DIR/invalid-extension.err"
+rc=$?
+invalid_after=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+if [ "$rc" -ne 0 ] && [ "$invalid_after" -eq "$invalid_before" ] && grep -q 'EDC_PI_EXTENSION_PATH must be an absolute readable file' "$LOG_DIR/invalid-extension.err"; then
+  check "18.2c: pi backend rejects invalid explicit extension paths before spawn" 1
+else
+  check "18.2c: pi backend rejects invalid explicit extension paths before spawn" 0
+  cat "$LOG_DIR/invalid-extension.out" "$LOG_DIR/invalid-extension.err"
 fi
 
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
@@ -273,6 +348,15 @@ else
   cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
 fi
 
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
+rc=$?
+if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/agent-end-retry.out"; then
+  check "18.12: pi backend allows retryable agent_end to recover" 1
+else
+  check "18.12: pi backend allows retryable agent_end to recover" 0
+  cat "$LOG_DIR/agent-end-retry.out" "$LOG_DIR/agent-end-retry.err"
+fi
+
 auth_start=$(date +%s)
 PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
 rc=$?
@@ -281,9 +365,9 @@ if [ "$rc" -ne 0 ] \
    && [ "$auth_duration" -lt 3 ] \
    && grep -q 'No API key found for azure-openai-responses' "$LOG_DIR/plain-auth.err" \
    && ! grep -q "timed out" "$LOG_DIR/plain-auth.err"; then
-  check "18.12: pi backend fails fast on plaintext provider auth errors" 1
+  check "18.13: pi backend fails fast on plaintext provider auth errors" 1
 else
-  check "18.12: pi backend fails fast on plaintext provider auth errors" 0
+  check "18.13: pi backend fails fast on plaintext provider auth errors" 0
   printf 'duration=%s rc=%s\n' "$auth_duration" "$rc"
   cat "$LOG_DIR/plain-auth.out" "$LOG_DIR/plain-auth.err"
 fi

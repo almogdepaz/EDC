@@ -403,7 +403,7 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
   if (!isEdcProject(projectRoot)) return;
 
   installScriptFiles(projectRoot, pluginRoot);
-  installClassifierRuntime(projectRoot, pluginRoot);
+  installHookRuntime(projectRoot, pluginRoot);
   installPrivatePromptBundles(projectRoot, pluginRoot);
 }
 
@@ -448,20 +448,28 @@ function installScriptFiles(projectRoot, pluginRoot) {
   }
 }
 
-function installClassifierRuntime(projectRoot, pluginRoot) {
+function installHookRuntime(projectRoot, pluginRoot) {
   const sourceDir = join(pluginRoot, "hooks", "lib");
   const destDir = join(projectRoot, ".edc", "hooks", "lib");
-  for (const fileName of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
+
+  let fileNames;
+  try {
+    fileNames = readdirSync(sourceDir).filter((name) => name.endsWith(".mjs"));
+  } catch {
+    return;
+  }
+
+  for (const fileName of fileNames) {
     const src = join(sourceDir, fileName);
     const dst = join(destDir, fileName);
-    if (!existsSync(src) || !shouldCopyFile(src, dst)) continue;
+    if (!shouldCopyFile(src, dst)) continue;
     try {
       mkdirSync(destDir, { recursive: true });
       copyFileSync(src, dst);
-      if (["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs"].includes(fileName)) chmodSync(dst, 0o755);
+      if ((statSync(src).mode & 0o111) !== 0) chmodSync(dst, 0o755);
     } catch (err) {
       process.stderr.write(
-        `[edc] WARNING: could not install classifier runtime ${fileName}: ${err.message}\n`,
+        `[edc] WARNING: could not install hook runtime ${fileName}: ${err.message}\n`,
       );
     }
   }

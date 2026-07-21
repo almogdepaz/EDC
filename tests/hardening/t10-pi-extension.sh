@@ -67,6 +67,38 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+install_check=$(node --input-type=module - "$TMP/install-project" "$ROOT" <<'NODE'
+import { mkdirSync, readdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { installOrchestratorScript } from "./plugins/edc/hooks/lib/route.mjs";
+
+const [projectRoot, root] = process.argv.slice(2);
+mkdirSync(join(projectRoot, ".git"), { recursive: true });
+installOrchestratorScript(projectRoot, join(root, "plugins", "edc"));
+
+const expectedHooks = readdirSync(join(root, "plugins", "edc", "hooks", "lib"))
+  .filter((name) => name.endsWith(".mjs"))
+  .sort();
+const missingHooks = expectedHooks.filter((name) => !existsSync(join(projectRoot, ".edc", "hooks", "lib", name)));
+
+const expectedScripts = readdirSync(join(root, "plugins", "edc", "scripts"))
+  .filter((name) => name === "edc" || (name.endsWith(".sh") && name !== "edc-spawn-analyze.sh"))
+  .sort();
+const missingScripts = expectedScripts.filter((name) => !existsSync(join(projectRoot, ".edc", "scripts", name)));
+
+if (missingHooks.length || missingScripts.length) {
+  console.log(JSON.stringify({ missingHooks, missingScripts }));
+  process.exit(1);
+}
+console.log("OK");
+NODE
+)
+if [ "$install_check" = "OK" ]; then
+  say_pass "installOrchestratorScript copies complete project-local runtime"
+else
+  say_fail "installOrchestratorScript copies complete project-local runtime" "$install_check"
+fi
+
 # Build a minimal fake ctx environment with a real edc-context/manifest.json so
 # buildToolCallInjection has something to chew on.
 mkdir -p "$TMP/edc-context/modules"

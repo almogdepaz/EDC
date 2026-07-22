@@ -1,0 +1,16 @@
+{
+  "skill": "edc-audit",
+  "fixture": "native-stdlib-yagni",
+  "requiredFindings": [
+    { "category": "stdlib", "evidence": "crypto.randomUUID" },
+    { "category": "native", "evidence": "navigator.clipboard.writeText" },
+    { "category": "yagni", "evidence": "IdFactory" },
+    { "category": "cargo cult", "evidence": "throw error" },
+    { "category": "shooting the messenger", "evidence": "edc-debt" }
+  ],
+  "forbiddenFindings": [
+    { "category": "security" },
+    { "category": "delivery" }
+  ],
+  "requiredEvidence": ["src/platform.ts", "Math.random", "document.execCommand", "edc-debt"]
+}

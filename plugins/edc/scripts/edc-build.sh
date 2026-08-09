@@ -405,6 +405,7 @@ run_full_build_dag() {
 build_main() {
   edc_result_begin build
   trap edc_result_on_exit EXIT
+  edc_runtime_preflight_or_exit
   local force=0 focus=""
   local -a passthrough=() ignore_globs=()
 

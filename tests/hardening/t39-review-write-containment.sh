@@ -35,6 +35,7 @@ EOF
   printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
   printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md
   printf 'PATTERNS_MARKER\n' > .edc/skills/edc-review/patterns.md
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_fake_claude() {
@@ -139,11 +140,14 @@ setup_repo
 write_fake_claude
 
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/bad.out" 2>"$LOG_DIR/bad.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/bad.out" 2>"$LOG_DIR/bad.err"
 bad_rc=$?
 set -e
-if [ "$bad_rc" -ne 0 ] && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/bad.err" && grep -q 'src/a.txt' "$LOG_DIR/bad.err"; then
-  echo "PASS: review containment blocks source writes"
+if [ "$bad_rc" -ne 0 ] \
+  && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/bad.err" \
+  && grep -q 'src/a.txt' "$LOG_DIR/bad.err" \
+  && grep -q 'pwned' src/a.txt; then
+  echo "PASS: review containment detects source writes without rewriting them"
 else
   echo "FAIL: review containment did not block source writes"
   echo "--- stdout ---"; cat "$LOG_DIR/bad.out"
@@ -165,7 +169,7 @@ echo "PASS: review containment writes structured failure result"
 git checkout -- src/a.txt
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_CANONICAL_REPORT_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/canonical-report.out" 2>"$LOG_DIR/canonical-report.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_CANONICAL_REPORT_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/canonical-report.out" 2>"$LOG_DIR/canonical-report.err"
 canonical_report_rc=$?
 set -e
 if [ "$canonical_report_rc" -ne 0 ] \
@@ -181,11 +185,14 @@ fi
 printf '## Issues\n' > edc-context/reports/issues.md
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_GIT_HOOK_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/git-hook.out" 2>"$LOG_DIR/git-hook.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_FORBIDDEN_GIT_HOOK_WRITE=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/git-hook.out" 2>"$LOG_DIR/git-hook.err"
 git_hook_rc=$?
 set -e
-if [ "$git_hook_rc" -ne 0 ] && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/git-hook.err" && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err"; then
-  echo "PASS: review containment blocks git hook writes"
+if [ "$git_hook_rc" -ne 0 ] \
+  && grep -q 'forbidden paths changed during the security worker stage' "$LOG_DIR/git-hook.err" \
+  && grep -q '.git/hooks/pre-commit' "$LOG_DIR/git-hook.err" \
+  && [ -f .git/hooks/pre-commit ]; then
+  echo "PASS: review containment detects git hook writes without rewriting them"
 else
   echo "FAIL: review containment did not block git hook writes"
   echo "--- stdout ---"; cat "$LOG_DIR/git-hook.out"
@@ -195,7 +202,7 @@ fi
 rm -f .git/hooks/pre-commit
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/good.out" 2>"$LOG_DIR/good.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/good.out" 2>"$LOG_DIR/good.err"
 good_rc=$?
 set -e
 if [ "$good_rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock review' review-HEAD.md; then
@@ -220,7 +227,7 @@ echo "PASS: review success writes structured result"
 
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/minimal-failed.out" 2>"$LOG_DIR/minimal-failed.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/minimal-failed.out" 2>"$LOG_DIR/minimal-failed.err"
 minimal_failed_rc=$?
 set -e
 if [ "$minimal_failed_rc" -ne 0 ] \
@@ -246,7 +253,7 @@ fi
 
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 EDC_T39_COMPLETE_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 EDC_T39_COMPLETE_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
 warn_rc=$?
 set -e
 if [ "$warn_rc" -eq 0 ] \

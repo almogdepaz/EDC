@@ -70,9 +70,7 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
-  mkdir -p .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl
-  printf '%s\n' '---' 'name: edc-context-curator-impl' '---' '# Context Curator' > .edc/skills/edc-context-curator-impl/SKILL.md
-  printf '%s\n' '---' 'name: edc-context-curator-edit-impl' '---' '# Context Curator Edit' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
+  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T13/log"

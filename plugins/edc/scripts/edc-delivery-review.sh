@@ -15,15 +15,23 @@ EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
 CODEX_EXEC_HOME=""
 CODEX_EXEC_HOME_OWNED=0
 
-# shellcheck source=edc-assert-fresh.sh
-. "$SCRIPT_DIR/edc-assert-fresh.sh"
-# shellcheck source=edc-recover-context.sh
-. "$SCRIPT_DIR/edc-recover-context.sh"
+EDC_DELIVERY_DEPENDENCIES_LOADED=0
+edc_load_delivery_dependencies() {
+  [ "$EDC_DELIVERY_DEPENDENCIES_LOADED" = "1" ] && return 0
+  # Managed helpers execute only after runtime integrity passes.
+  # shellcheck source=edc-assert-fresh.sh
+  . "$SCRIPT_DIR/edc-assert-fresh.sh"
+  # shellcheck source=edc-recover-context.sh
+  . "$SCRIPT_DIR/edc-recover-context.sh"
+  # shellcheck source=edc-review-candidate.sh
+  . "$SCRIPT_DIR/edc-review-candidate.sh"
+  EDC_DELIVERY_DEPENDENCIES_LOADED=1
+}
 
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh [target] --base <ref> [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh [target] --base <ref> [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
   EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh --full [--ignore <glob>]... [--context-mode advisory|inject]
 
 Examples:
@@ -107,9 +115,7 @@ Required shell context:
 - Diff summary: git diff $base_sha...$target_sha --stat
 - Changed files: git diff $base_sha...$target_sha --name-only
 - Commit log: git log $base_sha..$target_sha --oneline
-- Dirty tracked summary: git diff --stat && git diff --cached --stat
-- Dirty tracked files: git diff --name-only && git diff --cached --name-only
-- Dirty tracked patch: git diff && git diff --cached
+- Changed gitlinks: resolve baseline/candidate gitlink SHAs from the parent commits, then inspect byte-level evidence with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`. Repeat for nested gitlinks. If the baseline has no gitlink, enumerate \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence.
 
 Rules:
 1. Use the embedded edc-delivery-review skill bundle below.
@@ -178,7 +184,9 @@ assert_delivery_report_valid() {
 delivery_main() {
   edc_result_begin delivery-review
   trap edc_result_on_exit EXIT
-  local target="" base="" context_mode="" full_mode=0
+  edc_runtime_preflight_or_exit
+  edc_load_delivery_dependencies
+  local target="" base="" context_mode="" policy="" full_mode=0
   local -a ignore_args=()
 
   while [ "$#" -gt 0 ]; do
@@ -190,6 +198,16 @@ delivery_main() {
         ;;
       --full)
         full_mode=1
+        shift
+        ;;
+      --include-working-tree)
+        [ -z "$policy" ] || { echo "ERROR: choose only one dirty-state policy" >&2; exit 2; }
+        policy=include-working-tree
+        shift
+        ;;
+      --committed-only)
+        [ -z "$policy" ] || { echo "ERROR: choose only one dirty-state policy" >&2; exit 2; }
+        policy=committed-only
         shift
         ;;
       --ignore)
@@ -215,8 +233,8 @@ delivery_main() {
     esac
   done
 
-  if [ "$full_mode" -eq 1 ] && { [ -n "$target" ] || [ -n "$base" ]; }; then
-    echo "ERROR: --full cannot be combined with target or --base" >&2
+  if [ "$full_mode" -eq 1 ] && { [ -n "$target" ] || [ -n "$base" ] || [ -n "$policy" ]; }; then
+    echo "ERROR: --full cannot be combined with target, --base, or a dirty-state policy" >&2
     usage
   fi
   if [ "$full_mode" -eq 0 ] && [ -z "$target" ] && [ -z "$base" ] && repo_is_clean_main; then
@@ -232,38 +250,45 @@ delivery_main() {
     *) echo "ERROR: --context-mode must be advisory or inject" >&2; exit 2 ;;
   esac
 
+  local target_sha="" base_sha=""
   if [ "$full_mode" -eq 1 ]; then
     edc_result_scope_from_args --full
   else
-    edc_result_scope_from_args "$target" --base "$base"
-  fi
-
-  edc_require_agent_cli
-
-  local target_sha="" base_sha=""
-  if [ "$full_mode" -eq 0 ]; then
-    target_sha=$(git rev-parse --verify "$target^{commit}" 2>/dev/null) \
-      || { echo "ERROR: target is not a commit-ish ref: $target" >&2; exit 2; }
+    local candidate_file
+    candidate_file=$(mktemp "${TMPDIR:-/tmp}/edc-delivery-candidate-$$.XXXXXX") || exit 1
+    edc_candidate_resolve "$target" "$base" "$policy" > "$candidate_file" || { local rc=$?; rm -f "$candidate_file"; exit "$rc"; }
+    target_sha=$(cat "$candidate_file")
+    rm -f "$candidate_file"
     base_sha=$(git rev-parse --verify "$base^{commit}" 2>/dev/null) \
       || { echo "ERROR: base is not a commit-ish ref: $base" >&2; exit 2; }
   fi
 
-  recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-    || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+  edc_require_agent_cli
 
-  local safe report_path prompt branch
+  if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
+    recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
+      || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+  else
+    assert_context_fresh \
+      || { edc_result_failure 1 "context-not-fresh" "review-all prepared context is no longer fresh" "rerun review-all so context recovery completes before workers start"; exit 1; }
+  fi
+
+  local safe public_report_path report_path prompt branch display_target
   if [ "$full_mode" -eq 1 ]; then
     branch=$(git branch --show-current 2>/dev/null || true)
     [ -n "$branch" ] || branch="HEAD"
     target_sha=$(git rev-parse --verify 'HEAD^{commit}' 2>/dev/null) \
       || { echo "ERROR: HEAD is not a commit" >&2; exit 2; }
-    report_path="delivery-review-current.md"
+    public_report_path="delivery-review-current.md"
+    report_path="${EDC_DELIVERY_REVIEW_OUTPUT:-$public_report_path}"
     prompt=$(build_full_delivery_prompt "$branch" "$target_sha" "$report_path") || exit 1
   else
-    safe=$(safe_report_name "$target")
+    display_target="${EDC_REVIEW_DISPLAY_TARGET:-${EDC_CANDIDATE_TARGET:-$target}}"
+    safe=$(safe_report_name "$display_target")
     [ -n "$safe" ] || safe="target"
-    report_path="delivery-review-$safe.md"
-    prompt=$(build_delivery_prompt "$target" "$base" "$target_sha" "$base_sha" "$report_path") || exit 1
+    public_report_path="delivery-review-$safe.md"
+    report_path="${EDC_DELIVERY_REVIEW_OUTPUT:-$public_report_path}"
+    prompt=$(build_delivery_prompt "$display_target" "$base" "$target_sha" "$base_sha" "$report_path") || exit 1
   fi
   rm -f "$report_path"
 
@@ -283,19 +308,19 @@ delivery_main() {
   if [ -n "$changed_forbidden" ]; then
     echo "ERROR: delivery-review agent touched forbidden paths:" >&2
     echo "$changed_forbidden" | sed 's/^/  /' >&2
-    edc_result_failure 1 "delivery-write-containment" "delivery-review agent touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "" "$report_path"
+    edc_result_failure 1 "delivery-write-containment" "delivery-review agent touched forbidden paths" "inspect the log for forbidden paths; rerun in a disposable checkout if reviewing untrusted input" "" "$public_report_path"
     exit 1
   fi
 
-  assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$report_path"; exit 1; }
+  assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$public_report_path"; exit 1; }
   if [ "$spawn_rc" -ne 0 ]; then
     echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but report validation passed." >&2
     echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
-    edc_result_success_with_warning "delivery review validated report after subprocess failure" "inspect the agent log for transport/provider diagnostics" "$report_path"
+    edc_result_success_with_warning "delivery review validated report after subprocess failure" "inspect the agent log for transport/provider diagnostics" "$public_report_path"
   else
-    edc_result_success "$report_path"
+    edc_result_success "$public_report_path"
   fi
-  echo "Delivery review report: $report_path"
+  echo "Delivery review report: $public_report_path"
   exit 0
 }
 

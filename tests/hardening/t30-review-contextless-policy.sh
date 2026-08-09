@@ -31,6 +31,7 @@ setup_repo() {
   printf 'seed\n' > seed.txt
   git add seed.txt
   git commit -q -m init
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_context() {
@@ -124,18 +125,12 @@ fi
 # ── 30.5: promotion-check uses structured sidecar, not markdown headings ──
 AUTO="$TMP/auto"
 setup_repo "$AUTO"
-mkdir -p config .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review
+node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$AUTO" "$ROOT/plugins/edc" >/dev/null
+mkdir -p config
 printf 'config\n' > config/app.yml
 git add config/app.yml
 git commit -q -m 'add promotion candidate'
 write_context
-printf 'edc-build\n' > .edc/skills/edc-build-impl/SKILL.md
-printf 'edc-update-impl\n# Update Context (v2)\n' > .edc/skills/edc-update-impl/SKILL.md
-printf 'edc-review\n' > .edc/skills/edc-review/SKILL.md
-printf '# methodology\n' > .edc/skills/edc-review/methodology.md
-printf '# adversarial\n' > .edc/skills/edc-review/adversarial.md
-printf '# reporting\n' > .edc/skills/edc-review/reporting.md
-printf '# patterns\n' > .edc/skills/edc-review/patterns.md
 mkdir -p fake-bin
 cat > fake-bin/claude <<'MOCK'
 #!/usr/bin/env bash
@@ -169,7 +164,7 @@ esac
 MOCK
 chmod +x fake-bin/claude
 set +e
-PATH="$PWD/fake-bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --no-context-refresh >.git/t30-auto.out 2>.git/t30-auto.err
+PATH="$PWD/fake-bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --committed-only --no-context-refresh >.git/t30-auto.out 2>.git/t30-auto.err
 auto_rc=$?
 set -e
 run_dir=$(find .git/edc/runs -maxdepth 1 -type d -name 'security-*' | sort | tail -1)

@@ -4,14 +4,14 @@
 set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
-# Subprocess spawning + per-CLI flags moved to edc-lib.sh; check both files
-# for stream-json contract.
-SPAWN="plugins/edc/scripts/edc-lib.sh"
+# Stream filtering lives in edc-lib; backend argv construction is extracted.
+RUNTIME="plugins/edc/scripts/edc-lib.sh"
+SPAWN="plugins/edc/scripts/edc-agent-backends.sh"
 
 echo "=== T2: Stream-json visibility ==="
 
 # 1. runtime has no jq fail-fast dependency; stream_filter delegates to node.
-if ! grep -q 'command -v jq\|jq is required' "$SCRIPT" && grep -q 'stream-filter.mjs' "$SPAWN"; then
+if ! grep -q 'command -v jq\|jq is required' "$SCRIPT" && grep -q 'stream-filter.mjs' "$RUNTIME"; then
   echo "PASS: stream filtering no longer requires jq"
 else
   echo "FAIL: stream filtering still references jq dependency"
@@ -19,7 +19,6 @@ else
 fi
 
 # 2. stream_filter: source the function and feed synthetic NDJSON
-RUNTIME="plugins/edc/scripts/edc-lib.sh"
 source_and_test() {
   # Source only the stream_filter function from the runtime helper.
   eval "$(awk '/^stream_filter\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$RUNTIME")"
@@ -58,7 +57,7 @@ source_and_test() {
 source_and_test
 
 # 3. Verify the claude argv-array seed uses --output-format stream-json --verbose.
-# Spawns live in edc-lib.sh and are built as arrays, not old inline shell text.
+# Spawns live in the backend module and are built as arrays.
 total=$(grep -cF 'local -a cmd=(claude -p' "$SPAWN" || true)
 locked=$(grep -v '^#' "$SPAWN" | grep -cF -- 'local -a cmd=(claude -p --output-format stream-json --verbose' || true)
 echo "claude argv-array invocations: $total; with stream-json: $locked"

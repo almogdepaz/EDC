@@ -100,6 +100,7 @@ setup_repo() {
   printf '# Reporting\n' > .edc/skills/edc-audit/references/reporting.md
   printf '# Build\n' > .edc/skills/edc-build-impl/SKILL.md
   printf '# Update\n' > .edc/skills/edc-update-impl/SKILL.md
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$repo" "$ROOT/plugins/edc" >/dev/null
 }
 
 assert_source_clean() {
@@ -121,9 +122,10 @@ out=$(bash "$ROOT/plugins/edc/scripts/edc-delivery-review.sh" HEAD --base HEAD~1
 if [ "$result" -ne 0 ] \
   && grep -q 'touched forbidden paths' <<<"$out" \
   && grep -q 'src/app.ts' <<<"$out" \
+  && grep -qx 'agent mutation' src/app.ts \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.reasonCode === "delivery-write-containment" ? 0 : 1)'; then
   git checkout -- src/app.ts
-  echo "PASS: delivery-review blocks forbidden source writes"
+  echo "PASS: delivery-review detects forbidden source writes without rewriting them"
 else
   echo "FAIL: delivery-review accepted forbidden write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
@@ -135,8 +137,9 @@ out=$(bash "$ROOT/plugins/edc/scripts/edc-delivery-review.sh" HEAD --base HEAD~1
 if [ "$result" -ne 0 ] \
   && grep -q 'touched forbidden paths' <<<"$out" \
   && grep -q '.git/hooks/pre-commit' <<<"$out" \
+  && [ -f .git/hooks/pre-commit ] \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.reasonCode === "delivery-write-containment" ? 0 : 1)'; then
-  echo "PASS: delivery-review blocks forbidden git hook writes"
+  echo "PASS: delivery-review detects forbidden git hook writes without rewriting them"
 else
   echo "FAIL: delivery-review accepted forbidden git hook write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
@@ -148,9 +151,10 @@ out=$(bash "$ROOT/plugins/edc/scripts/edc-audit.sh" 2>&1) || result=$?
 if [ "$result" -ne 0 ] \
   && grep -q 'forbidden paths changed during the audit worker stage' <<<"$out" \
   && grep -q 'src/app.ts' <<<"$out" \
+  && grep -qx 'agent mutation' src/app.ts \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.reasonCode === "audit-write-containment" ? 0 : 1)'; then
   git checkout -- src/app.ts
-  echo "PASS: audit worker blocks forbidden source writes"
+  echo "PASS: audit worker detects forbidden source writes without rewriting them"
 else
   echo "FAIL: audit worker accepted forbidden write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
@@ -162,8 +166,9 @@ out=$(bash "$ROOT/plugins/edc/scripts/edc-audit.sh" 2>&1) || result=$?
 if [ "$result" -ne 0 ] \
   && grep -q 'forbidden paths changed during the audit worker stage' <<<"$out" \
   && grep -q '.git/hooks/pre-commit' <<<"$out" \
+  && [ -f .git/hooks/pre-commit ] \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.reasonCode === "audit-write-containment" ? 0 : 1)'; then
-  echo "PASS: audit worker blocks forbidden git hook writes"
+  echo "PASS: audit worker detects forbidden git hook writes without rewriting them"
 else
   echo "FAIL: audit worker accepted forbidden git hook write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi
@@ -175,9 +180,10 @@ out=$(bash "$ROOT/plugins/edc/scripts/edc-audit.sh" 2>&1) || result=$?
 if [ "$result" -ne 0 ] \
   && grep -q 'forbidden paths changed during audit synthesis' <<<"$out" \
   && grep -q 'src/app.ts' <<<"$out" \
+  && grep -qx 'agent mutation' src/app.ts \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.reasonCode === "audit-write-containment" ? 0 : 1)'; then
   git checkout -- src/app.ts
-  echo "PASS: audit synthesis blocks forbidden source writes"
+  echo "PASS: audit synthesis detects forbidden source writes without rewriting them"
 else
   echo "FAIL: audit synthesis accepted forbidden write. exit=$result"; echo "$out"; cat edc-context/build/last-run.json 2>/dev/null || true; exit 1
 fi

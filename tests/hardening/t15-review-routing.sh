@@ -42,6 +42,7 @@ setup_repo() {
   echo "seed" > seed.txt
   git add seed.txt
   git commit -q -m "init"
+  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ORIG_DIR/plugins/edc" >/dev/null
 }
 
 write_manifest() {
@@ -393,6 +394,16 @@ TMPDIR_T15H=$(mktemp -d)
     check "15.8c: --ignore-context task forbids context usage" 0
     cat edc-context/review-tasks/ignore-context.md 2>/dev/null || true
   fi
+  if grep -q 'immutable candidate commit' edc-context/review-tasks/ignore-context.md \
+    && grep -q 'git show' edc-context/review-tasks/ignore-context.md \
+    && grep -q 'mutable working tree' edc-context/review-tasks/ignore-context.md \
+    && grep -q 'changed gitlink' edc-context/review-tasks/ignore-context.md \
+    && grep -q 'git -C <submodule-path> diff' edc-context/review-tasks/ignore-context.md; then
+    check "15.8d: differential security task pins immutable candidate evidence" 1
+  else
+    check "15.8d: differential security task pins immutable candidate evidence" 0
+    cat edc-context/review-tasks/ignore-context.md 2>/dev/null || true
+  fi
   rm -rf "$TMPDIR_T15H"
 )
 
@@ -523,7 +534,7 @@ fi
 exit 1
 EOF
   chmod +x fake-bin/gh
-  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --committed-only --ignore-context 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q "src/a.ts" edc-context/review-tasks/ignore-context.md; then
     check "15.13a: pr:<number> target uses gh pr diff output" 1
@@ -555,7 +566,7 @@ fi
 exit 1
 EOF
   chmod +x fake-bin/gh
-  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build --pr 147 --ignore-context 2>&1)
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build --pr 147 --committed-only --ignore-context 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/ignore-context.md ] && grep -q '"target": "pr:147"' edc-context/review-tasks/manifest.json; then
     check "15.14a: --build --pr <number> normalizes target to pr:<number>" 1
@@ -622,7 +633,7 @@ TMPDIR_T15O=$(mktemp -d)
   rm -rf "$TMPDIR_T15O"
 )
 
-# ── 15.17: dirty tracked worktree files are review inputs ─────────────────
+# ── 15.17: explicit include policy snapshots dirty tracked files ──────────
 TMPDIR_T15Q=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15Q"
@@ -637,14 +648,14 @@ TMPDIR_T15Q=$(mktemp -d)
   ]'
   echo "dirty" > src/dirty.ts
 
-  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD 2>&1)
+  out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD --include-working-tree 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ] \
      && [ -f edc-context/review-tasks/core.md ] \
      && grep -q 'src/dirty.ts' edc-context/review-tasks/core.md; then
-    check "15.17: dirty tracked worktree files are included in review tasks" 1
+    check "15.17: include-working-tree snapshots dirty tracked files into review tasks" 1
   else
-    check "15.17: dirty tracked worktree files are included in review tasks" 0
+    check "15.17: include-working-tree snapshots dirty tracked files into review tasks" 0
     echo "$out"
     cat edc-context/review-tasks/core.md 2>/dev/null || true
   fi
@@ -660,11 +671,11 @@ TMPDIR_T15R=$(mktemp -d)
   rc=$?
   set -e
   if [ "$rc" -eq 2 ] \
-     && echo "$out" | grep -q 'no changed files found for target: HEAD' \
+     && echo "$out" | grep -q 'no changed files found for target:' \
      && echo "$out" | grep -q 'edc review full --agent <agent>'; then
-    check "15.18: no-change review failure explains dirty tracked-file fallback" 1
+    check "15.18: no-change committed review suggests full review" 1
   else
-    check "15.18: no-change review failure explains dirty tracked-file fallback" 0
+    check "15.18: no-change committed review suggests full review" 0
     echo "$out"
   fi
   rm -rf "$TMPDIR_T15R"
@@ -691,7 +702,7 @@ exit 2
 EOF
   chmod +x fake-bin/gh
   set +e
-  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --ignore-context 2>&1)
+  PATH="$PWD/fake-bin:$PATH" out=$("$BASH_BIN" "$SCRIPT" --build pr:147 --committed-only --ignore-context 2>&1)
   rc=$?
   set -e
   if [ "$rc" -eq 2 ] && echo "$out" | grep -q "gh pr diff failed" && echo "$out" | grep -q "gh auth failed"; then

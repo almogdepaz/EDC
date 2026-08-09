@@ -21,7 +21,8 @@ git config commit.gpgsign false
 mkdir -p src generated
 printf 'one\n' > src/keep.txt
 printf 'one\n' > generated/skip.txt
-git add src/keep.txt generated/skip.txt
+printf 'generated/**\n' > .edcignore
+git add .edcignore src/keep.txt generated/skip.txt
 git commit -q -m "init"
 
 printf 'two\n' > src/keep.txt
@@ -29,6 +30,7 @@ printf 'two\n' > generated/skip.txt
 git add src/keep.txt generated/skip.txt
 git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
+node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T8" "$ORIG_DIR/plugins/edc" >/dev/null
 
 mkdir -p edc-context
 cat > edc-context/manifest.json <<EOF
@@ -37,8 +39,6 @@ EOF
 printf '## Module Map\n\n- root\n' > edc-context/index.md
 
 # ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
-printf 'generated/**\n' > .edcignore
-
 bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > /tmp/t8-build-out.txt
 
 if grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json \

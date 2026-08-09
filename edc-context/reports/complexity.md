@@ -2,6 +2,70 @@
 # Code Quality Audit
 
 ## Summary
-No current code-quality findings in this report.
+- Quality risk score: 7/10 (0 = lean, 10 = severe quality risk)
+- Bloat score: 5/10 (0 = lean, 10 = severely bloated)
+- Dead exports: 1
+- Wrapper functions: 0
+- Over-abstracted modules: 0
+- Duplicated code blocks: 6
+- Oversized files/functions: 13
+- Test-value risks: 5
 
-Stale quality findings from the 2026-07-07 differential review were remediated or intentionally left as compatibility-preserving maintenance debt.
+Synthesis source: scoped worker reports under `.git/edc/runs/audit-20260722T091023Z-88264-17761/staged/audit-tasks/`. Plan 006 later extracted review planning, backend dispatch, Pi argument/scope/background formatting, and JSON result dispatch, and added direct seam tests. Resolved bullets were removed below; remaining counts are historical audit totals until the next full generated audit.
+
+## LOC Estimates vs Reality
+| module | expected senior implementation | actual | result |
+|---|---:|---:|---|
+| agent-wrappers | ~800-950 LOC for Pi runtime/install | 1,408 LOC across `pi/index.mjs`, `pi/install.sh`, and `pi/lib/` | Not >2x; `pi/index.mjs` remains individually oversized at 1,102 LOC. |
+| benchmarking | ~3,000-3,500 LOC | ~4,777 physical lines | Not >2x; large orchestrators hide scoring/schema drift. |
+| canonical-skills | ~1,800-2,600 LOC | 2,932 LOC | Not >2x; reference/schema content mostly justifies size. |
+| hardening-tests | ~6,500-7,500 LOC | 9,845 LOC across 95 files | Not >2x; broad safety net, with several oversized shell tests. |
+| plugin-surface | ~2,200-2,700 LOC incl. docs/metadata | 2,711 LOC | Not >2x; public package docs justify volume. |
+| runtime-cli | ~4,000-4,500 LOC | 6,990 physical / 5,591 non-comment LOC | Not >2x; size concentrated in mixed-responsibility scripts. |
+
+## Dead Exports / Public Surface
+- hardening-tests — `tests/hardening/t45-review-phase-write-containment.sh:105`: dead local helper `assert_source_clean()` is never called. It describes a missing contract assertion, so either call it in source-mutation scenarios or delete/rename it if detection without cleanup is intentional.
+
+## Wrapper Functions
+- None reported by scoped workers. Thin delegates in Pi/runtime/plugin-surface add naming, boundary, or shell-call contract value.
+
+## Over-Abstracted Modules
+- None reported by scoped workers. Public helper exports in plugin/runtime surfaces are documented seams rather than accidental abstraction.
+
+## Duplication
+- runtime-cli — `plugins/edc/scripts/edc-audit.sh:255-266`, `plugins/edc/scripts/edc-audit.sh:298-309`, `plugins/edc/scripts/edc-review.sh:598-609`, `plugins/edc/scripts/edc-build.sh:378-391`, `plugins/edc/scripts/edc-delivery-review.sh:272-286`: shrink: duplicated write-containment snapshot/run/diff/error pattern around a critical invariant. Extract a small shared containment helper in `edc-lib.sh`. estimated removal: ~40-60 repeated lines.
+- hardening-tests — `tests/hardening/t32-runtime-curator-step.sh:16` and `tests/hardening/t33-runtime-curator-edit-mode.sh:15`: possible duplicated-code smell; near-identical mocked `claude` prompt dispatcher/context writer for ~90 lines. Move shared mock/context fixture into a small helper. estimated removal: ~70-100 lines.
+- plugin-surface — `plugins/edc/hooks/lib/json-cli.mjs:31`, `plugins/edc/hooks/lib/worker-pool.mjs:119`, `plugins/edc/hooks/lib/build-dag.mjs:20`, `plugins/edc/hooks/lib/worker-manifest.mjs:30`: shrink: duplicated temp-file + `JSON.stringify` + `renameSync` atomic JSON write logic. Extract one tiny `writeJsonAtomic` helper. estimated removal: ~10-15 lines.
+- benchmarking — `benchmark/autoresearch.sh:466-475`, `benchmark/compute_baseline.py:16`, `benchmark/compute_baseline.py:90-93`, `benchmark/gepa/adapter.py:44`, `benchmark/gepa/adapter.py:338`, `benchmark/gepa/adapter.py:388`: duplicated verdict scoring paths disagree on `judge_error`; centralize verdict scoring and return an explicit unscored sentinel.
+- canonical-skills — `plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md:3-13` vs `plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md:211-235`: shrink: contradictory scratch-vs-final output rules can push workers to emit bloated function-by-function final module docs. Make the resource scratch-only or delete the duplicate final-output contract.
+
+## Oversized Files / Functions
+- agent-wrappers — `pi/index.mjs:612-779`: `startBackgroundJob` is 168 LOC and mixes stale-job checks, git-path setup, status writes, embedded Bash generation, result JSON projection, log grep classification, process spawning, and spawn-error handling. Split result rendering/classification/status serialization into helpers or a data table.
+- runtime-cli — `plugins/edc/scripts/edc-audit.sh:147-337`: `audit_main` is ~176 nonblank lines and contains two near-identical worker stages plus parsing, context recovery, diff scope selection, validation, promotion, and result writing. Split worker-stage planning/running from synthesis/promotion.
+- plugin-surface — `plugins/edc/hooks/lib/worker-pool.mjs:210`: `launch()` is ~90 lines and handles task-file creation, log FD setup, spawning/env, timeout cancellation, process-group cleanup, output validation, and result status mapping. Split into prepare/spawn/settle helpers.
+- benchmarking — `benchmark/autoresearch.sh` (~861 lines), `benchmark/regression/run-regression.sh` (~659 lines), and `benchmark/score.py` (~551 lines) exceed 500 LOC. They are mostly orchestrators, but concrete scoring/schema findings show the size is hiding contract drift.
+- hardening-tests — `tests/hardening/t10-pi-extension.sh` is 756 LOC with one broad Node integration block; split future Pi behavior into focused subtests or separate check rows.
+- hardening-tests — `tests/hardening/t15-review-routing.sh` is 707 LOC and `tests/hardening/t7-cli-entrypoint.sh` is 531 LOC. Both are scenario matrices; add future cases to focused scripts or shared setup helpers instead of extending these files.
+- agent-wrappers — `pi/index.mjs` is 1,102 LOC (>500); argument, review-scope, and background result-display helpers are now direct-tested modules, but the extension entrypoint remains the main size pressure.
+
+## Deep Call Chains
+- No scoped worker reported an excessive simple-operation call chain. Menu/orchestrator paths are multi-step by design; actionable risks are large mixed functions and opaque handoff contracts rather than pure pass-through depth.
+
+## Test Mirroring / Test Value
+- benchmarking — deterministic fixtures now cover `score.py` and `regression/compare.py`; attempt identity, transcript reconstruction, autoresearch, and other aggregate paths remain untested here.
+- hardening-tests — `tests/hardening/t45-review-phase-write-containment.sh:121-179`: assertions cover non-zero exit, diagnostics, and result JSON, but the unused `assert_source_clean()` means the test does not prove checkout cleanliness after worker mutation attempts. Call the helper in each source-mutation success branch.
+- hardening-tests — `tests/hardening/t10-pi-extension.sh`, `t15-review-routing.sh`, and `t7-cli-entrypoint.sh` are broad scenario matrices; future additions should be smaller checks so failures localize to one behavior.
+
+## Correctness and Error-Handling Risks
+- benchmarking — score rows still omit attempt identity; several non-regression aggregate paths still mishandle `judge_error`; autoresearch can still commit unrelated staged work. Comparator verdict/combined-score handling and declared category regexes now have deterministic tests.
+- agent-wrappers — `pi/index.mjs:368-373` + `pi/index.mjs:385-391`: foreground script execution accumulates stdout/stderr in memory and truncates only after process close; promoted to `issues.md` as a low-severity robustness risk.
+- hardening-tests — fixed `/tmp/...` scratch/sentinel paths in several tests can collide across concurrent runs; promoted to `issues.md` as a concrete test correctness risk.
+
+## Interface / Type / Contract Risks
+- canonical-skills — `plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md:8`: adapter contract says `edc-context/index.md` may be used for “report links,” conflicting with build/update prompts and module docs that exclude reports from the ordinary index read path. Remove “and report links” or point adapters to `manifest.json` and explicit review/audit workflows.
+
+## Simplicity Opportunities
+- runtime-cli — shrink: shared write-containment helper in `edc-lib.sh` is the biggest surgical cut because it reduces repeated critical shell ceremony without changing workflow taxonomy.
+- canonical-skills — shrink: make `OUTPUT_REQUIREMENTS.md` scratch-only or delete duplicate final-output requirements so `SKILL.md` remains the single source of truth.
+- agent-wrappers — `pi/index.mjs:675-709`: shrink: generated shell `read_result_field` reparses the same JSON once per field. If this area changes, parse once in one Node snippet that emits shell-safe key/value lines.
+- hardening-tests — shrink: prefer shared git-repo setup and mocked-agent prompt-dispatch fixtures once two or more tests need the same schema/prompt scaffolding; keep fixtures small so prompt-contract tests remain explicit.

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master, refactor]
+    tags: ["v*"]
   pull_request:
     branches: [main, master]
 
@@ -19,6 +20,36 @@ jobs:
       - name: Run shellcheck
         run: npm run lint:shell
       - name: Run hardening suite
+        run: npm test
+      - name: Check npm package contents
+        run: npm run pack:check
+      - name: Verify release tag and tagged installer archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          package_version=$(node -p 'require("./package.json").version')
+          test "$GITHUB_REF_NAME" = "v$package_version"
+          work=$(mktemp -d)
+          home=$(mktemp -d)
+          cp install.sh "$work/install.sh"
+          (
+            cd "$work"
+            HOME="$home" CI=1 SHELL=/bin/bash bash install.sh --agent claude --no-path
+          )
+          test -x "$home/.edc/scripts/edc"
+          rm -rf "$work" "$home"
+
+  hardening-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install shellcheck
+        run: brew install shellcheck
+      - name: Run hardening suite with Apple Bash
+        shell: /bin/bash {0}
         run: npm test
       - name: Check npm package contents
         run: npm run pack:check

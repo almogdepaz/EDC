@@ -38,6 +38,7 @@ chmod +x "$TMP/bin/codex"
 export PATH="$TMP/bin:$PATH"
 export EDC_AGENT_CLI=codex
 export CODEX_HOME_CAPTURE="$TMP/codex-home-capture"
+export EDC_SPAWN_LOG="$TMP/spawn-log.jsonl"
 
 # shellcheck source=/dev/null
 source "$LIB"
@@ -57,7 +58,7 @@ unset EDC_CODEX_HOME CODEX_EXEC_HOME CODEX_EXEC_HOME_OWNED CODEX_AUTH_FAIL
 : > "$CODEX_HOME_CAPTURE"
 edc_require_agent_cli
 set +e
-edc_spawn edc-review-smoke 20 'prompt' >default.out 2>default.err
+edc_spawn edc-review-smoke 20 'prompt' >"$TMP/default.out" 2>"$TMP/default.err"
 default_rc=$?
 set -e
 if [ "$default_rc" -eq 0 ] && [ "$(tail -1 "$CODEX_HOME_CAPTURE")" = "__UNSET__" ]; then
@@ -72,7 +73,7 @@ unset CODEX_EXEC_HOME CODEX_EXEC_HOME_OWNED CODEX_AUTH_FAIL
 : > "$CODEX_HOME_CAPTURE"
 edc_require_agent_cli
 set +e
-edc_spawn edc-review-smoke 20 'prompt' >custom.out 2>custom.err
+edc_spawn edc-review-smoke 20 'prompt' >"$TMP/custom.out" 2>"$TMP/custom.err"
 custom_rc=$?
 set -e
 if [ "$custom_rc" -eq 0 ] && [ "$(tail -1 "$CODEX_HOME_CAPTURE")" = "$EDC_CODEX_HOME" ]; then
@@ -88,40 +89,46 @@ export CODEX_AUTH_FAIL=1
 set +e
 edc_require_agent_cli
 auth_start=$(date +%s)
-edc_spawn edc-review-smoke 20 'prompt' >auth.out 2>auth.err
+edc_spawn edc-review-smoke 20 'prompt' >"$TMP/auth.out" 2>"$TMP/auth.err"
 rc=$?
 auth_duration=$(( $(date +%s) - auth_start ))
 set -e
 if [ "$rc" -ne 0 ] \
   && [ "$auth_duration" -lt 5 ] \
-  && grep -q "Codex authentication failed" auth.err \
-  && grep -q "codex logout && codex login" auth.err \
-  && ! grep -q "responses_websocket" auth.err \
-  && [ "$(grep -c "Codex authentication failed" auth.err)" -eq 1 ]; then
+  && grep -q "Codex authentication failed" "$TMP/auth.err" \
+  && grep -q "codex logout && codex login" "$TMP/auth.err" \
+  && ! grep -q "responses_websocket" "$TMP/auth.err" \
+  && [ "$(grep -c "Codex authentication failed" "$TMP/auth.err")" -eq 1 ]; then
   check "codex auth failure is summarized once with login guidance" 1
 else
   check "codex auth failure is summarized once with login guidance" 0
-  echo "--- stdout ---"; cat auth.out
-  echo "--- stderr ---"; cat auth.err
+  echo "--- stdout ---"; cat "$TMP/auth.out"
+  echo "--- stderr ---"; cat "$TMP/auth.err"
 fi
 
 unset CODEX_AUTH_FAIL
 export CODEX_MODEL_FAIL=1
 set +e
 edc_require_agent_cli
-edc_spawn edc-review-smoke 20 'prompt' >model.out 2>model.err
+edc_spawn edc-review-smoke 20 'prompt' >"$TMP/model.out" 2>"$TMP/model.err"
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] \
-  && grep -q "ERROR: model was rejected by codex" model.err \
-  && grep -q "The model is not supported" model.err \
-  && ! grep -q '"type":"error"' model.err; then
+  && grep -q "ERROR: model was rejected by codex" "$TMP/model.err" \
+  && grep -q "The model is not supported" "$TMP/model.err" \
+  && ! grep -q '"type":"error"' "$TMP/model.err"; then
   check "codex structured provider errors print readable model guidance" 1
 else
   check "codex structured provider errors print readable model guidance" 0
-  echo "--- stdout ---"; cat model.out
-  echo "--- stderr ---"; cat model.err
+  echo "--- stdout ---"; cat "$TMP/model.out"
+  echo "--- stderr ---"; cat "$TMP/model.err"
 fi
+
+for output in default.out default.err custom.out custom.err auth.out auth.err model.out model.err; do
+  if [ -e "$ROOT/$output" ]; then
+    check "codex auth test keeps $output out of the repository root" 0
+  fi
+done
 
 if [ "$failures" -ne 0 ]; then
   exit 1

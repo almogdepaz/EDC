@@ -28,7 +28,8 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  mkdir -p edc-context/modules edc-context/reports .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-module-context-impl/resources .edc/skills/edc-review .edc/skills/edc-audit/references
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
+  mkdir -p edc-context/modules edc-context/reports
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
   printf '## Complexity\n' > edc-context/reports/complexity.md
@@ -43,22 +44,6 @@ setup_repo() {
   ]
 }
 EOF
-  printf 'BUILD_SKILL_MARKER\n' > .edc/skills/edc-build-impl/SKILL.md
-  printf 'UPDATE_SKILL_MARKER\n' > .edc/skills/edc-update-impl/SKILL.md
-  printf 'MODULE_SKILL_MARKER\n' > .edc/skills/edc-module-context-impl/SKILL.md
-  printf 'CURATOR_SKILL_MARKER\n' > .edc/skills/edc-context-curator-impl/SKILL.md
-  printf 'CURATOR_EDIT_SKILL_MARKER\n' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
-  printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
-  printf 'AUDIT_SKILL_MARKER\n' > .edc/skills/edc-audit/SKILL.md
-  printf 'AUDIT_SCOPE_MARKER\n' > .edc/skills/edc-audit/references/scope-and-standards.md
-  printf 'AUDIT_SMELL_MARKER\n' > .edc/skills/edc-audit/references/smell-baseline.md
-  printf 'AUDIT_CHECKS_MARKER\n' > .edc/skills/edc-audit/references/quality-checks.md
-  printf 'AUDIT_REPORTING_MARKER\n' > .edc/skills/edc-audit/references/reporting.md
-  printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
-  printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
-  printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md
-  printf 'PATTERNS_MARKER\n' > .edc/skills/edc-review/patterns.md
-
   echo 'two' > src/a.txt
   git add src/a.txt
   git commit -q -m change
@@ -150,27 +135,27 @@ if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"assembled"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'BUILD_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'BUILD_SKILL_MARKER|name: edc-build-impl'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'UPDATE_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'UPDATE_SKILL_MARKER|name: edc-update-impl'; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'CURATOR_EDIT_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'CURATOR_EDIT_SKILL_MARKER|name: edc-context-curator-edit-impl'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curator edit"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'CURATOR_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'CURATOR_SKILL_MARKER|name: edc-context-curator-impl'; then
   mkdir -p edc-context/reports
   printf '# Context Curation Report\n\n## Summary\n- mock pi curator\n' > edc-context/reports/context-curation.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curated"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'REVIEW_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'REVIEW_SKILL_MARKER|name: edc-review'; then
   task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
   report_path="$(dirname "$task_path")/report-$(basename "$task_path" .md).md"
   mkdir -p "$(dirname "$report_path")"
@@ -194,7 +179,7 @@ if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'AUDIT_SKILL_MARKER'; then
+if printf '%s' "$prompt" | grep -Eq 'AUDIT_SKILL_MARKER|name: edc-audit'; then
   mkdir -p edc-context/reports
   printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
   printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
@@ -209,7 +194,7 @@ MOCK
 
 setup_repo
 write_mock_pi
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 >"$LOG_DIR/out.log" 2>"$LOG_DIR/err.log"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/out.log" 2>"$LOG_DIR/err.log"
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md; then
@@ -319,7 +304,7 @@ fi
 
 rm -f review-HEAD.md
 raw_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 >"$LOG_DIR/raw-model-review.out" 2>"$LOG_DIR/raw-model-review.err"
+PATH="$TMP/bin:$PATH" "$BASH_BIN" "$SCRIPT" --agent pi --model gpt-5.5 --base HEAD~1 --committed-only >"$LOG_DIR/raw-model-review.out" 2>"$LOG_DIR/raw-model-review.err"
 rc=$?
 raw_after=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock pi review' review-HEAD.md && [ "$raw_after" -gt "$raw_before" ]; then

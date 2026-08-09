@@ -128,15 +128,9 @@ setup_repo() {
   git config user.name T
   git config commit.gpgsign false
   printf 'src\n' > src/main.py
-  mkdir -p .edc/skills/edc-build-impl .edc/skills/edc-context-curator-impl .edc/skills/edc-context-curator-edit-impl .edc/skills/edc-module-context-impl/resources .edc/skills/edc-audit/references
-  printf '%s\n' '---' 'name: edc-build-impl' '---' > .edc/skills/edc-build-impl/SKILL.md
-  printf '%s\n' '---' 'name: edc-context-curator-impl' '---' '# Context Curator' > .edc/skills/edc-context-curator-impl/SKILL.md
-  printf '%s\n' '---' 'name: edc-context-curator-edit-impl' '---' '# Context Curator Edit' > .edc/skills/edc-context-curator-edit-impl/SKILL.md
-  printf '# Module Context\n' > .edc/skills/edc-module-context-impl/SKILL.md
-  printf '# Audit\n' > .edc/skills/edc-audit/SKILL.md
-  for ref in scope-and-standards smell-baseline quality-checks reporting; do printf '# %s\n' "$ref" > ".edc/skills/edc-audit/references/$ref.md"; done
   git add src/main.py
   git commit -q -m init
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ROOT/plugins/edc" >/dev/null
   : > "$TMP/log"
 }
 

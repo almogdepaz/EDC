@@ -30,22 +30,11 @@ setup_repo() {
   git config user.email t@example.com
   git config user.name T
   git config commit.gpgsign false
-  mkdir -p src .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review/references .edc/skills/edc-audit/references
+  mkdir -p src
   echo one > src/app.ts
   git add src/app.ts
   git commit -q -m init
-  printf '# Build\n' > .edc/skills/edc-build-impl/SKILL.md
-  printf '# Update\n' > .edc/skills/edc-update-impl/SKILL.md
-  printf '# Review\n' > .edc/skills/edc-review/SKILL.md
-  printf '# Methodology\n' > .edc/skills/edc-review/references/methodology.md
-  printf '# Adversarial\n' > .edc/skills/edc-review/references/adversarial.md
-  printf '# Reporting\n' > .edc/skills/edc-review/references/reporting.md
-  printf '# Patterns\n' > .edc/skills/edc-review/references/patterns.md
-  printf '# Audit\nname: edc-audit\n' > .edc/skills/edc-audit/SKILL.md
-  printf '# Scope\n' > .edc/skills/edc-audit/references/scope-and-standards.md
-  printf '# Smell\n' > .edc/skills/edc-audit/references/smell-baseline.md
-  printf '# Checks\n' > .edc/skills/edc-audit/references/quality-checks.md
-  printf '# Reporting\n' > .edc/skills/edc-audit/references/reporting.md
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$repo" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_stale_context() {
@@ -96,7 +85,7 @@ echo two > src/app.ts
 git add src/app.ts
 git commit -q -m change
 result=0
-out=$(bash "$ROOT/plugins/edc/scripts/edc-review.sh" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(bash "$ROOT/plugins/edc/scripts/edc-review.sh" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 if [ "$result" -ne 0 ] && assert_result review context-recovery-failed 'edc update'; then
   echo "PASS: security review recovery failure writes specific structured result"
 else

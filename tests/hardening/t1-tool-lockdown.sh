@@ -3,15 +3,15 @@
 # Run from repo root: bash tests/hardening/t1-tool-lockdown.sh
 set -euo pipefail
 
-# All agent-CLI spawns now live in the shared helper edc-lib.sh (SPAWN section), sourced by
-# every orchestrator. The lockdown contract pins claude -p invocations there.
-SCRIPT="plugins/edc/scripts/edc-lib.sh"
+# All agent-CLI spawns live in the backend module sourced by edc-lib.sh.
+# The lockdown contract pins claude -p invocations there.
+SCRIPT="plugins/edc/scripts/edc-agent-backends.sh"
 LEGACY_TOOLS='--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob"'
 PROMPT_FILE_TOOLS='--allowed-tools "Read,Write,Bash,Grep,Glob"'
 
 echo "=== T1: Subprocess tool lockdown ==="
 
-# Current edc-lib.sh builds the claude invocation as an argv array. Count the
+# The backend module builds the claude invocation as an argv array. Count the
 # actual array seed, not old multi-line shell text that started with `claude -p`.
 total=$(grep -cF 'local -a cmd=(claude -p' "$SCRIPT" || true)
 legacy_locked=$(grep -v '^#' "$SCRIPT" | grep -cF -- "$LEGACY_TOOLS" || true)

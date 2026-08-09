@@ -9,10 +9,10 @@ usage() {
 Usage:
   edc [--model <slug>] build  --agent claude|cursor|codex|pi [path] [--force] [--focus <module>] [--ignore <glob>]...
   edc [--model <slug>] update --agent claude|cursor|codex|pi [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] review   full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] security full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] delivery full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
-  edc [--model <slug>] quality  full|diff [base] --agent claude|cursor|codex|pi [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] review   full|diff [base] --agent claude|cursor|codex|pi [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] security full|diff [base] --agent claude|cursor|codex|pi [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] delivery full|diff [base] --agent claude|cursor|codex|pi [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
+  edc [--model <slug>] quality  full|diff [base] --agent claude|cursor|codex|pi [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] security-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target|--pr <number-or-url>|--full] [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
   edc [--model <slug>] delivery-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>|--full] [--ignore <glob>]... [--context-mode advisory|inject]
   edc [--model <slug>] quality-review --agent claude|cursor|codex|pi [--diff <base>...<target>|target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
@@ -39,6 +39,8 @@ Notes:
     'claude-haiku-4-5'; cursor: 'sonnet-4'; etc).
   build defaults path to the current directory.
   --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
+  Dirty differential reviews require --include-working-tree or --committed-only.
+  Combined review runs security, delivery, and quality concurrently against one candidate.
   All commands delegate to shared deterministic orchestrators.
 EOF
 }
@@ -114,10 +116,13 @@ enforce_agent_context_mode() {
       return 0
       ;;
     inject)
-      if [ "$agent" != "claude" ]; then
-        echo "edc: $agent/$mode not yet implemented" >&2
-        exit 2
-      fi
+      case "$agent" in
+        claude|pi) ;;
+        *)
+          echo "edc: $agent/$mode not yet implemented" >&2
+          exit 2
+          ;;
+      esac
       ;;
   esac
 }

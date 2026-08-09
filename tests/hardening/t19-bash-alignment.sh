@@ -24,6 +24,7 @@ setup_repo() {
   printf 'two\n' > src/a.txt
   git add src/a.txt
   git commit -q -m change
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_fake_pi() {
@@ -55,7 +56,7 @@ unset EDC_BASH
 PATH="$TMP/bin:$PATH" \
 EDC_AGENT_CLI=pi \
 EDC_KEEP_REVIEW_TASKS=1 \
-bash "$SCRIPT" HEAD --base HEAD~1 --ignore-context >.git/t19-out.log 2>.git/t19-err.log
+bash "$SCRIPT" HEAD --base HEAD~1 --committed-only --ignore-context >.git/t19-out.log 2>.git/t19-err.log
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock review via pi' review-HEAD.md; then
@@ -69,6 +70,22 @@ if env | grep -q '^EDC_BASH='; then
   check "19.2: EDC_BASH stays unset in test process" 0
 else
   check "19.2: EDC_BASH stays unset in test process" 1
+fi
+
+mkdir -p "$TMP/runtime/scripts" "$TMP/runtime/hooks/lib" "$TMP/edc-context"
+cp "$ROOT/plugins/edc/scripts/edc" "$TMP/runtime/scripts/edc"
+cp -R "$ROOT/plugins/edc/hooks/lib/." "$TMP/runtime/hooks/lib/"
+cat >"$TMP/runtime/scripts/edc-audit.sh" <<'FAKE_AUDIT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$EDC_PI_INJECT_ARGS"
+FAKE_AUDIT
+chmod +x "$TMP/runtime/scripts/edc" "$TMP/runtime/scripts/edc-audit.sh"
+printf '{"schemaVersion":2,"policy":{"defaultMode":"inject"}}\n' >"$TMP/edc-context/manifest.json"
+if (cd "$TMP" && EDC_PI_INJECT_ARGS="$TMP/pi-inject-args" EDC_BUILD_MODEL=test/build EDC_REVIEW_MODEL=test/review bash runtime/scripts/edc quality full --agent pi) \
+  && [ -f "$TMP/pi-inject-args" ]; then
+  check "19.3: terminal quality review accepts pi inject mode" 1
+else
+  check "19.3: terminal quality review accepts pi inject mode" 0
 fi
 
 echo

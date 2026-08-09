@@ -28,27 +28,21 @@ git init -q
 git config user.email t@example.com
 git config user.name T
 git config commit.gpgsign false
-mkdir -p src edc-context/modules .edc/skills/edc-delivery-review/references .edc/skills/edc-build-impl .edc/skills/edc-update-impl
+mkdir -p src edc-context/modules
 echo one > src/app.ts
 git add src/app.ts
 git commit -q -m init
 echo two > src/app.ts
 git add src/app.ts
 git commit -q -m change
+node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$ROOT/plugins/edc" >/dev/null
 printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
 printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md
 printf '{"schemaVersion":2,"sourceCommit":"deadbeef","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' > edc-context/manifest.json
-printf 'DELIVERY_SKILL_MARKER\n' > .edc/skills/edc-delivery-review/SKILL.md
-printf 'SPEC_AXIS_MARKER\n' > .edc/skills/edc-delivery-review/references/spec-axis.md
-printf 'ARCH_AXIS_MARKER\n' > .edc/skills/edc-delivery-review/references/architecture-axis.md
-printf 'REPORTING_MARKER\n' > .edc/skills/edc-delivery-review/references/reporting.md
-printf '# Build\n' > .edc/skills/edc-build-impl/SKILL.md
-printf '# Update\n' > .edc/skills/edc-update-impl/SKILL.md
-
 export PATH="$MOCK_BIN:$PATH"
 export EDC_AGENT_CLI=claude
 result=0
-out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 if [ "$result" -ne 0 ] \
   && grep -q 'EDC context recovery failed' <<<"$out" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.status === "failed" && j.exitCode === 1 && j.reasonCode === "context-recovery-failed" && /context recovery failed/.test(j.message) && /edc update/.test(j.hint) ? 0 : 1)'; then

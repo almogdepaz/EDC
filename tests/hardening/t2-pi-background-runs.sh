@@ -40,6 +40,7 @@ sleep 1
 echo "Verified: review-HEAD.md"
 `);
   chmodSync(reviewScript, 0o755);
+  mkdirSync(join(cwd, ".edc.install.lock"), { recursive: true });
 
   const messages = [];
   let handler;
@@ -143,6 +144,7 @@ set -euo pipefail
 echo "Verified: review-HEAD.md"
 `);
   chmodSync(reviewScript, 0o755);
+  mkdirSync(join(worktree, ".edc.install.lock"), { recursive: true });
 
   const messages = [];
   let handler;

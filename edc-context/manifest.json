@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "edcVersion": "1.1.1",
+  "edcVersion": "1.1.5",
   "repoContextFile": "edc-context/index.md",
   "reports": {
     "issues": "edc-context/reports/issues.md",
@@ -17,7 +17,7 @@
     {
       "name": "runtime-cli",
       "doc": "edc-context/modules/runtime-cli.md",
-      "summary": "Terminal CLI, shell orchestrators, and deterministic build/update/review-all/security/delivery/quality control plane.",
+      "summary": "Terminal CLI, shell orchestrators, worker coordination, deterministic build/update/review/security/delivery/quality control plane.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -32,7 +32,7 @@
     {
       "name": "plugin-surface",
       "doc": "edc-context/modules/plugin-surface.md",
-      "summary": "Package metadata/docs, Claude/Cursor hook surface, and shared JavaScript routing/context injection runtime.",
+      "summary": "Package metadata/docs, Claude/Cursor hook surface, shared JavaScript routing/context injection, and worker helper runtime.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -50,7 +50,7 @@
     {
       "name": "canonical-skills",
       "doc": "edc-context/modules/canonical-skills.md",
-      "summary": "Canonical public skills and private implementation prompt bundles that define agent behavior.",
+      "summary": "Canonical public skills and private implementation prompt bundles that define semantic worker behavior.",
       "priority": 100,
       "match": {
         "prefixes": [
@@ -62,7 +62,7 @@
     {
       "name": "agent-wrappers",
       "doc": "edc-context/modules/agent-wrappers.md",
-      "summary": "Pi extension wrapper, review scope menu, background jobs, visible skills, Pi install documentation, and Pi media.",
+      "summary": "Pi extension wrapper, review scope menu, background jobs, visible skills, Pi install/observer documentation, and Pi media.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -76,7 +76,7 @@
     {
       "name": "hardening-tests",
       "doc": "edc-context/modules/hardening-tests.md",
-      "summary": "Shell, Node, CI, package, Pi, prompt-contract, phase-result, and skill-fixture tests pinning public behavior.",
+      "summary": "Shell, Node, CI, package, Pi, worker-pool, prompt-contract, phase-result, and skill-fixture tests pinning public behavior.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -92,7 +92,7 @@
     {
       "name": "benchmarking",
       "doc": "edc-context/modules/benchmarking.md",
-      "summary": "CVE benchmark harness, scorer, judge audit, transcript recovery, and prompt-tuning experiments.",
+      "summary": "CVE benchmark harness, scorer, judge audit, transcript recovery, production-pipeline comparability, and prompt-tuning experiments.",
       "priority": 100,
       "match": {
         "exactFiles": [
@@ -160,11 +160,11 @@
       }
     ]
   },
-  "generatedAt": "2026-07-07T08:31:13Z",
-  "sourceCommit": "3a8f94363d793519a3eb87f50e7540c72b0973c0",
+  "generatedAt": "2026-07-22T07:37:20Z",
+  "sourceCommit": "8a76c16d51c7cac37c6b928f40047ab818560292",
   "coverage": {
-    "contextMappedFileCount": 175,
-    "contextlessFileCount": 18,
+    "contextMappedFileCount": 183,
+    "contextlessFileCount": 16,
     "uncoveredFileCount": 0,
     "ambiguousPathCount": 0,
     "ignoredFileCount": 16,
@@ -173,7 +173,7 @@
       "benchmark/curl/**",
       "benchmark/redis/**"
     ],
-    "mappedFileCount": 175,
-    "unmappedFileCount": 18
+    "mappedFileCount": 183,
+    "unmappedFileCount": 16
   }
 }

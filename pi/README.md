@@ -82,7 +82,7 @@ edc update --agent pi --base <default-branch>
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope, then lens. `diff` without a base uses the detected default branch. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, and quality concurrently against one candidate. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state
 

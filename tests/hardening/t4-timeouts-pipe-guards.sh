@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
+ROOT="$(pwd)"
 # Per-phase run_with_timeout wraps now live in edc-lib.sh (SPAWN section); the build/update
 # spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
 SPAWN="plugins/edc/scripts/edc-lib.sh"
@@ -119,14 +120,14 @@ git config user.email "test@test.com"
 git config user.name "Test"
 git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
+node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T4" "$ROOT/plugins/edc" >/dev/null
 
 mkdir -p edc-context
 # Write malformed manifest.json (no sourceCommit field)
 printf '{"schemaVersion":2,"modules":[]}' > edc-context/manifest.json
 
-ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0
-bash "$ORIG_DIR/$SCRIPT" --check-context 2>/tmp/t4-pipe-err.txt || result=$?
+bash "$ROOT/$SCRIPT" --check-context 2>/tmp/t4-pipe-err.txt || result=$?
 if [ "$result" -ne 0 ] && grep -qi 'sourcecommit\|sourceCommit\|context' /tmp/t4-pipe-err.txt; then
   echo "PASS: malformed manifest.json causes clear error (not silent empty-string comparison)"
 else

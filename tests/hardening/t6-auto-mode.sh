@@ -9,7 +9,7 @@
 #   1. Build a fake "claude" binary on PATH that reads a prompt from stdin and
 #      writes whatever artifact the orchestrator expects for that phase.
 #   2. Set up a minimal git repo with pre-existing valid context.
-#   3. Make a one-file "change" and run `edc-review.sh HEAD --base HEAD~1`.
+#   3. Make a one-file "change" and run `edc-review.sh HEAD --base HEAD~1 --committed-only`.
 #   4. Assert the stale-context recovery preserves `--base HEAD~1`.
 #   5. Assert a final review-*.md file is produced.
 #
@@ -114,14 +114,7 @@ echo "initial" > seed.txt
 git add seed.txt
 git commit -q -m "init"
 
-mkdir -p .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-review
-printf 'edc-build\n' > .edc/skills/edc-build-impl/SKILL.md
-printf 'edc-update-impl\n# Update Context (v2)\n' > .edc/skills/edc-update-impl/SKILL.md
-printf 'edc-review\n' > .edc/skills/edc-review/SKILL.md
-printf '# methodology\n' > .edc/skills/edc-review/methodology.md
-printf '# adversarial\n' > .edc/skills/edc-review/adversarial.md
-printf '# reporting\n' > .edc/skills/edc-review/reporting.md
-printf '# patterns\n' > .edc/skills/edc-review/patterns.md
+node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T6" "$ORIG_DIR/plugins/edc" >/dev/null
 
 # Pre-populate valid context (already-fresh: lastCommit == HEAD-of-base, but we
 # add another commit below and rely on auto_mode's CONTEXT_STALE → edc-update
@@ -154,7 +147,7 @@ echo "→ using mock claude at: $which_claude"
 # Run the full pipeline. Use an explicit --base so the stale-context recovery
 # path must preserve it when spawning edc-update. Capture output for diagnostics.
 result=0
-out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"

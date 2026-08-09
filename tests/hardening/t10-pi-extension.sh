@@ -98,6 +98,7 @@ if [ "$install_check" = "OK" ]; then
 else
   say_fail "installOrchestratorScript copies complete project-local runtime" "$install_check"
 fi
+rm -rf "$TMP/install-project"
 
 # Build a minimal fake ctx environment with a real edc-context/manifest.json so
 # buildToolCallInjection has something to chew on.
@@ -123,7 +124,8 @@ EOF
   git config user.email a@example.com
   git config user.name a
   touch tracked.txt
-  git add tracked.txt
+  printf '/*/\n' > .gitignore
+  git add tracked.txt .gitignore
   git -c commit.gpgsign=false commit -q -m init
   git branch -M master
   head_commit=$(git rev-parse HEAD)
@@ -180,6 +182,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   for (const script of ["edc-review.sh", "edc-review-all.sh", "edc-build.sh", "edc-update.sh", "edc-audit.sh", "edc-delivery-review.sh", "edc-doctor.sh"]) {
     fs.chmodSync(`${cwd}/.edc/scripts/${script}`, 0o755);
   }
+  // Keep the fake scripts in place: command handler performs best-effort runtime
+  // install before dispatch, and this test owns the dispatch behavior with stubs.
+  fs.mkdirSync(`${cwd}/.edc.install.lock`, { recursive: true });
 
   const menuCtx = (selection, extra = {}) => {
     const selections = Array.isArray(selection) ? [...selection] : [selection];
@@ -322,7 +327,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.mkdirSync(`${raceDir}/.edc/scripts`, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: raceDir, stdio: "ignore" });
   fs.writeFileSync(`${raceDir}/tracked.txt`, "x\n");
-  childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: raceDir, stdio: "ignore" });
+  fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\n");
+  childProcess.execFileSync("git", ["add", "tracked.txt", ".gitignore"], { cwd: raceDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: raceDir, stdio: "ignore" });
   fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 2\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
@@ -426,9 +432,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
       console.log("BACKGROUND_JOB_UI_STATUS_FAIL:" + JSON.stringify({ kind: testCase.kind, statuses: calls.statuses }));
       process.exit(1);
     }
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 100; i++) {
       if (fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
       await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (!fs.readFileSync(statusFile, "utf-8").includes("status=success")) {
+      console.log("BACKGROUND_JOB_COMPLETION_TIMEOUT_FAIL:" + JSON.stringify({ kind: testCase.kind, status: fs.readFileSync(statusFile, "utf-8") }));
+      process.exit(1);
     }
     if (!fs.existsSync(`${cwd}/${testCase.log}`) || !fs.readFileSync(`${cwd}/${testCase.log}`, "utf-8").includes(testCase.expect)) {
       console.log("BACKGROUND_JOB_LOG_FAIL:" + JSON.stringify({ kind: testCase.kind, log: fs.existsSync(`${cwd}/${testCase.log}`) ? fs.readFileSync(`${cwd}/${testCase.log}`, "utf-8") : "missing" }));
@@ -555,6 +565,21 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   const declineMessage = calls.messages.at(-1)?.content || "";
   if (!declineMessage.includes("edc review diff master --agent pi") || !declineMessage.includes("edc security diff master --agent pi --ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+
+  const qualityFullSelections = ["full repo review", "quality review"];
+  await edcCmd.opts.handler("", {
+    cwd: staleDir,
+    hasUI: true,
+    ui: {
+      select: async () => qualityFullSelections.shift(),
+      confirm: async () => false,
+    },
+  });
+  const qualityDeclineMessage = calls.messages.at(-1)?.content || "";
+  if (!qualityDeclineMessage.includes("edc quality full --agent pi")) {
+    console.log("QUALITY_FULL_DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }
 
@@ -745,7 +770,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
 DEDUP_FILE=$(node -e "console.log(require('path').join(require('os').tmpdir(),'edc-injected-modules-'+process.argv[1]+'.json'))" "$SESSION_ID")
 rm -f "$DEDUP_FILE"
 
-if [ "$wiring" = "OK" ]; then
+if echo "$wiring" | tail -1 | grep -qx 'OK'; then
   say_pass "extension factory wires commands + events + injection"
 else
   say_fail "extension factory wiring" "$wiring"

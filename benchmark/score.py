@@ -73,36 +73,43 @@ CATEGORY_KEYWORDS = {
         "use-after-free", "stale pointer"
     ],
     "double-free": [
-        "double free", "double-free", "freed twice", "free.*free"
+        "double free", "double-free", "freed twice"
     ],
     "out-of-bounds-read": [
         "out of bounds read", "oob read", "buffer over-read", "overread",
         "read past", "read beyond", "buffer read"
     ],
     "out-of-bounds-write": [
-        "out of bounds write", "oob write", "integer overflow", "overflow.*write",
+        "out of bounds write", "oob write", "integer overflow",
         "write past", "write beyond"
     ],
     "credential-leak": [
-        "credential", "leak", "auth", "token", "password", "bearer",
-        "cookie", "redirect.*auth", "auth.*redirect"
+        "credential", "leak", "auth", "token", "password", "bearer", "cookie"
     ],
     "protocol-injection": [
-        "inject", "starttls", "pipeline", "mitm", "man in the middle",
-        "response.*before.*tls", "tls.*upgrade"
+        "inject", "starttls", "pipeline", "mitm", "man in the middle"
     ],
     "local-file-overwrite": [
-        "overwrite", "local file", "file.*overwrite", "path traversal",
-        "directory traversal"
+        "overwrite", "local file", "path traversal", "directory traversal"
     ],
     "stack-overflow": [
         "stack overflow", "recursion", "unbounded recursion", "infinite recursion",
         "recursive", "stack exhaustion"
     ],
     "validation-bypass": [
-        "bypass", "validation", "check.*skip", "skip.*check", "case.*insensitive",
-        "psl", "public suffix"
+        "bypass", "validation", "psl", "public suffix"
     ],
+}
+
+# Explicit regular expressions complement literal category keywords. Keeping
+# them separate prevents regex-looking prose from being treated as a literal.
+CATEGORY_REGEX = {
+    "double-free": [r"\bfree\b.*\bfree\b"],
+    "out-of-bounds-write": [r"overflow.*write"],
+    "credential-leak": [r"redirect.*auth", r"auth.*redirect"],
+    "protocol-injection": [r"response.*before.*tls", r"tls.*upgrade"],
+    "local-file-overwrite": [r"file.*overwrite"],
+    "validation-bypass": [r"check.*skip", r"skip.*check", r"case.*insensitive"],
 }
 
 
@@ -137,22 +144,28 @@ def keyword_score(issues_text: str, bug_pattern: str,
     score = 0.0
 
     # Check affected file mentioned
-    files = [f.strip() for f in affected_files.split(",")]
+    files = [f.strip() for f in affected_files.split(",") if f.strip()]
     if any(os.path.basename(f).lower() in issues_lower for f in files):
         score += 0.15
         notes.append("file_mentioned")
 
     # Check category keywords
     cat_keywords = []
+    cat_regexes = []
     for subcat in category.split(","):
         subcat = subcat.strip()
         cat_keywords.extend(CATEGORY_KEYWORDS.get(subcat, []))
+        cat_regexes.extend(CATEGORY_REGEX.get(subcat, []))
     cat_keywords = list(set(cat_keywords))
+    cat_regexes = list(set(cat_regexes))
 
-    cat_matches = sum(1 for kw in cat_keywords if kw in issues_lower)
+    literal_matches = sum(1 for keyword in cat_keywords if keyword in issues_lower)
+    regex_matches = sum(1 for pattern in cat_regexes if re.search(pattern, issues_lower))
+    cat_matches = literal_matches + regex_matches
+    cat_pattern_count = len(cat_keywords) + len(cat_regexes)
     if cat_matches > 0:
-        score += min(cat_matches / max(len(cat_keywords), 1) * 0.25, 0.25)
-        notes.append(f"cat={cat_matches}/{len(cat_keywords)}")
+        score += min(cat_matches / max(cat_pattern_count, 1) * 0.25, 0.25)
+        notes.append(f"cat={cat_matches}/{cat_pattern_count}")
 
     # Check bug pattern keywords
     pattern_keywords = extract_bug_keywords(bug_pattern)

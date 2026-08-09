@@ -35,10 +35,18 @@ CODEX_EXEC_HOME_OWNED=0
 
 # ── shared helpers ───────────────────────────────────────────────────────────
 
-# shellcheck source=edc-assert-fresh.sh
-. "$SCRIPT_DIR/edc-assert-fresh.sh"
-# shellcheck source=edc-recover-context.sh
-. "$SCRIPT_DIR/edc-recover-context.sh"
+EDC_AUDIT_DEPENDENCIES_LOADED=0
+edc_load_audit_dependencies() {
+  [ "$EDC_AUDIT_DEPENDENCIES_LOADED" = "1" ] && return 0
+  # Managed helpers execute only after runtime integrity passes.
+  # shellcheck source=edc-assert-fresh.sh
+  . "$SCRIPT_DIR/edc-assert-fresh.sh"
+  # shellcheck source=edc-recover-context.sh
+  . "$SCRIPT_DIR/edc-recover-context.sh"
+  # shellcheck source=edc-review-candidate.sh
+  . "$SCRIPT_DIR/edc-review-candidate.sh"
+  EDC_AUDIT_DEPENDENCIES_LOADED=1
+}
 
 # ── audit task helpers ───────────────────────────────────────────────────────
 
@@ -53,14 +61,8 @@ manifest_audit_modules() {
 }
 
 changed_files_for_audit_scope() {
-  local target="$1" base="$2" files="" dirty_files=""
-  files=$(git diff --name-only --diff-filter=ACMRTUXB "$base...$target" 2>/dev/null || true)
-  dirty_files=$(git diff --name-only --diff-filter=ACMRTUXB 2>/dev/null || true)
-  if [ -n "$dirty_files" ]; then
-    printf '%s\n%s\n' "$files" "$dirty_files" | sed '/^$/d' | sort -u
-  else
-    printf '%s\n' "$files" | sed '/^$/d'
-  fi
+  local target="$1" base="$2"
+  git diff --name-only --diff-filter=ACDMRTUXB "$base...$target" 2>/dev/null | sed '/^$/d'
 }
 
 manifest_audit_modules_for_files() {
@@ -93,6 +95,10 @@ assert_audit_reports_valid() {
 
 build_audit_worker_prompt() {
   local module="$1" module_doc="$2" report_path="$3"
+  local candidate_contract="Full audit: inspect the repository source directly."
+  if [ -n "${target:-}" ]; then
+    candidate_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${base}...${target}\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
+  fi
   cat <<EOF
 AUDIT WORKER TASK
 AUDIT_MODULE: $module
@@ -100,6 +106,9 @@ AUDIT_MODULE_DOC: $module_doc
 AUDIT_REPORT_PATH: $report_path
 
 Run a scoped code quality audit for this one module only.
+
+Candidate evidence contract:
+$candidate_contract
 
 Rules:
 1. Read $EDC_INDEX, $MANIFEST, and $module_doc for this module's documented ownership, invariants, and file scope.
@@ -139,7 +148,7 @@ EOF
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
 EOF
   exit 2
 }
@@ -147,8 +156,12 @@ EOF
 audit_main() {
   edc_result_begin audit
   trap edc_result_on_exit EXIT
-  local target="" base=""
-  local -a ignore_args=()
+  edc_runtime_preflight_or_exit
+  edc_load_audit_dependencies
+  local target="" base="" policy=""
+  local complexity_output="${EDC_AUDIT_COMPLEXITY_OUTPUT:-$EDC_COMPLEXITY}"
+  local issues_output="${EDC_AUDIT_ISSUES_OUTPUT:-$EDC_ISSUES}"
+  local -a ignore_args=() ignore_patterns=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --base)
@@ -156,9 +169,20 @@ audit_main() {
         base="$2"
         shift 2
         ;;
+      --include-working-tree)
+        [ -z "$policy" ] || { echo "ERROR: choose only one dirty-state policy" >&2; exit 2; }
+        policy=include-working-tree
+        shift
+        ;;
+      --committed-only)
+        [ -z "$policy" ] || { echo "ERROR: choose only one dirty-state policy" >&2; exit 2; }
+        policy=committed-only
+        shift
+        ;;
       --ignore)
         [ "$#" -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; usage; }
         ignore_args+=("$1" "$2")
+        ignore_patterns+=("$2")
         shift 2
         ;;
       --context-mode)
@@ -187,15 +211,29 @@ audit_main() {
     echo "ERROR: differential quality review requires --base <ref>" >&2
     usage
   fi
+  if [ -n "$policy" ] && [ -z "$target" ]; then
+    echo "ERROR: a dirty-state policy requires differential quality review with target --base <ref>" >&2
+    usage
+  fi
   if [ -n "$target" ]; then
-    edc_result_scope_from_args "$target" --base "$base"
+    local candidate_file
+    candidate_file=$(mktemp "${TMPDIR:-/tmp}/edc-audit-candidate-$$.XXXXXX") || exit 1
+    edc_candidate_resolve "$target" "$base" "$policy" > "$candidate_file" || { local rc=$?; rm -f "$candidate_file"; exit "$rc"; }
+    target=$(cat "$candidate_file")
+    rm -f "$candidate_file"
   fi
 
   edc_require_agent_cli
 
-  # Gate on freshness; recover if needed. After this returns, $EDC_CONTEXT_DIR is fresh.
-  recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-    || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+  # Gate on freshness once for standalone review. review-all prepares it before
+  # launching all lenses so parallel children must not race recovery.
+  if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
+    recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
+      || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+  else
+    assert_context_fresh \
+      || { edc_result_failure 1 "context-not-fresh" "review-all prepared context is no longer fresh" "rerun review-all so context recovery completes before workers start"; exit 1; }
+  fi
 
   # Build a versioned task manifest in git-private run storage. Workers write
   # only staged reports; the coordinator validates before canonical promotion.
@@ -210,6 +248,7 @@ audit_main() {
   local changed_files=""
   if [ -n "$target" ]; then
     changed_files=$(changed_files_for_audit_scope "$target" "$base")
+    changed_files=$(edc_filter_ignored_files "$changed_files" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
     if [ -z "$changed_files" ]; then
       echo "ERROR: no changed files found for quality review target: $target" >&2
       edc_result_failure 1 "no-reviewable-files" "no changed files found for quality review" "choose another target/base or modify a tracked file"
@@ -317,9 +356,9 @@ audit_main() {
     echo "HINT: treating the validated audit reports as success; inspect $run_dir for transport/provider diagnostics." >&2
   fi
 
-  edc_promote_file "$staged_complexity" "$EDC_COMPLEXITY" || exit 1
-  edc_promote_file "$staged_issues" "$EDC_ISSUES" || exit 1
-  assert_audit_reports_valid || { edc_result_failure 1 "audit-report-validation" "promoted audit report validation failed" "inspect canonical report promotion"; exit 1; }
+  edc_promote_file "$staged_complexity" "$complexity_output" || exit 1
+  edc_promote_file "$staged_issues" "$issues_output" || exit 1
+  assert_audit_report_pair_valid "$complexity_output" "$issues_output" || { edc_result_failure 1 "audit-report-validation" "promoted audit report validation failed" "inspect canonical report promotion"; exit 1; }
 
   if [ "${EDC_KEEP_AUDIT_TASKS:-0}" != "1" ]; then
     rm -rf "$AUDIT_TASKS_DIR"

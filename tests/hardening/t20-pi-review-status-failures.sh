@@ -47,6 +47,7 @@ echo 'simulated review failure' >&2
 exit 1
 `);
   chmodSync(reviewScript, 0o755);
+  mkdirSync(join(cwd, ".edc.install.lock"), { recursive: true });
 
   const messages = [];
   let handler;

@@ -124,7 +124,8 @@ Pi worker discovery is always disabled with `--no-extensions`. Operators may loa
 
 ```bash
 edc review full --agent pi             # combined full repo review
-edc review diff main --agent pi        # combined current branch vs main
+edc review diff main --agent pi --include-working-tree  # complete dirty candidate vs main
+edc review diff main --agent pi --committed-only        # committed HEAD vs main
 edc security full --agent pi           # security full repo review
 edc security diff main --agent pi      # security current branch vs main
 edc delivery full --agent pi           # delivery/architecture full repo review
@@ -136,6 +137,8 @@ edc-review.sh --pr 42 --base main      # lower-level security PR by number (uses
 edc-review.sh https://github.com/...   # lower-level security PR by URL (uses gh)
 edc-review.sh path/to/diff.patch       # lower-level security diff file
 ```
+
+Dirty differential review requires `--include-working-tree` or `--committed-only`; clean trees need neither. Include mode creates one immutable synthetic commit shared by the parallel security, delivery, and quality lenses. It includes staged, unstaged, deleted, and non-ignored untracked files, recursively snapshots dirty initialized submodules, and does not change HEAD, refs, or any real index. Combined review prepares context once, launches all lenses concurrently, waits for every lens even after a sibling failure, then promotes validated reports.
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.
 Use `--ignore-context` for a pure direct review with no context build/update and

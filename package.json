@@ -1,6 +1,6 @@
 {
   "name": "@sgtbeatdown/edc",
-  "version": "1.1.2",
+  "version": "1.1.5",
   "description": "EDC — Every Day Carry skills for AI coding agents. Deep codebase understanding and context-aware code review.",
   "type": "module",
   "author": "sgtbeatdown",
@@ -61,7 +61,9 @@
   "scripts": {
     "lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/*.sh",
     "lint:hardening": "shellcheck -S error tests/hardening/*.sh",
-    "test": "npm run lint:hardening && bash tests/hardening/run-all.sh",
+    "test:modules": "node --test tests/unit/*.test.mjs",
+    "test:benchmark": "python3 -m unittest discover -s benchmark/tests -p 'test_*.py'",
+    "test": "npm run lint:hardening && npm run test:modules && npm run test:benchmark && bash tests/hardening/run-all.sh",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm test && npm run pack:check"
   }

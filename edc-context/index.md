@@ -5,50 +5,53 @@ EDC is a multi-agent coding-assistant toolkit. Use this file to route work to th
 
 ## How to use
 - Read this file first, then use `edc-context/manifest.json` as the authoritative machine routing/policy contract.
-- Choose module docs from the table below by changed path or task; for cross-boundary work, also read the coupled modules.
-- Keep known reports in `edc-context/reports/` for explicit review/audit workflows, not as the default read path.
+- Choose module docs from the table below by changed path or task; for cross-boundary work, also read the coupled modules named here.
+- Reports in `edc-context/reports/` are for explicit review/audit workflows, not the ordinary index read path.
 
 ## Route by path/task
 | touching / task | read first | also inspect | why |
 |---|---|---|---|
-| `plugins/edc/scripts/`, `plugins/edc/commands/`, `install.sh`, CLI modes, Bash/version/model/spawn behavior, review-all/security/delivery/quality orchestrators, result JSON | [runtime-cli](modules/runtime-cli.md) | canonical-skills; plugin-surface; agent-wrappers; hardening-tests | Shell orchestrators own build/update/review scope normalization, security/delivery/quality phase control flow, freshness recovery, routing, validation, structured results, and backend spawning. |
-| `README.md`, `package.json`, `.claude-plugin/`, `plugins/edc/hooks/`, `plugins/edc/README.md`, package contents, Claude/Cursor injection | [plugin-surface](modules/plugin-surface.md) | runtime-cli; agent-wrappers; canonical-skills; hardening-tests | JS routing/freshness/injection mirrors shell semantics and feeds Pi; package metadata/docs are supported runtime contracts. |
-| `plugins/edc/prompt-bundles/`, `plugins/edc/skills/`, prompt wording, skill boundaries, security/audit/delivery methodology | [canonical-skills](modules/canonical-skills.md) | runtime-cli; hardening-tests; benchmarking; agent-wrappers | Prompt markdown is product behavior for spawned agents; changes cascade into generated context, security review, delivery review, quality review, tests, and benchmarks. |
-| `pi/`, Pi menu/session/tool-call/status/background jobs, review scope/default-branch UX, Pi install docs/media | [agent-wrappers](modules/agent-wrappers.md) | plugin-surface; runtime-cli; canonical-skills; hardening-tests | Pi imports shared JS helpers and runs shell orchestrators as background jobs with Pi-specific subprocess/model/status/scope/base-ref constraints. |
-| `tests/hardening/`, `tests/fixtures/skill-evals/`, `.github/workflows/ci.yml`, `.shellcheckrc`, CI, package checks, route parity, prompt-contract tests | [hardening-tests](modules/hardening-tests.md) | module under test; runtime-cli; plugin-surface; canonical-skills; agent-wrappers | Tests pin public behavior and often encode exact prompt/runtime/package/Pi menu/skill-contract behavior. Skill-eval fixtures and shell lint config are test/CI data owned here. |
-| `benchmark/`, CVE scoring, prompt tuning, transcript recovery | [benchmarking](modules/benchmarking.md) | canonical-skills; runtime-cli | Benchmarks mutate/evaluate security review prompts and rely on subprocess/model propagation, but remain outside package/runtime context. |
+| `plugins/edc/scripts/`, `plugins/edc/commands/`, `install.sh`, CLI modes, Bash/version/model/spawn behavior, worker pools, build/update/review/security/delivery/quality orchestrators, staged promotion, result JSON | [runtime-cli](modules/runtime-cli.md) | canonical-skills; plugin-surface; agent-wrappers; hardening-tests | Shell/Node coordinators own runtime preflight, routing, recovery, task graphs, worker concurrency, staging, validation, canonical promotion, structured results, and backend spawning. |
+| `README.md`, `package.json`, `.claude-plugin/`, `plugins/edc/hooks/`, `plugins/edc/README.md`, package contents, Claude/Cursor injection, managed runtime inventory | [plugin-surface](modules/plugin-surface.md) | runtime-cli; agent-wrappers; canonical-skills; hardening-tests | JS routing/freshness/injection mirrors shell semantics, feeds Pi, transactionally installs and verifies declared runtime artifacts, and defines package/docs contracts. |
+| `plugins/edc/prompt-bundles/`, `plugins/edc/skills/`, prompt wording, skill boundaries, build/update assembly contracts, audit simplification methodology | [canonical-skills](modules/canonical-skills.md) | runtime-cli; hardening-tests; benchmarking; agent-wrappers | Prompt markdown is product behavior for spawned workers; changes cascade into generated context, security review, delivery review, quality review, tests, and benchmarks. |
+| `pi/`, Pi menu/session/tool-call/status/background jobs, extracted argument/scope/result-display helpers, Pi install docs/media, Pi worker observer docs | [agent-wrappers](modules/agent-wrappers.md) | plugin-surface; runtime-cli; canonical-skills; hardening-tests | Pi imports shared JS helpers and runs shell orchestrators as background jobs; Pi-specific UX renders args and status but must not fork shell routing/worker semantics. |
+| `tests/hardening/`, `tests/unit/`, `tests/fixtures/skill-evals/`, `.github/workflows/ci.yml`, `.shellcheckrc`, CI, package checks, route parity, prompt-contract tests, runtime-integrity tests, worker-pool tests | [hardening-tests](modules/hardening-tests.md) | module under test; runtime-cli; plugin-surface; canonical-skills; agent-wrappers | Tests pin public behavior and exact prompt/runtime/package/Pi/worker contracts; CI executes Linux plus Apple Bash/macOS coverage. |
+| `benchmark/`, CVE scoring, prompt tuning, transcript recovery, production-pipeline benchmark runs | [benchmarking](modules/benchmarking.md) | canonical-skills; runtime-cli | Benchmarks mutate/evaluate security prompts and may rely on subprocess/model propagation; large corpora remain outside package/runtime context. |
 
 ## Critical global invariants
-- v2 layout is canonical: `edc-context/index.md`, `manifest.json`, `modules/*.md`, `reports/*.md`, `build/build.json`, and root agent entrypoint.
+- v2 layout is canonical: `edc-context/index.md`, `manifest.json`, `modules/*.md`, `reports/*.md`, `build/build.json`, and the configured root agent entrypoint.
 - `manifest.json` is authoritative for routing and policy; human route rows here are guidance, not an alternate router.
-- Shell orchestrators own build-vs-update decisions, review scope normalization, context recovery, security-review routing, delivery-review report validation, review-all phase aggregation, structured result/status files, quality-review/audit fanout/synthesis, subprocess spawning, and deterministic validation.
+- Shell/Node coordinators own build-vs-update decisions, immutable review-candidate resolution, context recovery, review scope normalization, task manifests, worker concurrency, timeout/cancellation, staged validation, canonical promotion, parallel review-all phase aggregation, structured result/status files, and deterministic validation.
+- Models analyze assigned scopes and write declared staged outputs; they must not launch agents, invoke skills as processes, choose subprocess flags, or write canonical context/reports directly.
 - Runtime mode comes from `manifest.policy.defaultMode`; rebuild/update flows must preserve operator-authored `policy.*` fields.
 - Runtime shell paths remain Bash 3.2-compatible and use normal `bash` resolution; `EDC_BASH` is not part of the public runtime contract.
-- Workflow boundaries are product contracts: CLI `edc review`/`review-all` is combined security+delivery+quality, `security-review`/`edc-review` is security/adversarial, `edc-delivery-review` is goal/spec plus architecture fit, and `quality-review`/`edc-audit` is code quality/maintainability with a simplification-first lens.
+- Worker artifacts live under `.git/edc/runs/<run-id>/`; canonical context/reports/root review files are promoted only after validation succeeds.
+- Pi subprocess workers run with `--no-extensions`; `EDC_PI_EXTENSION_PATH` may add exactly one absolute readable observer entrypoint while preserving disabled extension discovery.
+- Workflow boundaries are product contracts: CLI `review`/`review-all` is concurrent combined security+delivery+quality over one candidate, `security-review`/`edc-review` is security/adversarial, `edc-delivery-review` is goal/spec plus architecture fit, and `quality-review`/`edc-audit` is code quality/maintainability.
 - Private implementation prompt bundles must not become public skills; Pi exposes only review/audit/delivery skills while orchestrators can still resolve private bundles.
-- Pi scope/default-branch selection is only argument rendering for menu convenience; do not fork shell routing/freshness/review semantics into the Pi wrapper.
 - Generated context should be high-signal: persist non-obvious contracts, coupling, trust boundaries, and footguns; omit obvious inventories/scratch analysis.
-- Published package contents are a supported contract: runtime/Pi/plugin/prompt/docs/license surfaces ship; tests, benchmarks, generated context, and review scratch do not.
+- Published package contents are a supported contract: runtime/Pi/plugin/prompt/docs/license surfaces ship; tests, benchmarks, generated context, and scratch run artifacts do not.
 
 ## Cross-module coupling / blast radius
-- `runtime-cli` consumes `canonical-skills` through prompt resolution and is used by every host wrapper; mistakes affect all EDC workflows.
-- `plugin-surface` and `runtime-cli` must keep path constants and shell/JS routing semantics aligned; parity tests are the safety net.
-- `agent-wrappers` depends on `plugin-surface` for Pi injection/freshness/install helpers and on `runtime-cli` for `.edc/scripts/edc-*.sh` jobs. Its scope/default-base UX affects the args seen by review/update/delivery-review/quality-review but not the orchestrator contract.
-- `canonical-skills` changes affect build/update/security-review/delivery-review/quality-review/audit agent behavior; benchmark and prompt-contract tests should be considered for wording changes.
-- `hardening-tests` are coupled to every module because they encode runtime, package, prompt, route, Bash, ShellCheck, skill-boundary, simplification-ladder, fixture-schema, and Pi behavior as public contracts.
-- `benchmarking` is outside normal package/runtime coverage but can drive security prompt edits in `canonical-skills`; keep benchmark-only legacy context paths out of production v2 contracts.
+- `runtime-cli` consumes `canonical-skills` through prompt resolution and embeds review/audit/delivery/build/update wording in subprocess prompts; prompt drift can change worker behavior without changing shell logic.
+- `runtime-cli` executes JS helper CLIs owned by `plugin-surface` (`json-cli`, classifier/router helpers, worker manifests/pool, build DAG), so install/package/helper-copy drift breaks installed builds and reviews.
+- `plugin-surface` and `runtime-cli` must keep path constants, routing semantics, helper distribution, and shell/JS contracts aligned; parity and install/package tests are the safety net.
+- `agent-wrappers` depends on `plugin-surface` for Pi injection/freshness/install helpers and on `runtime-cli` for `.edc/scripts/edc-*.sh` jobs. Its scope/default-base UX affects args seen by review/update/delivery/quality, but not the orchestrator contract.
+- `canonical-skills` changes affect build/update/security-review/delivery-review/quality-review/audit worker behavior; benchmark and prompt-contract tests should be considered for wording changes.
+- `hardening-tests` are coupled to every module because they encode runtime, package, prompt, route, Bash, ShellCheck, skill-boundary, simplification-ladder, fixture-schema, worker-pool, and Pi behavior as public contracts.
+- `benchmarking` is outside normal package/runtime coverage but can drive security prompt edits in `canonical-skills`; keep benchmark-only legacy context paths out of production v2 contracts and use serial worker settings when benchmark comparability requires it.
 
 ## Architecture overview
-EDC splits deterministic control from semantic analysis. Shell scripts and JS hooks classify state, route paths, install/copy runtime assets, normalize review scopes, spawn backend agents, recover freshness, aggregate phase results, and validate output. Agent prompts perform bounded module analysis, security review, delivery/architecture review, and quality/audit work in isolated subprocesses. Claude/Cursor hooks inject context when allowed by policy; Pi wraps the same runtime through one `/edc` menu with background job status stored under `.git/edc/`.
+EDC splits deterministic control from semantic analysis. Shell scripts and JS helpers classify state, route paths, install/copy runtime assets, normalize review scopes, spawn bounded worker pools, validate staged outputs, promote canonical artifacts, aggregate phase results, and validate output. Agent prompts perform bounded module/security/delivery/quality analysis in isolated subprocesses.
 
-Trust boundaries: CLI args, hook payloads, Bash command text, Pi JSON streams, git refs used for base detection, package metadata, CI logs, benchmark outputs, and LLM-authored manifests/reports are untrusted inputs. Deterministic validators (`edc-doctor.sh`, `edc-assert-fresh.sh`, `edc-manifest.sh`) are the canonical gates.
+Trust boundaries: CLI args, hook payloads, Bash command text, Pi JSON streams, git refs, package metadata, config/env values, worker manifests, staged outputs, CI logs, benchmark outputs, and LLM-authored manifests/reports are untrusted inputs. Deterministic validators (`edc-doctor.sh`, `edc-assert-fresh.sh`, `edc-manifest.sh`, worker manifest/pool validation, report validators) are the canonical gates.
 
 ## Module table
-| Module | Purpose | Priority / blast-radius signal |
-|---|---|---|
-| [runtime-cli](modules/runtime-cli.md) | Terminal CLI, shell orchestrators, backend spawning, deterministic build/update/review-all/security/delivery/quality control plane. | Highest: all workflows and nested script execution. |
-| [plugin-surface](modules/plugin-surface.md) | Package metadata/docs, Claude/Cursor hooks, shared JS routing/context injection/freshness runtime. | High: injection, package contents, Pi shared helpers. |
-| [canonical-skills](modules/canonical-skills.md) | Public skills and private prompt bundles defining agent behavior. | High: prompt wording changes generated context/security/delivery/quality output. |
-| [agent-wrappers](modules/agent-wrappers.md) | Pi extension, interactive menu, review scope/default-branch UX, background jobs, Pi install docs/media. | High for Pi UX; coupled to runtime and plugin-surface. |
-| [hardening-tests](modules/hardening-tests.md) | Shell/Node/CI tests and skill fixtures pinning orchestration, routing, install, package, prompt, and Pi contracts. | High as regression oracle for public contracts. |
-| [benchmarking](modules/benchmarking.md) | CVE benchmarks, scoring, judge audit, transcript recovery, prompt-tuning experiments. | Medium/high for security prompt quality; excluded from package runtime. |
+| Module | Purpose |
+|---|---|
+| [runtime-cli](modules/runtime-cli.md) | Terminal CLI, shell orchestrators, worker pools, backend spawning, deterministic build/update/review/security/delivery/quality control plane. |
+| [plugin-surface](modules/plugin-surface.md) | Package metadata/docs, Claude/Cursor hooks, shared JS routing/context injection/freshness runtime, and worker helper CLIs. |
+| [canonical-skills](modules/canonical-skills.md) | Public skills and private prompt bundles defining semantic worker behavior. |
+| [agent-wrappers](modules/agent-wrappers.md) | Pi extension, interactive menu, review scope/default-branch UX, background jobs, Pi install docs/media. |
+| [hardening-tests](modules/hardening-tests.md) | Shell/Node/CI tests and skill fixtures pinning orchestration, routing, install, package, prompt, worker-pool, and Pi contracts. |
+| [benchmarking](modules/benchmarking.md) | CVE benchmarks, scoring, judge audit, transcript recovery, prompt-tuning experiments. |

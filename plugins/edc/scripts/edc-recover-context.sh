@@ -15,7 +15,7 @@
 # Caller contract:
 #   - EDC_AGENT_CLI, edc_spawn, assert_context_fresh, run_with_timeout,
 #     stream_filter must be defined/sourced first.
-#   - CLEAN_SLATE_SH must point at edc-clean-slate.sh.
+#   - CLEAN_SLATE_SH may override the sibling edc-clean-slate.sh path.
 #
 # resolve_prompt is auto-sourced from this directory if not already defined.
 #   - Pass build/update args (e.g. --ignore, --base) as positional arguments;
@@ -36,6 +36,7 @@ if [ -z "${EDC_CONTEXT_DIR:-}" ] || ! command -v resolve_prompt >/dev/null 2>&1;
   # shellcheck source=edc-lib.sh
   . "$_edc_recover_dir/edc-lib.sh"
 fi
+CLEAN_SLATE_SH="${CLEAN_SLATE_SH:-$_edc_recover_dir/edc-clean-slate.sh}"
 
 # Internal: classify why context is not fresh.
 # Echoes "MISSING" or "STALE". Returns 0 on success.

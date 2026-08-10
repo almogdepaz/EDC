@@ -24,6 +24,8 @@ setup_repo() {
 run_recovery_after_failed_spawn() {
   local repo="$1"
   local mode="${2:-writes-valid-context}"
+  local clean_slate_mode="${3:-override}"
+  local spawn_marker="${4:-}"
   local script="$TMP/recovery-$mode.sh"
   cat > "$script" <<'EOS'
 #!/usr/bin/env bash
@@ -33,17 +35,19 @@ cd "$TMP_REPO"
 export EDC_CONTEXT_DIR="edc-context"
 export EDC_INDEX="edc-context/index.md"
 export MANIFEST="edc-context/manifest.json"
-export CLEAN_SLATE_SH="$TMP_REPO/clean-slate.sh"
 export EDC_AGENT_CLI="pi"
 export EDC_BUILD_TIMEOUT=1
 export EDC_UPDATE_TIMEOUT=1
 export ROOT_UNDER_TEST
 
-cat > "$CLEAN_SLATE_SH" <<'CLEAN'
+if [ "$CLEAN_SLATE_MODE" = "override" ]; then
+  export CLEAN_SLATE_SH="$TMP_REPO/clean-slate.sh"
+  cat > "$CLEAN_SLATE_SH" <<'CLEAN'
 #!/usr/bin/env bash
 exit 0
 CLEAN
-chmod +x "$CLEAN_SLATE_SH"
+  chmod +x "$CLEAN_SLATE_SH"
+fi
 
 resolve_prompt() {
   printf 'prompt:%s\n' "$1"
@@ -58,6 +62,7 @@ read_manifest_source_commit() {
 }
 
 edc_spawn() {
+  [ -z "$SPAWN_MARKER" ] || touch "$SPAWN_MARKER"
   if [ "$SPAWN_MODE" = "writes-valid-context" ]; then
     mkdir -p edc-context
     cat > "$EDC_INDEX" <<'EOF_INDEX'
@@ -77,8 +82,21 @@ EOF_MANIFEST
 recover_context_if_needed
 EOS
   chmod +x "$script"
-  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" SPAWN_MODE="$mode" "$script" 2>&1
+  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" SPAWN_MODE="$mode" CLEAN_SLATE_MODE="$clean_slate_mode" SPAWN_MARKER="$spawn_marker" "$script" 2>&1
 }
+
+default_repo="$TMP/default-repo"
+setup_repo "$default_repo"
+set +e
+default_output=$(run_recovery_after_failed_spawn "$default_repo" no-context default "$default_repo/spawn-reached")
+default_rc=$?
+set -e
+if [ "$default_rc" -eq 0 ] || [ ! -f "$default_repo/spawn-reached" ]; then
+  echo "FAIL: recovery did not reach the spawn boundary without a CLEAN_SLATE_SH override"
+  printf '%s\n' "$default_output"
+  exit 1
+fi
+echo "PASS: recovery resolves its default clean-slate dependency"
 
 repo="$TMP/repo"
 setup_repo "$repo"

@@ -10,7 +10,7 @@
 #      writes whatever artifact the orchestrator expects for that phase.
 #   2. Set up a minimal git repo with pre-existing valid context.
 #   3. Make a one-file "change" and run `edc-review.sh HEAD --base HEAD~1`.
-#   4. Assert the stale-context recovery preserves `--base HEAD~1`.
+#   4. Assert stale-context recovery updates from manifest.sourceCommit.
 #   5. Assert a final review-*.md file is produced.
 #
 # Run from repo root: bash tests/hardening/t6-auto-mode.sh
@@ -132,8 +132,8 @@ if [ "$which_claude" != "$MOCK_BIN/claude" ]; then
 fi
 echo "→ using mock claude at: $which_claude"
 
-# Run the full pipeline. Use an explicit --base so the stale-context recovery
-# path must preserve it when spawning edc-update. Capture output for diagnostics.
+# Run the full pipeline. The explicit review base must not replace the manifest
+# sourceCommit used for context recovery. Capture output for diagnostics.
 result=0
 out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 
@@ -146,14 +146,14 @@ if [ "$result" -ne 0 ]; then
 fi
 
 # ── assertions ───────────────────────────────────────────────────────────────
-if [ ! -f .mock-update-prompt ] || ! grep -q -- '--base HEAD~1' .mock-update-prompt; then
-  echo "FAIL: stale-context recovery did not preserve --base HEAD~1 for edc-update"
+if [ ! -f .mock-update-prompt ] || ! grep -q -- "--base $base_head" .mock-update-prompt; then
+  echo "FAIL: stale-context recovery did not use manifest.sourceCommit for edc-update"
   echo "--- update prompt ---"
   cat .mock-update-prompt 2>/dev/null || true
   echo "--- end update prompt ---"
   exit 1
 fi
-echo "PASS: stale-context recovery preserves --base for edc-update"
+echo "PASS: stale-context recovery uses manifest.sourceCommit for edc-update"
 
 final=$(ls review-*.md 2>/dev/null | head -1 || true)
 if [ -z "$final" ]; then

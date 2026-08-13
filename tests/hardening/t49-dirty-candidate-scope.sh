@@ -320,6 +320,28 @@ else
   fail 'include-working-tree omitted ignore=all dirty tracked submodule' "rc=$include_rc candidate=$ignored_candidate subcandidate=$ignored_sub_candidate\n$include_out\n$(cat "$TMP/ignored-submodule-phases.log" 2>/dev/null || true)"
 fi
 
+# Nested untracked-only dirt remains selected recursively but must not be
+# mislabeled as tracked, even when the submodule config says ignore=all.
+git -C nested checkout -q -- inside.txt
+printf 'sub ignored untracked\n' > nested/new.txt
+: > "$TMP/ignored-submodule-untracked-phases.log"
+set +e
+untracked_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-untracked-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+untracked_rc=$?
+set -e
+untracked_candidate=$(sed -n 's/^security|target=\([^|]*\).*/\1/p' "$TMP/ignored-submodule-untracked-phases.log" | head -1)
+untracked_sub_candidate=$(git ls-tree "$untracked_candidate" nested 2>/dev/null | awk '{print $3}')
+untracked_metadata=$(node -e 'const j=require("./edc-context/build/last-run.json"); process.stdout.write(`${j.candidateKind}|${j.candidateCommit}|${j.dirtyTrackedIncluded}|${j.untrackedIncluded}`)')
+if [ "$untracked_rc" -eq 0 ] && [ -n "$untracked_sub_candidate" ] \
+  && [ "$(git -C nested show "$untracked_sub_candidate:inside.txt")" = 'sub original' ] \
+  && [ "$(git -C nested show "$untracked_sub_candidate:new.txt")" = 'sub ignored untracked' ] \
+  && [ "$(grep -c 'nested_tracked=sub original||nested_untracked=sub ignored untracked||' "$TMP/ignored-submodule-untracked-phases.log" || true)" -eq 3 ] \
+  && [ "$untracked_metadata" = "working-tree-snapshot|$untracked_candidate|false|true" ]; then
+  pass 'ignore=all nested untracked-only dirt has truthful metadata'
+else
+  fail 'ignore=all nested untracked-only dirt was mislabeled or omitted' "rc=$untracked_rc candidate=$untracked_candidate subcandidate=$untracked_sub_candidate metadata=$untracked_metadata\n$untracked_out\n$(cat "$TMP/ignored-submodule-untracked-phases.log" 2>/dev/null || true)"
+fi
+
 # An uninitialized submodule must be treated as an opaque gitlink, not as the
 # parent repository discovered by Git's upward directory search.
 setup_repo

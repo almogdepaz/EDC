@@ -67,7 +67,7 @@ edc_candidate_has_selected_untracked() {
 }
 
 edc_candidate_has_dirty_tracked() {
-  ! git diff --quiet --ignore-submodules=none HEAD --
+  ! git diff --quiet --ignore-submodules=untracked HEAD --
 }
 
 edc_candidate_repo_has_changes() {

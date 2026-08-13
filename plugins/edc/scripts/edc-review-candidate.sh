@@ -51,19 +51,19 @@ edc_candidate_is_initialized_submodule() {
 }
 
 edc_candidate_has_selected_untracked() {
-  local gitlinks path
+  local gitlinks path result=1
   edc_candidate_has_selected_untracked_local && return 0
   gitlinks=$(mktemp "${TMPDIR:-/tmp}/edc-candidate-gitlinks-$$.XXXXXX") || return 1
   edc_candidate_gitlinks > "$gitlinks"
   while IFS= read -r -d '' path; do
     edc_candidate_is_initialized_submodule "$path" || continue
     if (cd "$path" && edc_candidate_has_selected_untracked); then
-      rm -f "$gitlinks"
-      return 0
+      result=0
+      break
     fi
   done < "$gitlinks"
   rm -f "$gitlinks"
-  return 1
+  return "$result"
 }
 
 edc_candidate_has_dirty_tracked() {
@@ -124,7 +124,7 @@ edc_candidate_add_paths_from_nul_file() {
 
 edc_candidate_snapshot_repo() {
   local target_commit="$1" index_file paths_file gitlinks_file tree candidate
-  local path sub_target sub_candidate
+  local path sub_target sub_candidate submodule_rc=0
   index_file=$(mktemp "${TMPDIR:-/tmp}/edc-candidate-index-$$.XXXXXX") || return 1
   paths_file=$(mktemp "${TMPDIR:-/tmp}/edc-candidate-paths-$$.XXXXXX") || { rm -f "$index_file"; return 1; }
   gitlinks_file=$(mktemp "${TMPDIR:-/tmp}/edc-candidate-gitlinks-$$.XXXXXX") || { rm -f "$index_file" "$paths_file"; return 1; }
@@ -155,12 +155,23 @@ edc_candidate_snapshot_repo() {
   while IFS= read -r -d '' path; do
     edc_candidate_is_initialized_submodule "$path" || continue
     (cd "$path" && edc_candidate_repo_has_changes) || continue
-    sub_target=$(git -C "$path" rev-parse --verify HEAD) || { rm -f "$index_file" "$paths_file" "$gitlinks_file"; return 1; }
-    sub_candidate=$(cd "$path" && edc_candidate_snapshot_repo "$sub_target") \
-      || { rm -f "$index_file" "$paths_file" "$gitlinks_file"; return 1; }
-    GIT_INDEX_FILE="$index_file" git update-index --add --cacheinfo "160000,$sub_candidate,$path" \
-      || { rm -f "$index_file" "$paths_file" "$gitlinks_file"; return 1; }
+    if ! sub_target=$(git -C "$path" rev-parse --verify HEAD); then
+      submodule_rc=1
+      break
+    fi
+    if ! sub_candidate=$(cd "$path" && edc_candidate_snapshot_repo "$sub_target"); then
+      submodule_rc=1
+      break
+    fi
+    if ! GIT_INDEX_FILE="$index_file" git update-index --add --cacheinfo "160000,$sub_candidate,$path"; then
+      submodule_rc=1
+      break
+    fi
   done < "$gitlinks_file"
+  if [ "$submodule_rc" -ne 0 ]; then
+    rm -f "$index_file" "$paths_file" "$gitlinks_file"
+    return 1
+  fi
 
   tree=$(GIT_INDEX_FILE="$index_file" git write-tree) || { rm -f "$index_file" "$paths_file" "$gitlinks_file"; return 1; }
   candidate=$(printf '%s\n' 'EDC immutable working-tree review candidate' \

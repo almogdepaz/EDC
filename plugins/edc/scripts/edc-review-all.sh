@@ -93,10 +93,10 @@ parse_args() {
   done
 
   if [ "$FULL_SCOPE" -eq 1 ]; then
-    [ -z "$REVIEW_TARGET" ] && [ -z "$REVIEW_BASE" ] && [ -z "$REVIEW_POLICY" ] || {
+    if [ -n "$REVIEW_TARGET" ] || [ -n "$REVIEW_BASE" ] || [ -n "$REVIEW_POLICY" ]; then
       echo "ERROR: --full cannot be combined with a differential target, --base, or dirty-state policy" >&2
       return 2
-    }
+    fi
   fi
 }
 

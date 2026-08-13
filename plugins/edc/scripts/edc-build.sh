@@ -393,8 +393,10 @@ run_full_build_dag() {
   fi
   [ "$dag_rc" -eq 0 ] || return "$dag_rc"
 
-  [ -n "$EDC_BUILD_STAGED_CONTEXT" ] && [ -n "$EDC_BUILD_STAGED_AGENTS" ] \
-    || { echo "ERROR: build dag did not declare staged promotion paths" >&2; return 1; }
+  if [ -z "$EDC_BUILD_STAGED_CONTEXT" ] || [ -z "$EDC_BUILD_STAGED_AGENTS" ]; then
+    echo "ERROR: build dag did not declare staged promotion paths" >&2
+    return 1
+  fi
   [ ! -e "$EDC_CONTEXT_DIR" ] || { echo "ERROR: refusing to promote over existing $EDC_CONTEXT_DIR" >&2; return 1; }
   mv "$EDC_BUILD_STAGED_CONTEXT" "$EDC_CONTEXT_DIR" || return 1
   edc_promote_file "$EDC_BUILD_STAGED_AGENTS" "${EDC_AGENTS_TARGET:-$EDC_ROOT_AGENTS}" || return 1

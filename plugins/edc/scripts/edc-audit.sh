@@ -89,10 +89,6 @@ assert_audit_report_pair_valid() {
   return $rc
 }
 
-assert_audit_reports_valid() {
-  assert_audit_report_pair_valid "$EDC_COMPLEXITY" "$EDC_ISSUES"
-}
-
 build_audit_worker_prompt() {
   local module="$1" module_doc="$2" report_path="$3"
   local candidate_contract="Full audit: inspect the repository source directly."

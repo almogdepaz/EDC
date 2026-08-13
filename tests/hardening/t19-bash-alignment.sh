@@ -81,7 +81,7 @@ printf '%s\n' "$*" > "$EDC_PI_INJECT_ARGS"
 FAKE_AUDIT
 chmod +x "$TMP/runtime/scripts/edc" "$TMP/runtime/scripts/edc-audit.sh"
 printf '{"schemaVersion":2,"policy":{"defaultMode":"inject"}}\n' >"$TMP/edc-context/manifest.json"
-if (cd "$TMP" && EDC_PI_INJECT_ARGS="$TMP/pi-inject-args" EDC_BUILD_MODEL=test/build EDC_REVIEW_MODEL=test/review bash runtime/scripts/edc quality full --agent pi) \
+if (cd "$TMP" && PATH="$TMP/bin:$PATH" EDC_PI_INJECT_ARGS="$TMP/pi-inject-args" EDC_BUILD_MODEL=test/build EDC_REVIEW_MODEL=test/review bash runtime/scripts/edc quality full --agent pi) \
   && [ -f "$TMP/pi-inject-args" ]; then
   check "19.3: terminal quality review accepts pi inject mode" 1
 else

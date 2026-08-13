@@ -173,7 +173,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
 
   fs.mkdirSync(`${cwd}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 0.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review args: $*"\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
-  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review-all.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 0.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review-all args: $*"\necho "Review-all complete"\n`);
+  fs.writeFileSync(`${cwd}/.edc/scripts/edc-review-all.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 1.2\necho "agent=$EDC_AGENT_CLI model=\${EDC_PI_MODEL:-}"\necho "review-all args: $*"\necho "Review-all complete"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-build.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "build args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-update.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "update args: $* agent=$EDC_AGENT_CLI"\n`);
   fs.writeFileSync(`${cwd}/.edc/scripts/edc-audit.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "audit args: $* agent=$EDC_AGENT_CLI"\n`);
@@ -237,9 +237,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("RUN_ID_FAIL:" + fs.readFileSync(statusFile, "utf-8"));
     process.exit(1);
   }
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 100; i++) {
     if (fs.existsSync(statusFile) && fs.readFileSync(statusFile, "utf-8").includes("status=success")) break;
     await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!fs.readFileSync(statusFile, "utf-8").includes("status=success")) {
+    console.log("REVIEW_COMPLETION_TIMEOUT_FAIL:" + fs.readFileSync(statusFile, "utf-8"));
+    process.exit(1);
   }
   if (!fs.existsSync(logFile) || !fs.readFileSync(logFile, "utf-8").includes("Review-all complete")) {
     console.log("REVIEW_LOG_FAIL:" + (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf-8") : "missing"));

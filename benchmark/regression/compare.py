@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -55,19 +56,21 @@ def aggregate(sha: str, repo: str):
     judge_errors = 0
     for row in scores:
         verdict = (row.get("verdict") or row.get("found") or "").strip()
+        build_verdict = (row.get("build_verdict") or "").strip()
         combined = (row.get("combined_score") or "").strip()
-        if verdict == "judge_error":
+        if "judge_error" in (verdict, build_verdict):
             judge_errors += 1
             continue
-        value = None
         if combined:
             try:
-                parsed = float(combined)
-                if parsed >= 0:
-                    value = parsed
+                value = float(combined)
             except ValueError:
-                pass
-        if value is None:
+                judge_errors += 1
+                continue
+            if not math.isfinite(value) or value < 0:
+                judge_errors += 1
+                continue
+        else:
             value = verdict_scores.get(verdict)
         if value is None:
             judge_errors += 1

@@ -71,6 +71,30 @@ class RegressionAggregationTests(unittest.TestCase):
         self.assertEqual(result["per_cve"], {"CVE-2": 1.0})
         self.assertEqual(result["judge_errors"], 1)
 
+    def test_build_judge_error_cannot_fall_back_to_exact_review(self):
+        result = self.aggregate_rows(
+            ["cve", "verdict", "build_verdict", "combined_score"],
+            [
+                {"cve": "CVE-1", "verdict": "exact", "build_verdict": "judge_error", "combined_score": "-1.0"},
+            ],
+        )
+        self.assertEqual(result["recall"], 0.0)
+        self.assertEqual(result["per_cve"], {})
+        self.assertEqual(result["judge_errors"], 1)
+
+    def test_present_invalid_combined_score_cannot_fall_back_to_exact_review(self):
+        for combined_score in ("malformed", "-1.0"):
+            with self.subTest(combined_score=combined_score):
+                result = self.aggregate_rows(
+                    ["cve", "verdict", "build_verdict", "combined_score"],
+                    [
+                        {"cve": "CVE-1", "verdict": "exact", "build_verdict": "missed", "combined_score": combined_score},
+                    ],
+                )
+                self.assertEqual(result["recall"], 0.0)
+                self.assertEqual(result["per_cve"], {})
+                self.assertEqual(result["judge_errors"], 1)
+
 
 class KeywordScoringTests(unittest.TestCase):
     def test_category_regexes_match_semantic_sequences(self):

@@ -15,11 +15,13 @@
 # Caller contract:
 #   - EDC_AGENT_CLI, edc_spawn, assert_context_fresh, run_with_timeout,
 #     stream_filter must be defined/sourced first.
-#   - CLEAN_SLATE_SH must point at edc-clean-slate.sh.
+#   - CLEAN_SLATE_SH may override the sibling edc-clean-slate.sh path.
 #
 # resolve_prompt is auto-sourced from this directory if not already defined.
-#   - Pass build/update args (e.g. --ignore, --base) as positional arguments;
-#     they are forwarded to the spawned build/update prompts.
+#   - Pass build/update args (e.g. --ignore, --base) as positional arguments.
+#     Build args are forwarded unchanged. For stale context, any update --base
+#     is replaced with the manifest sourceCommit so review scope cannot control
+#     context freshness.
 #
 # Args layout:
 #   recover_context_if_needed [build_args... -- update_args...]
@@ -36,6 +38,7 @@ if [ -z "${EDC_CONTEXT_DIR:-}" ] || ! command -v resolve_prompt >/dev/null 2>&1;
   # shellcheck source=edc-lib.sh
   . "$_edc_recover_dir/edc-lib.sh"
 fi
+CLEAN_SLATE_SH="${CLEAN_SLATE_SH:-$_edc_recover_dir/edc-clean-slate.sh}"
 
 # Internal: classify why context is not fresh.
 # Echoes "MISSING" or "STALE". Returns 0 on success.
@@ -78,6 +81,38 @@ _edc_split_recovery_args() {
     # No separator: same args go to both phases.
     _edc_update_args=(${_edc_build_args[@]+"${_edc_build_args[@]}"})
   fi
+}
+
+_edc_set_manifest_update_base() {
+  local source_commit canonical_commit idx
+  source_commit=$(read_manifest_source_commit 2>/dev/null || true)
+  [ -n "$source_commit" ] || return 1
+  case "$source_commit" in
+    -*) return 1 ;;
+  esac
+  canonical_commit=$(git rev-parse --verify "${source_commit}^{commit}" 2>/dev/null) || return 1
+  [ "$source_commit" = "$canonical_commit" ] || return 1
+  git merge-base --is-ancestor "$canonical_commit" HEAD 2>/dev/null || return 1
+
+  local -a normalized_args=()
+  idx=0
+  while [ "$idx" -lt "${#_edc_update_args[@]}" ]; do
+    case "${_edc_update_args[$idx]}" in
+      --base)
+        idx=$((idx + 2))
+        ;;
+      --ignore)
+        [ $((idx + 1)) -lt "${#_edc_update_args[@]}" ] || return 1
+        normalized_args+=("${_edc_update_args[$idx]}" "${_edc_update_args[$((idx + 1))]}")
+        idx=$((idx + 2))
+        ;;
+      *)
+        normalized_args+=("${_edc_update_args[$idx]}")
+        idx=$((idx + 1))
+        ;;
+    esac
+  done
+  _edc_update_args=(${normalized_args[@]+"${normalized_args[@]}"} "--base" "$canonical_commit")
 }
 
 _edc_recovery_outputs_complete() {
@@ -151,12 +186,25 @@ recover_context_if_needed() {
       fi
       ;;
     STALE)
-      echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
-      local update_prompt
-      update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}) || return 1
-      edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" || spawn_rc=$?
-      if [ "$spawn_rc" -ne 0 ]; then
-        _edc_recovery_handle_failed_spawn "edc-update" "$spawn_rc" || return 1
+      if _edc_set_manifest_update_base; then
+        echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
+        local update_prompt
+        if update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}); then
+          spawn_rc=0
+          edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" || spawn_rc=$?
+          if [ "$spawn_rc" -eq 124 ]; then
+            _edc_recovery_handle_failed_spawn "edc-update" "$spawn_rc" || return 1
+          elif [ "$spawn_rc" -ne 0 ]; then
+            if _edc_recovery_success_with_warning_if_complete "edc-update"; then
+              return 0
+            fi
+            echo "→ edc-update failed; retrying context recovery with a force build..." >&2
+          fi
+        else
+          echo "→ edc-update prompt resolution failed; retrying context recovery with a force build..." >&2
+        fi
+      else
+        echo "→ context sourceCommit is not a valid HEAD ancestor; skipping update..." >&2
       fi
       ;;
   esac
@@ -165,19 +213,18 @@ recover_context_if_needed() {
     return 0
   fi
 
-  # First-pass recovery didn't produce a fresh manifest. Most common cause:
-  # subagent invoked legacy skills and wrote v1-shaped output. Wipe and retry
-  # the build with --force exactly once before giving up.
+  # Incremental recovery did not produce fresh, valid context or could not run
+  # safely. Wipe partial output when possible and force-build exactly once.
+  echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
   if [ -x "$CLEAN_SLATE_SH" ]; then
-    echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
     bash "$CLEAN_SLATE_SH" --force >&2 || true
-    local force_build_prompt
-    force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
-    spawn_rc=0
-    edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" || spawn_rc=$?
-    if [ "$spawn_rc" -ne 0 ]; then
-      _edc_recovery_handle_failed_spawn "edc-build retry" "$spawn_rc" || return 1
-    fi
+  fi
+  local force_build_prompt
+  force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
+  spawn_rc=0
+  edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" || spawn_rc=$?
+  if [ "$spawn_rc" -ne 0 ]; then
+    _edc_recovery_handle_failed_spawn "edc-build retry" "$spawn_rc" || return 1
   fi
 
   if assert_context_fresh 2>/dev/null; then

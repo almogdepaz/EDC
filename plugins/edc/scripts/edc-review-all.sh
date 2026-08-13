@@ -40,6 +40,7 @@ REVIEW_TARGET=""
 REVIEW_BASE=""
 REVIEW_POLICY=""
 COMMON_ARGS=()
+IGNORE_ARGS=()
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
@@ -63,7 +64,13 @@ parse_args() {
         REVIEW_BASE="$2"
         shift 2
         ;;
-      --ignore|--context-mode)
+      --ignore)
+        [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
+        COMMON_ARGS+=("$1" "$2")
+        IGNORE_ARGS+=("$1" "$2")
+        shift 2
+        ;;
+      --context-mode)
         [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
         COMMON_ARGS+=("$1" "$2")
         shift 2
@@ -170,7 +177,7 @@ prepare_context_once() {
   . "$SCRIPT_DIR/edc-assert-fresh.sh"
   # shellcheck source=edc-recover-context.sh
   . "$SCRIPT_DIR/edc-recover-context.sh"
-  recover_context_if_needed -- \
+  recover_context_if_needed "$@" \
     || { edc_result_failure 1 context-recovery-failed "context recovery failed before parallel review" "inspect the recovery output above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; return 1; }
 }
 
@@ -211,7 +218,7 @@ main() {
 
   # Candidate resolution happens before recovery so generated context cannot
   # silently enter the candidate. Recovery completes once before any lens starts.
-  prepare_context_once || exit 1
+  prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit 1
 
   security_script=$(find_phase_script edc-review.sh) || { echo "ERROR: edc-review.sh not found" >&2; exit 2; }
   delivery_script=$(find_phase_script edc-delivery-review.sh) || { echo "ERROR: edc-delivery-review.sh not found" >&2; exit 2; }

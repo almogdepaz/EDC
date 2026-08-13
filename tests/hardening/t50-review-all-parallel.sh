@@ -13,6 +13,7 @@ prepare_plugin() {
   cat > "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
 #!/usr/bin/env bash
 recover_context_if_needed() {
+  printf '%s\n' "$@" > "$EDC_T50_STATE/recovery-args"
   printf 'context prepared\n' >> "$EDC_T50_STATE/context-events"
 }
 SH
@@ -103,9 +104,22 @@ setup_repo() {
 prepare_plugin
 setup_repo
 set +e
-EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" bash .edc/scripts/edc-review-all.sh --full > "$TMP/success.out" 2>&1
+EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" bash .edc/scripts/edc-review-all.sh --full \
+  --ignore 'vendor/**' --ignore 'generated/**' --context-mode inject > "$TMP/success.out" 2>&1
 rc=$?
 set -e
+printf '%s\n' --ignore 'vendor/**' --ignore 'generated/**' > "$TMP/expected-recovery-args"
+if [ "$rc" -eq 0 ] && cmp -s "$TMP/expected-recovery-args" "$TMP/state/recovery-args"; then
+  echo 'PASS: combined recovery receives only repeated ignore pairs'
+else
+  echo "FAIL: combined recovery lost ignores or received review-only flags (rc=$rc)"
+  printf '%s\n' '--- expected recovery argv ---'
+  cat "$TMP/expected-recovery-args"
+  printf '%s\n' '--- observed recovery argv ---'
+  cat "$TMP/state/recovery-args" 2>/dev/null || true
+  cat "$TMP/success.out"
+  exit 1
+fi
 if [ "$rc" -eq 0 ] \
   && [ -f "$TMP/state/security.finished" ] \
   && [ -f "$TMP/state/delivery.finished" ] \

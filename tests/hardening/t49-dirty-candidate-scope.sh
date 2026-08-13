@@ -44,7 +44,9 @@ nested_tracked='<absent>'
 nested_untracked='<absent>'
 if [ -e nested/.git ] && nested_sha=\$(git rev-parse "\${target_sha}:nested" 2>/dev/null); then
   nested_tracked=\$(git -C nested show "\${nested_sha}:inside.txt" | tr '\n' '|')
-  nested_untracked=\$(git -C nested show "\${nested_sha}:new.txt" | tr '\n' '|')
+  if git -C nested cat-file -e "\${nested_sha}:new.txt" 2>/dev/null; then
+    nested_untracked=\$(git -C nested show "\${nested_sha}:new.txt" | tr '\n' '|')
+  fi
 fi
 printf '%s|target=%s|staged=%s|unstaged=%s|deleted=%s|rename_from=%s|rename_to=%s|untracked=%s|ignored=%s|nested_tracked=%s|nested_untracked=%s|args=%s\n' \
   '$phase' "\$target_sha" "\$(show_file staged.txt)" "\$(show_file unstaged.txt)" \
@@ -269,6 +271,53 @@ if [ "$rc" -eq 0 ] && [ -n "$sub_candidate" ] \
   pass 'include-working-tree snapshots dirty submodule bytes without mutating refs or indexes'
 else
   fail 'dirty submodule bytes were omitted or user state mutated' "rc=$rc candidate=$candidate_sha subcandidate=$sub_candidate\n$out\n$(cat "$TMP/submodule-phases.log" 2>/dev/null || true)"
+fi
+
+# Configured submodule ignore rules must not hide tracked bytes from candidate
+# policy, external-target checks, snapshot recursion, or inclusion metadata.
+setup_repo
+rm -rf "$TMP/sub-origin"
+mkdir -p "$TMP/sub-origin"
+git -C "$TMP/sub-origin" init -q
+git -C "$TMP/sub-origin" config user.email test@example.com
+git -C "$TMP/sub-origin" config user.name Test
+git -C "$TMP/sub-origin" config commit.gpgsign false
+printf 'sub original\n' > "$TMP/sub-origin/inside.txt"
+git -C "$TMP/sub-origin" add inside.txt
+git -C "$TMP/sub-origin" commit -q -m initial
+git -c protocol.file.allow=always submodule add -q "$TMP/sub-origin" nested
+git add .gitmodules nested
+git commit -q -m 'add ignored submodule'
+git config submodule.nested.ignore all
+printf 'sub ignored dirty\n' > nested/inside.txt
+: > "$TMP/ignored-submodule-default-phases.log"
+set +e
+default_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-default-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main 2>&1)
+default_rc=$?
+external_out=$(bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_resolve_external patch.diff main ""' 2>&1)
+external_rc=$?
+set -e
+if [ "$default_rc" -ne 0 ] && [ ! -s "$TMP/ignored-submodule-default-phases.log" ] \
+  && grep -q 'working tree contains changes' <<<"$default_out" \
+  && [ "$external_rc" -ne 0 ] && grep -q 'local changes outside the external review target' <<<"$external_out"; then
+  pass 'ignore=all dirty tracked submodule is rejected without explicit policy'
+else
+  fail 'ignore=all hid dirty tracked submodule from policy checks' "default_rc=$default_rc\n$default_out\nexternal_rc=$external_rc\n$external_out"
+fi
+: > "$TMP/ignored-submodule-phases.log"
+set +e
+include_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+include_rc=$?
+set -e
+ignored_candidate=$(sed -n 's/^security|target=\([^|]*\).*/\1/p' "$TMP/ignored-submodule-phases.log" | head -1)
+ignored_sub_candidate=$(git ls-tree "$ignored_candidate" nested 2>/dev/null | awk '{print $3}')
+if [ "$include_rc" -eq 0 ] && [ -n "$ignored_sub_candidate" ] \
+  && [ "$(git -C nested show "$ignored_sub_candidate:inside.txt")" = 'sub ignored dirty' ] \
+  && [ "$(grep -c 'nested_tracked=sub ignored dirty||nested_untracked=<absent>|' "$TMP/ignored-submodule-phases.log" || true)" -eq 3 ] \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.candidateKind === "working-tree-snapshot" && j.candidateCommit === process.argv[1] && j.dirtyTrackedIncluded === true && j.untrackedIncluded === false ? 0 : 1)' "$ignored_candidate"; then
+  pass 'include-working-tree snapshots ignore=all dirty tracked submodule truthfully'
+else
+  fail 'include-working-tree omitted ignore=all dirty tracked submodule' "rc=$include_rc candidate=$ignored_candidate subcandidate=$ignored_sub_candidate\n$include_out\n$(cat "$TMP/ignored-submodule-phases.log" 2>/dev/null || true)"
 fi
 
 # An uninitialized submodule must be treated as an opaque gitlink, not as the

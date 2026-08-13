@@ -66,8 +66,12 @@ edc_candidate_has_selected_untracked() {
   return 1
 }
 
+edc_candidate_has_dirty_tracked() {
+  ! git diff --quiet --ignore-submodules=none HEAD --
+}
+
 edc_candidate_repo_has_changes() {
-  ! git diff --quiet HEAD -- && return 0
+  edc_candidate_has_dirty_tracked && return 0
   edc_candidate_has_selected_untracked && return 0
   return 1
 }
@@ -184,7 +188,7 @@ edc_candidate_resolve_external() {
   local requested_target="$1" base="${2:-}" policy="${3:-}"
   local dirty_tracked=0 selected_untracked=0
 
-  git diff --quiet HEAD -- || dirty_tracked=1
+  edc_candidate_has_dirty_tracked && dirty_tracked=1
   edc_candidate_has_selected_untracked && selected_untracked=1
   if [ "$policy" = include-working-tree ]; then
     echo "ERROR: --include-working-tree is incompatible with an external PR or patch target" >&2
@@ -236,7 +240,7 @@ edc_candidate_resolve() {
       return 2
     }
   fi
-  git diff --quiet HEAD -- || dirty_tracked=1
+  edc_candidate_has_dirty_tracked && dirty_tracked=1
   edc_candidate_has_selected_untracked && selected_untracked=1
 
   case "$policy" in

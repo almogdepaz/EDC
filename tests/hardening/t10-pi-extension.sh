@@ -334,8 +334,10 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\n");
   childProcess.execFileSync("git", ["add", "tracked.txt", ".gitignore"], { cwd: raceDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: raceDir, stdio: "ignore" });
-  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nsleep 2\necho "Verified: review-HEAD.md"\n`);
+  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf ready > .git/edc/race-ready\nsleep 2\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
+  // Preserve the fake reviewer across each best-effort command runtime install.
+  fs.mkdirSync(`${raceDir}/.edc.install.lock`, { recursive: true });
 
   const realBash = childProcess.execFileSync("/usr/bin/env", ["bash", "-lc", "command -v bash"], { encoding: "utf-8" }).trim();
   if (!realBash) {
@@ -363,9 +365,19 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   }
 
   const raceStatusFile = `${raceDir}/.git/edc/status`;
+  const raceReadyFile = `${raceDir}/.git/edc/race-ready`;
   for (let i = 0; i < 100; i++) {
-    if (fs.existsSync(raceStatusFile) && /^pid=\d+$/m.test(fs.readFileSync(raceStatusFile, "utf-8"))) break;
+    const raceStatus = fs.existsSync(raceStatusFile) ? fs.readFileSync(raceStatusFile, "utf-8") : "";
+    if (raceStatus.includes("status=running") && /^pid=\d+$/m.test(raceStatus) && fs.existsSync(raceReadyFile)) break;
+    if (/^status=(?:success|failed|cancelled)$/m.test(raceStatus)) break;
     await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const synchronizedRaceStatus = fs.existsSync(raceStatusFile) ? fs.readFileSync(raceStatusFile, "utf-8") : "missing";
+  if (!synchronizedRaceStatus.includes("status=running") || !/^pid=\d+$/m.test(synchronizedRaceStatus) || !fs.existsSync(raceReadyFile)) {
+    const raceLogFile = `${raceDir}/.git/edc/review.log`;
+    const raceLog = fs.existsSync(raceLogFile) ? fs.readFileSync(raceLogFile, "utf-8") : "missing";
+    console.log("RACE_REVIEW_READY_FAIL:" + JSON.stringify({ status: synchronizedRaceStatus, log: raceLog }));
+    process.exit(1);
   }
   await edcCmd.opts.handler("kill", { cwd: raceDir, hasUI: false });
   const killMessage = calls.messages.at(-1)?.content || "";

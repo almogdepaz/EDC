@@ -38,10 +38,13 @@
         "exactFiles": [
           ".claude-plugin/marketplace.json",
           "README.md",
+          "llms.txt",
           "package.json",
           "plugins/edc/README.md"
         ],
         "prefixes": [
+          "docs/",
+          "examples/",
           "plugins/edc/.claude-plugin/",
           "plugins/edc/hooks/"
         ]
@@ -85,7 +88,8 @@
         ],
         "prefixes": [
           "tests/fixtures/skill-evals/",
-          "tests/hardening/"
+          "tests/hardening/",
+          "tests/unit/"
         ]
       }
     },
@@ -117,7 +121,8 @@
         "prefixes": [
           "benchmark/gepa/",
           "benchmark/pr-review/",
-          "benchmark/regression/"
+          "benchmark/regression/",
+          "benchmark/tests/"
         ]
       }
     }
@@ -160,11 +165,11 @@
       }
     ]
   },
-  "generatedAt": "2026-07-22T07:37:20Z",
-  "sourceCommit": "8a76c16d51c7cac37c6b928f40047ab818560292",
+  "generatedAt": "2026-08-13T21:23:42Z",
+  "sourceCommit": "57181079f05359d014da95efde5fdc16b79d9deb",
   "coverage": {
-    "contextMappedFileCount": 183,
-    "contextlessFileCount": 16,
+    "contextMappedFileCount": 200,
+    "contextlessFileCount": 18,
     "uncoveredFileCount": 0,
     "ambiguousPathCount": 0,
     "ignoredFileCount": 16,
@@ -173,7 +178,7 @@
       "benchmark/curl/**",
       "benchmark/redis/**"
     ],
-    "mappedFileCount": 183,
-    "unmappedFileCount": 16
+    "mappedFileCount": 200,
+    "unmappedFileCount": 18
   }
 }

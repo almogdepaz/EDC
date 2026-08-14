@@ -334,7 +334,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\n");
   childProcess.execFileSync("git", ["add", "tracked.txt", ".gitignore"], { cwd: raceDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: raceDir, stdio: "ignore" });
-  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf ready > .git/edc/race-ready\nsleep 2\necho "Verified: review-HEAD.md"\n`);
+  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\ntrap "" TERM\nprintf ready > .git/edc/race-ready\nsleep 30\necho "Verified: review-HEAD.md"\n`);
   fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
   // Preserve the fake reviewer across each best-effort command runtime install.
   fs.mkdirSync(`${raceDir}/.edc.install.lock`, { recursive: true });
@@ -379,7 +379,20 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("RACE_REVIEW_READY_FAIL:" + JSON.stringify({ status: synchronizedRaceStatus, log: raceLog }));
     process.exit(1);
   }
-  await edcCmd.opts.handler("kill", { cwd: raceDir, hasUI: false });
+  let racePidForCleanup = Number((synchronizedRaceStatus.match(/^pid=(\d+)$/m) || [])[1]);
+  const cleanupRaceProcessGroup = () => {
+    if (!racePidForCleanup) return;
+    try { process.kill(-racePidForCleanup, "SIGKILL"); } catch {}
+  };
+  process.once("exit", cleanupRaceProcessGroup);
+  const killRequest = edcCmd.opts.handler("kill", { cwd: raceDir, hasUI: false });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  const terminatingStatus = fs.readFileSync(raceStatusFile, "utf-8");
+  if (!terminatingStatus.includes("status=running")) {
+    console.log("KILL_REVIEW_PREMATURE_STATUS_FAIL:" + JSON.stringify(terminatingStatus));
+    process.exit(1);
+  }
+  await killRequest;
   const killMessage = calls.messages.at(-1)?.content || "";
   if (!killMessage.includes("Background EDC review killed.") || !killMessage.includes("Run ID:")) {
     console.log("KILL_REVIEW_MESSAGE_FAIL:" + JSON.stringify(killMessage));
@@ -390,6 +403,20 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     console.log("KILL_REVIEW_STATUS_FAIL:" + JSON.stringify(killedStatus));
     process.exit(1);
   }
+  const killedPid = Number((killedStatus.match(/^pid=(\d+)$/m) || [])[1]);
+  let killedGroupAlive = false;
+  try {
+    process.kill(-killedPid, 0);
+    killedGroupAlive = true;
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+  if (killedGroupAlive) {
+    console.log("KILL_REVIEW_GROUP_SURVIVED_FAIL:" + killedPid);
+    process.exit(1);
+  }
+  racePidForCleanup = 0;
+  process.removeListener("exit", cleanupRaceProcessGroup);
   await edcCmd.opts.handler("", { ...menuCtx("job status"), cwd: raceDir });
   const killedStatusMessage = calls.messages.at(-1)?.content || "";
   if (!killedStatusMessage.includes("status: cancelled") || !killedStatusMessage.includes("EDC review cancelled.")) {
@@ -512,6 +539,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-all-args.txt\necho "Review-all complete"\n`);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
   fs.chmodSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, 0o755);
+  fs.mkdirSync(`${missingDir}/.edc.install.lock`, { recursive: true });
   const missingSelections = ["changes vs default branch", "combined review"];
   const missingCtx = {
     cwd: missingDir,

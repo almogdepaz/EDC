@@ -84,6 +84,8 @@ const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
 const EDC_BACKGROUND_STARTING_STALE_MS = 60 * 1000;
 const EDC_BACKGROUND_UI_KEY = "edc-review";
 const EDC_BACKGROUND_UI_POLL_MS = 2000;
+const EDC_BACKGROUND_TERMINATION_GRACE_MS = 1000;
+const EDC_BACKGROUND_TERMINATION_POLL_MS = 25;
 const EDC_LOCAL_COMMAND_TIMEOUT_MS = 10000;
 
 let backgroundStatusTimer = null;
@@ -674,7 +676,27 @@ function readBackgroundJobStatus(cwd) {
   };
 }
 
-function killBackgroundJob(cwd) {
+function isSignalTargetAlive(pid, processGroup) {
+  try {
+    process.kill(processGroup ? -pid : pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForSignalTargetExit(pid, processGroup) {
+  const deadline = Date.now() + EDC_BACKGROUND_TERMINATION_GRACE_MS;
+  while (isSignalTargetAlive(pid, processGroup)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, EDC_BACKGROUND_TERMINATION_POLL_MS));
+  }
+  return true;
+}
+
+async function killBackgroundJob(cwd) {
   const job = readBackgroundJobStatus(cwd);
   if (!job) return "No running background EDC job found.";
 
@@ -692,14 +714,42 @@ function killBackgroundJob(cwd) {
     return `Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`;
   }
 
+  let processGroup = true;
   try {
     process.kill(-pid, "SIGTERM");
   } catch (groupError) {
+    processGroup = false;
     try {
       process.kill(pid, "SIGTERM");
     } catch (pidError) {
-      return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`;
+      if (pidError?.code !== "ESRCH") {
+        return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`;
+      }
     }
+  }
+
+  let terminated;
+  try {
+    terminated = await waitForSignalTargetExit(pid, processGroup);
+  } catch (error) {
+    return `Failed to verify background EDC ${kind} ${status.run_id || "current"} termination: ${error?.message || "unknown error"}`;
+  }
+  if (!terminated) {
+    try {
+      process.kill(processGroup ? -pid : pid, "SIGKILL");
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        return `Failed to force-kill background EDC ${kind} ${status.run_id || "current"}: ${error?.message || "unknown error"}`;
+      }
+    }
+    try {
+      terminated = await waitForSignalTargetExit(pid, processGroup);
+    } catch (error) {
+      return `Failed to verify background EDC ${kind} ${status.run_id || "current"} force-kill: ${error?.message || "unknown error"}`;
+    }
+  }
+  if (!terminated) {
+    return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${processGroup ? "process group" : "process"} ${pid} remained alive after SIGKILL.`;
   }
 
   markRunningBackgroundCancelled(cwd, job.statusPath, status);
@@ -838,8 +888,8 @@ function interactiveOnlyMessage() {
   ].join("\n");
 }
 
-function killRunningJobAction(pi, ctx) {
-  const message = killBackgroundJob(ctx.cwd);
+async function killRunningJobAction(pi, ctx) {
+  const message = await killBackgroundJob(ctx.cwd);
   stopBackgroundStatusWatcher();
   clearBackgroundStatusUi(ctx);
   sendInfo(pi, "edc-job-kill", message);
@@ -973,7 +1023,7 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   if (isKillJobRequest(args)) {
-    killRunningJobAction(pi, ctx);
+    await killRunningJobAction(pi, ctx);
     return;
   }
 
@@ -1014,7 +1064,7 @@ async function handleEdcMenu(pi, args, ctx) {
       sendInfo(pi, "edc-job-status", renderBackgroundJobStatus("", ctx.cwd));
       break;
     case EDC_MENU.KILL_JOB:
-      killRunningJobAction(pi, ctx);
+      await killRunningJobAction(pi, ctx);
       break;
     case EDC_MENU.BUILD:
       runBackgroundAction(pi, ctx, "build", "edc-build.sh");

@@ -88,6 +88,7 @@ fi
 
 # ── 4d2: fallback reaps its watchdog shell and timer on fast completion ───────
 REAL_SLEEP=$(command -v sleep)
+REAL_MV=$(command -v mv)
 mkdir -p "$TMPDIR_T4/watchdog-bin"
 cat > "$TMPDIR_T4/watchdog-bin/sleep" <<'EOF'
 #!/usr/bin/env bash
@@ -98,6 +99,18 @@ if [ "${1:-}" = "30" ]; then
   fi
 fi
 exec "$EDC_T4_REAL_SLEEP" "$@"
+EOF
+cat > "$TMPDIR_T4/watchdog-bin/mv" <<'EOF'
+#!/usr/bin/env bash
+if [ "${EDC_T4_BREAK_WATCHDOG_PUBLICATION:-0}" = "1" ]; then
+  case "${2:-}" in
+    *.watchdog-pid)
+      printf '%s\n' "$EDC_T4_SENTINEL_PID" > "$2"
+      exit 87
+      ;;
+  esac
+fi
+exec "$EDC_T4_REAL_MV" "$@"
 EOF
 cat > "$TMPDIR_T4/watchdog-bin/fast-command" <<'EOF'
 #!/usr/bin/env bash
@@ -112,11 +125,12 @@ cat > "$TMPDIR_T4/watchdog-bin/long-command" <<'EOF'
 printf '%s\n' "$$" > "$EDC_T4_COMMAND_PID"
 exec "$EDC_T4_REAL_SLEEP" 30
 EOF
-chmod +x "$TMPDIR_T4/watchdog-bin/sleep" "$TMPDIR_T4/watchdog-bin/fast-command" "$TMPDIR_T4/watchdog-bin/long-command"
+chmod +x "$TMPDIR_T4/watchdog-bin/sleep" "$TMPDIR_T4/watchdog-bin/mv" "$TMPDIR_T4/watchdog-bin/fast-command" "$TMPDIR_T4/watchdog-bin/long-command"
 watchdog_pids="$TMPDIR_T4/watchdog-pids"
 (
   export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
   export EDC_T4_REAL_SLEEP="$REAL_SLEEP"
+  export EDC_T4_REAL_MV="$REAL_MV"
   export EDC_T4_WATCHDOG_PIDS="$watchdog_pids"
   TIMEOUT_BIN=""
   EDC_TIMEOUT_WARNED=1
@@ -175,6 +189,7 @@ mkdir -p "$broken_watchdog_dir"
   export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
   export TMPDIR="$broken_watchdog_dir"
   export EDC_T4_REAL_SLEEP="$REAL_SLEEP"
+  export EDC_T4_REAL_MV="$REAL_MV"
   export EDC_T4_WATCHDOG_PIDS="$broken_watchdog_pids"
   export EDC_T4_COMMAND_PID="$broken_command_pid_file"
   export EDC_T4_BREAK_WATCHDOG_SLEEP=1
@@ -225,6 +240,79 @@ if [ "$broken_probe_running" -ne 0 ] || [ "$broken_probe_rc" -ne 0 ] || [ "$brok
   exit 1
 fi
 echo "PASS: broken fallback timer fails closed and reaps all processes"
+
+# ── 4d4: fallback timer PID publication is atomic and fail-closed ─────────────
+publication_dir="$TMPDIR_T4/broken-publication"
+publication_watchdog_pids="$publication_dir/watchdog-pids"
+publication_command_pid_file="$publication_dir/command-pid"
+publication_result_file="$publication_dir/result"
+publication_error_file="$publication_dir/error"
+mkdir -p "$publication_dir"
+"$REAL_SLEEP" 30 &
+publication_sentinel_pid=$!
+(
+  export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
+  export TMPDIR="$publication_dir"
+  export EDC_T4_REAL_SLEEP="$REAL_SLEEP"
+  export EDC_T4_REAL_MV="$REAL_MV"
+  export EDC_T4_WATCHDOG_PIDS="$publication_watchdog_pids"
+  export EDC_T4_COMMAND_PID="$publication_command_pid_file"
+  export EDC_T4_BREAK_WATCHDOG_PUBLICATION=1
+  export EDC_T4_SENTINEL_PID="$publication_sentinel_pid"
+  TIMEOUT_BIN=""
+  EDC_TIMEOUT_WARNED=1
+  publication_rc=0
+  run_with_timeout 30 "watchdog-publication-test" long-command > /dev/null 2> "$publication_error_file" || publication_rc=$?
+  printf '%s\n' "$publication_rc" > "$publication_result_file"
+) &
+publication_probe_pid=$!
+publication_probe_running=1
+publication_poll=0
+while [ "$publication_poll" -lt 40 ]; do
+  if ! kill -0 "$publication_probe_pid" 2>/dev/null; then
+    publication_probe_running=0
+    break
+  fi
+  sleep 0.05
+  publication_poll=$((publication_poll + 1))
+done
+publication_probe_rc=0
+if [ "$publication_probe_running" -eq 0 ]; then
+  wait "$publication_probe_pid" || publication_probe_rc=$?
+fi
+publication_watchdog_shell_pid=""
+publication_watchdog_sleep_pid=""
+publication_command_pid=""
+[ ! -s "$publication_watchdog_pids" ] || read -r publication_watchdog_shell_pid publication_watchdog_sleep_pid < "$publication_watchdog_pids"
+[ ! -s "$publication_command_pid_file" ] || read -r publication_command_pid < "$publication_command_pid_file"
+publication_child_alive=0
+for publication_pid in "$publication_watchdog_shell_pid" "$publication_watchdog_sleep_pid" "$publication_command_pid"; do
+  if [ -n "$publication_pid" ] && kill -0 "$publication_pid" 2>/dev/null; then
+    publication_child_alive=1
+  fi
+done
+publication_result=0
+[ ! -s "$publication_result_file" ] || read -r publication_result < "$publication_result_file"
+publication_artifact=$(find "$publication_dir" -name 'edc-timeout-*' -print -quit)
+publication_sentinel_alive=0
+if kill -0 "$publication_sentinel_pid" 2>/dev/null; then
+  publication_sentinel_alive=1
+fi
+if [ "$publication_probe_running" -ne 0 ] || [ "$publication_probe_rc" -ne 0 ] || [ "$publication_result" -ne 1 ] \
+  || ! grep -q 'fallback watchdog timer PID publication failed' "$publication_error_file" \
+  || [ "$publication_child_alive" -ne 0 ] || [ -n "$publication_artifact" ] || [ "$publication_sentinel_alive" -ne 1 ]; then
+  for cleanup_pid in "$publication_watchdog_sleep_pid" "$publication_watchdog_shell_pid" "$publication_command_pid" "$publication_probe_pid" "$publication_sentinel_pid"; do
+    [ -z "$cleanup_pid" ] || kill "$cleanup_pid" 2>/dev/null || true
+  done
+  wait "$publication_probe_pid" 2>/dev/null || true
+  wait "$publication_sentinel_pid" 2>/dev/null || true
+  echo "FAIL: fallback timer PID publication was not fail-closed (probe_running=$publication_probe_running probe_rc=$publication_probe_rc result=$publication_result child_alive=$publication_child_alive sentinel_alive=$publication_sentinel_alive artifact=${publication_artifact:-none})"
+  [ ! -f "$publication_error_file" ] || cat "$publication_error_file"
+  exit 1
+fi
+kill "$publication_sentinel_pid"
+wait "$publication_sentinel_pid" 2>/dev/null || true
+echo "PASS: fallback timer PID publication fails closed without unsafe signaling"
 
 # ── 4e: run_with_timeout fires on exceeded time ───────────────────────────────
 timeout_rc=0

@@ -420,15 +420,20 @@ run_with_timeout() {
   # the command; the parent emits the diagnostic after observing that marker.
   # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
   # non-interactive scripts, which swallows here-strings passed to the caller.
-  local timeout_marker watchdog_sleep_pid_file watchdog_outcome_dir watchdog_failure_marker
+  local timeout_marker watchdog_sleep_pid_file watchdog_sleep_pid_tmp watchdog_sleep_pid_ready
+  local watchdog_startup_failure_marker watchdog_outcome_dir watchdog_failure_marker
   timeout_marker=$(mktemp "${TMPDIR:-/tmp}/edc-timeout-$$.XXXXXX") || return 1
   watchdog_sleep_pid_file="${timeout_marker}.watchdog-pid"
+  watchdog_sleep_pid_tmp="${watchdog_sleep_pid_file}.tmp"
+  watchdog_sleep_pid_ready="${watchdog_sleep_pid_file}.ready"
+  watchdog_startup_failure_marker="${timeout_marker}.watchdog-startup-failure"
   watchdog_outcome_dir="${timeout_marker}.watchdog-outcome"
   watchdog_failure_marker="${timeout_marker}.watchdog-failure"
-  rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_failure_marker"
+  rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
   rmdir "$watchdog_outcome_dir" 2>/dev/null || true
   local cmd_pid="" watchdog_pid="" watchdog_sleep_pid=""
-  trap 'trap - TERM INT; [ -z "${cmd_pid:-}" ] || kill "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || kill "$watchdog_pid" 2>/dev/null || true; [ -z "${cmd_pid:-}" ] || wait "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || wait "$watchdog_pid" 2>/dev/null || true; rm -f "${timeout_marker:-}" "${watchdog_sleep_pid_file:-}" "${watchdog_failure_marker:-}"; rmdir "${watchdog_outcome_dir:-}" 2>/dev/null || true; exit 143' TERM INT
+  trap 'trap - TERM INT; [ -z "${cmd_pid:-}" ] || kill "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || kill "$watchdog_pid" 2>/dev/null || true; [ -z "${cmd_pid:-}" ] || wait "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || wait "$watchdog_pid" 2>/dev/null || true; rm -f "${timeout_marker:-}" "${watchdog_sleep_pid_file:-}" "${watchdog_sleep_pid_tmp:-}" "${watchdog_sleep_pid_ready:-}" "${watchdog_startup_failure_marker:-}" "${watchdog_failure_marker:-}"; rmdir "${watchdog_outcome_dir:-}" 2>/dev/null || true; exit 143' TERM INT
   exec 3<&0
   "$@" <&3 &
   cmd_pid=$!
@@ -438,7 +443,30 @@ run_with_timeout() {
     trap 'trap - TERM INT; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || wait "$watchdog_sleep_pid" 2>/dev/null || true; exit 143' TERM INT
     sleep "$secs" &
     watchdog_sleep_pid=$!
-    printf '%s\n' "$watchdog_sleep_pid" > "$watchdog_sleep_pid_file"
+    watchdog_publication_failed=0
+    case "$watchdog_sleep_pid" in
+      ""|*[!0-9]*) watchdog_publication_failed=1 ;;
+    esac
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! printf '%s\n' "$watchdog_sleep_pid" > "$watchdog_sleep_pid_tmp"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! mv "$watchdog_sleep_pid_tmp" "$watchdog_sleep_pid_file"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! : > "$watchdog_sleep_pid_ready"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -ne 0 ]; then
+      rm -f "$watchdog_sleep_pid_tmp" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_ready" || true
+      : > "$watchdog_startup_failure_marker" || true
+      kill "$watchdog_sleep_pid" 2>/dev/null || true
+      kill "$cmd_pid" 2>/dev/null || true
+      wait "$watchdog_sleep_pid" 2>/dev/null || true
+      exit 1
+    fi
     watchdog_timer_rc=0
     wait "$watchdog_sleep_pid" || watchdog_timer_rc=$?
     # mkdir atomically decides whether command completion or the watchdog owns cleanup.
@@ -464,21 +492,51 @@ run_with_timeout() {
     trap - TERM INT
   ) >/dev/null 2>&1 &
   watchdog_pid=$!
-  while [ ! -s "$watchdog_sleep_pid_file" ]; do
-    if ! kill -0 "$watchdog_pid" 2>/dev/null; then
-      wait "$watchdog_pid" 2>/dev/null || true
-      kill "$cmd_pid" 2>/dev/null || true
-      wait "$cmd_pid" 2>/dev/null || true
-      rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_failure_marker"
-      rmdir "$watchdog_outcome_dir" 2>/dev/null || true
-      trap - TERM INT
-      echo "ERROR: phase '$label' fallback watchdog failed to start" >&2
-      return 1
+  local watchdog_startup_failed=0 watchdog_pid_valid=1 watchdog_publication_failed=0
+  while [ ! -f "$watchdog_sleep_pid_ready" ]; do
+    if [ -f "$watchdog_startup_failure_marker" ] || ! kill -0 "$watchdog_pid" 2>/dev/null; then
+      watchdog_startup_failed=1
+      break
     fi
     sleep 0.01
   done
-  IFS= read -r watchdog_sleep_pid < "$watchdog_sleep_pid_file"
-  rm -f "$watchdog_sleep_pid_file"
+  if [ "$watchdog_startup_failed" -ne 0 ]; then
+    [ ! -f "$watchdog_startup_failure_marker" ] || watchdog_publication_failed=1
+    wait "$watchdog_pid" 2>/dev/null || true
+    kill "$cmd_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+      "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
+    rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+    trap - TERM INT
+    if [ "$watchdog_publication_failed" -eq 1 ]; then
+      echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
+    else
+      echo "ERROR: phase '$label' fallback watchdog failed to start" >&2
+    fi
+    return 1
+  fi
+  if ! IFS= read -r watchdog_sleep_pid < "$watchdog_sleep_pid_file"; then
+    watchdog_pid_valid=0
+  else
+    case "$watchdog_sleep_pid" in
+      ""|*[!0-9]*) watchdog_pid_valid=0 ;;
+    esac
+  fi
+  if [ "$watchdog_pid_valid" -eq 0 ]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+    kill "$cmd_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+      "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
+    rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+    trap - TERM INT
+    echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
+    return 1
+  fi
+  rm -f "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker"
   local rc=0 watchdog_rc=0 watchdog_timer_rc=""
   wait "$cmd_pid" || rc=$?
   mkdir "$watchdog_outcome_dir" 2>/dev/null || true
@@ -495,7 +553,8 @@ run_with_timeout() {
     echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2
     rc=124
   fi
-  rm -f "$timeout_marker" "$watchdog_failure_marker"
+  rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
   rmdir "$watchdog_outcome_dir" 2>/dev/null || true
   trap - TERM INT
   return $rc

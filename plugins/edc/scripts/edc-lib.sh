@@ -432,6 +432,10 @@ run_with_timeout() {
   rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
     "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
   rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+  # trap -p emits shell-quoted restoration commands; eval is limited to that output.
+  local caller_term_trap caller_int_trap
+  caller_term_trap=$(trap -p TERM)
+  caller_int_trap=$(trap -p INT)
   local cmd_pid="" watchdog_pid="" watchdog_sleep_pid=""
   trap 'trap - TERM INT; [ -z "${cmd_pid:-}" ] || kill "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || kill "$watchdog_pid" 2>/dev/null || true; [ -z "${cmd_pid:-}" ] || wait "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || wait "$watchdog_pid" 2>/dev/null || true; rm -f "${timeout_marker:-}" "${watchdog_sleep_pid_file:-}" "${watchdog_sleep_pid_tmp:-}" "${watchdog_sleep_pid_ready:-}" "${watchdog_startup_failure_marker:-}" "${watchdog_failure_marker:-}"; rmdir "${watchdog_outcome_dir:-}" 2>/dev/null || true; exit 143' TERM INT
   exec 3<&0
@@ -509,6 +513,8 @@ run_with_timeout() {
       "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
     rmdir "$watchdog_outcome_dir" 2>/dev/null || true
     trap - TERM INT
+    [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+    [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
     if [ "$watchdog_publication_failed" -eq 1 ]; then
       echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
     else
@@ -532,6 +538,8 @@ run_with_timeout() {
       "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
     rmdir "$watchdog_outcome_dir" 2>/dev/null || true
     trap - TERM INT
+    [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+    [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
     echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
     return 1
   fi
@@ -557,6 +565,8 @@ run_with_timeout() {
     "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
   rmdir "$watchdog_outcome_dir" 2>/dev/null || true
   trap - TERM INT
+  [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+  [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
   return $rc
 }
 

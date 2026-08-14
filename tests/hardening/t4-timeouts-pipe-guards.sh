@@ -78,6 +78,35 @@ fi
 RUNTIME="plugins/edc/scripts/edc-lib.sh"
 eval "$(awk '/^run_with_timeout\(\)/{found=1} found{print} /^\}$/{if(found){exit}}' "$RUNTIME")"
 
+# ── 4d1: fallback restores distinct caller TERM/INT traps exactly ─────────────
+trap_test_timeout_bin="$TIMEOUT_BIN"
+TIMEOUT_BIN=""
+EDC_TIMEOUT_WARNED=1
+trap 'printf "%s\n" "t4 custom term" > /dev/null' TERM
+trap 'printf "%s\n" "t4 custom int" > /dev/null' INT
+expected_term_trap=$(trap -p TERM)
+expected_int_trap=$(trap -p INT)
+trap_rc0=0
+run_with_timeout 30 "trap-restore-rc0" true || trap_rc0=$?
+actual_rc0_term_trap=$(trap -p TERM)
+actual_rc0_int_trap=$(trap -p INT)
+trap 'printf "%s\n" "t4 custom term" > /dev/null' TERM
+trap 'printf "%s\n" "t4 custom int" > /dev/null' INT
+trap_rc23=0
+run_with_timeout 30 "trap-restore-rc23" sh -c 'exit 23' || trap_rc23=$?
+actual_rc23_term_trap=$(trap -p TERM)
+actual_rc23_int_trap=$(trap -p INT)
+trap - TERM INT
+TIMEOUT_BIN="$trap_test_timeout_bin"
+if [ "$trap_rc0" -eq 0 ] && [ "$trap_rc23" -eq 23 ] \
+  && [ "$actual_rc0_term_trap" = "$expected_term_trap" ] && [ "$actual_rc0_int_trap" = "$expected_int_trap" ] \
+  && [ "$actual_rc23_term_trap" = "$expected_term_trap" ] && [ "$actual_rc23_int_trap" = "$expected_int_trap" ]; then
+  echo "PASS: fallback restores distinct caller TERM/INT traps"
+else
+  echo "FAIL: fallback changed caller traps (rc0=$trap_rc0 rc23=$trap_rc23 rc0_term='$actual_rc0_term_trap' rc0_int='$actual_rc0_int_trap' rc23_term='$actual_rc23_term_trap' rc23_int='$actual_rc23_int_trap')"
+  exit 1
+fi
+
 result=$(run_with_timeout 5 "test-phase" echo "hello from timeout")
 if [ "$result" = "hello from timeout" ]; then
   echo "PASS: run_with_timeout runs fast commands correctly"
@@ -184,6 +213,7 @@ broken_watchdog_pids="$broken_watchdog_dir/watchdog-pids"
 broken_command_pid_file="$broken_watchdog_dir/command-pid"
 broken_result_file="$broken_watchdog_dir/result"
 broken_error_file="$broken_watchdog_dir/error"
+broken_trap_result_file="$broken_watchdog_dir/traps-restored"
 mkdir -p "$broken_watchdog_dir"
 (
   export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
@@ -195,8 +225,16 @@ mkdir -p "$broken_watchdog_dir"
   export EDC_T4_BREAK_WATCHDOG_SLEEP=1
   TIMEOUT_BIN=""
   EDC_TIMEOUT_WARNED=1
+  trap 'printf "%s\n" "broken custom term" > /dev/null' TERM
+  trap 'printf "%s\n" "broken custom int" > /dev/null' INT
+  broken_expected_term_trap=$(trap -p TERM)
+  broken_expected_int_trap=$(trap -p INT)
   broken_rc=0
   run_with_timeout 30 "broken-watchdog-test" long-command > /dev/null 2> "$broken_error_file" || broken_rc=$?
+  if [ "$(trap -p TERM)" = "$broken_expected_term_trap" ] && [ "$(trap -p INT)" = "$broken_expected_int_trap" ]; then
+    : > "$broken_trap_result_file"
+  fi
+  trap - TERM INT
   printf '%s\n' "$broken_rc" > "$broken_result_file"
 ) &
 broken_probe_pid=$!
@@ -230,7 +268,7 @@ broken_result=0
 broken_artifact=$(find "$broken_watchdog_dir" -name 'edc-timeout-*' -print -quit)
 if [ "$broken_probe_running" -ne 0 ] || [ "$broken_probe_rc" -ne 0 ] || [ "$broken_result" -eq 0 ] \
   || ! grep -q 'fallback watchdog timer failed (exit 86)' "$broken_error_file" \
-  || [ "$broken_child_alive" -ne 0 ] || [ -n "$broken_artifact" ]; then
+  || [ ! -f "$broken_trap_result_file" ] || [ "$broken_child_alive" -ne 0 ] || [ -n "$broken_artifact" ]; then
   for cleanup_pid in "$broken_watchdog_sleep_pid" "$broken_watchdog_shell_pid" "$broken_command_pid" "$broken_probe_pid"; do
     [ -z "$cleanup_pid" ] || kill "$cleanup_pid" 2>/dev/null || true
   done

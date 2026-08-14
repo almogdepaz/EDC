@@ -489,7 +489,56 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  // 3e. dead running PID is marked failed and does not wedge future starts.
+  // 3e1. failed force-kill keeps the truthful running status and footer active.
+  const killFailureDir = `${cwd}/kill-failure-review`;
+  const killFailurePid = 42424242;
+  fs.mkdirSync(killFailureDir, { recursive: true });
+  childProcess.execFileSync("git", ["init"], { cwd: killFailureDir, stdio: "ignore" });
+  fs.mkdirSync(`${killFailureDir}/.git/edc`, { recursive: true });
+  fs.mkdirSync(`${killFailureDir}/.edc.install.lock`, { recursive: true });
+  fs.writeFileSync(`${killFailureDir}/.git/edc/status`, `kind=review\nstatus=running\nstarted_at=2026-01-01T00:00:00Z\nrun_id=force-kill-failure\npid=${killFailurePid}\nlog=.git/edc/review.log\n`);
+  const killFailureCtx = {
+    cwd: killFailureDir,
+    hasUI: true,
+    ui: {
+      setStatus: (key, value) => { calls.statuses.push({ key, value }); },
+      setWidget: (key, value, options) => { calls.widgets.push({ key, value, options }); },
+    },
+  };
+  const killFailureStatusesBefore = calls.statuses.length;
+  const realProcessKill = process.kill;
+  process.kill = (pid, signal) => {
+    if (Math.abs(pid) !== killFailurePid) return realProcessKill(pid, signal);
+    if (signal === "SIGKILL" || (pid < 0 && signal === 0)) {
+      const error = new Error("operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    }
+    return true;
+  };
+  try {
+    await edcCmd.opts.handler("kill", killFailureCtx);
+  } finally {
+    process.kill = realProcessKill;
+  }
+  const killFailureMessage = calls.messages.at(-1)?.content || "";
+  const killFailureStatus = fs.readFileSync(`${killFailureDir}/.git/edc/status`, "utf-8");
+  const killFailureFooter = calls.statuses.slice(killFailureStatusesBefore).at(-1)?.value || "";
+  if (!killFailureMessage.includes("Failed to force-kill background EDC review force-kill-failure") || !killFailureStatus.includes("status=running") || !killFailureFooter.includes("running")) {
+    console.log("KILL_FAILURE_UI_STATUS_FAIL:" + JSON.stringify({ message: killFailureMessage, status: killFailureStatus, footer: killFailureFooter }));
+    process.exit(1);
+  }
+  fs.writeFileSync(`${killFailureDir}/.git/edc/status`, killFailureStatus.replace("status=running", "status=failed"));
+  const terminalKillStatusesBefore = calls.statuses.length;
+  await edcCmd.opts.handler("kill", killFailureCtx);
+  const terminalKillMessage = calls.messages.at(-1)?.content || "";
+  const terminalKillFooter = calls.statuses.slice(terminalKillStatusesBefore).at(-1);
+  if (!terminalKillMessage.includes("Current review status: failed") || !terminalKillFooter || terminalKillFooter.value !== undefined) {
+    console.log("TERMINAL_KILL_UI_CLEAR_FAIL:" + JSON.stringify({ message: terminalKillMessage, footer: terminalKillFooter }));
+    process.exit(1);
+  }
+
+  // 3e2. dead running PID is marked failed and does not wedge future starts.
   const stalePidDir = `${cwd}/stale-pid-review`;
   fs.mkdirSync(`${stalePidDir}/.edc/scripts`, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: stalePidDir, stdio: "ignore" });

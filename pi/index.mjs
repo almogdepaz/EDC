@@ -696,22 +696,30 @@ async function waitForSignalTargetExit(pid, processGroup) {
   return true;
 }
 
+function terminalKillOutcome(message) {
+  return { isTerminal: true, message };
+}
+
+function runningKillOutcome(message) {
+  return { isTerminal: false, message };
+}
+
 async function killBackgroundJob(cwd) {
   const job = readBackgroundJobStatus(cwd);
-  if (!job) return "No running background EDC job found.";
+  if (!job) return terminalKillOutcome("No running background EDC job found.");
 
   const status = job.status;
   const kind = status.kind || "job";
   if (status.status !== "running") {
-    return `No running background EDC job found. Current ${kind} status: ${status.status || "unknown"}.`;
+    return terminalKillOutcome(`No running background EDC job found. Current ${kind} status: ${status.status || "unknown"}.`);
   }
 
   const active = runningBackgroundJob(cwd);
-  if (!active) return "No running background EDC job found; stale status was cleaned up.";
+  if (!active) return terminalKillOutcome("No running background EDC job found; stale status was cleaned up.");
 
   const pid = Number(status.pid);
   if (!Number.isInteger(pid) || pid <= 0) {
-    return `Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`;
+    return runningKillOutcome(`Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`);
   }
 
   let processGroup = true;
@@ -723,7 +731,7 @@ async function killBackgroundJob(cwd) {
       process.kill(pid, "SIGTERM");
     } catch (pidError) {
       if (pidError?.code !== "ESRCH") {
-        return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`;
+        return runningKillOutcome(`Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`);
       }
     }
   }
@@ -732,34 +740,34 @@ async function killBackgroundJob(cwd) {
   try {
     terminated = await waitForSignalTargetExit(pid, processGroup);
   } catch (error) {
-    return `Failed to verify background EDC ${kind} ${status.run_id || "current"} termination: ${error?.message || "unknown error"}`;
+    return runningKillOutcome(`Failed to verify background EDC ${kind} ${status.run_id || "current"} termination: ${error?.message || "unknown error"}`);
   }
   if (!terminated) {
     try {
       process.kill(processGroup ? -pid : pid, "SIGKILL");
     } catch (error) {
       if (error?.code !== "ESRCH") {
-        return `Failed to force-kill background EDC ${kind} ${status.run_id || "current"}: ${error?.message || "unknown error"}`;
+        return runningKillOutcome(`Failed to force-kill background EDC ${kind} ${status.run_id || "current"}: ${error?.message || "unknown error"}`);
       }
     }
     try {
       terminated = await waitForSignalTargetExit(pid, processGroup);
     } catch (error) {
-      return `Failed to verify background EDC ${kind} ${status.run_id || "current"} force-kill: ${error?.message || "unknown error"}`;
+      return runningKillOutcome(`Failed to verify background EDC ${kind} ${status.run_id || "current"} force-kill: ${error?.message || "unknown error"}`);
     }
   }
   if (!terminated) {
-    return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${processGroup ? "process group" : "process"} ${pid} remained alive after SIGKILL.`;
+    return runningKillOutcome(`Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${processGroup ? "process group" : "process"} ${pid} remained alive after SIGKILL.`);
   }
 
   markRunningBackgroundCancelled(cwd, job.statusPath, status);
-  return [
+  return terminalKillOutcome([
     `Background EDC ${kind} killed.`,
     "",
     `Run ID: ${status.run_id || "current"}`,
     `PID: ${status.pid}`,
     status.log ? `Log: ${status.log}` : "",
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n"));
 }
 
 function renderBackgroundJobStatus(args, cwd) {
@@ -889,10 +897,14 @@ function interactiveOnlyMessage() {
 }
 
 async function killRunningJobAction(pi, ctx) {
-  const message = await killBackgroundJob(ctx.cwd);
-  stopBackgroundStatusWatcher();
-  clearBackgroundStatusUi(ctx);
-  sendInfo(pi, "edc-job-kill", message);
+  const outcome = await killBackgroundJob(ctx.cwd);
+  if (outcome.isTerminal) {
+    stopBackgroundStatusWatcher();
+    clearBackgroundStatusUi(ctx);
+  } else {
+    startBackgroundStatusWatcher(ctx);
+  }
+  sendInfo(pi, "edc-job-kill", outcome.message);
 }
 
 async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review", scope = "") {

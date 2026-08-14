@@ -93,6 +93,9 @@ cat > "$TMPDIR_T4/watchdog-bin/sleep" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "30" ]; then
   printf '%s %s\n' "$PPID" "$$" > "$EDC_T4_WATCHDOG_PIDS"
+  if [ "${EDC_T4_BREAK_WATCHDOG_SLEEP:-0}" = "1" ]; then
+    exit 86
+  fi
 fi
 exec "$EDC_T4_REAL_SLEEP" "$@"
 EOF
@@ -104,7 +107,12 @@ done
 printf '%s\n' "fallback-fast"
 exit 23
 EOF
-chmod +x "$TMPDIR_T4/watchdog-bin/sleep" "$TMPDIR_T4/watchdog-bin/fast-command"
+cat > "$TMPDIR_T4/watchdog-bin/long-command" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$$" > "$EDC_T4_COMMAND_PID"
+exec "$EDC_T4_REAL_SLEEP" 30
+EOF
+chmod +x "$TMPDIR_T4/watchdog-bin/sleep" "$TMPDIR_T4/watchdog-bin/fast-command" "$TMPDIR_T4/watchdog-bin/long-command"
 watchdog_pids="$TMPDIR_T4/watchdog-pids"
 (
   export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
@@ -155,6 +163,68 @@ if [ "$fallback_probe_running" -ne 0 ] || [ "$fallback_probe_rc" -ne 0 ] \
   exit 1
 fi
 echo "PASS: fallback fast command promptly reaps watchdog shell and timer"
+
+# ── 4d3: fallback fails closed when its timer process fails ───────────────────
+broken_watchdog_dir="$TMPDIR_T4/broken-watchdog"
+broken_watchdog_pids="$broken_watchdog_dir/watchdog-pids"
+broken_command_pid_file="$broken_watchdog_dir/command-pid"
+broken_result_file="$broken_watchdog_dir/result"
+broken_error_file="$broken_watchdog_dir/error"
+mkdir -p "$broken_watchdog_dir"
+(
+  export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
+  export TMPDIR="$broken_watchdog_dir"
+  export EDC_T4_REAL_SLEEP="$REAL_SLEEP"
+  export EDC_T4_WATCHDOG_PIDS="$broken_watchdog_pids"
+  export EDC_T4_COMMAND_PID="$broken_command_pid_file"
+  export EDC_T4_BREAK_WATCHDOG_SLEEP=1
+  TIMEOUT_BIN=""
+  EDC_TIMEOUT_WARNED=1
+  broken_rc=0
+  run_with_timeout 30 "broken-watchdog-test" long-command > /dev/null 2> "$broken_error_file" || broken_rc=$?
+  printf '%s\n' "$broken_rc" > "$broken_result_file"
+) &
+broken_probe_pid=$!
+broken_probe_running=1
+broken_poll=0
+while [ "$broken_poll" -lt 40 ]; do
+  if ! kill -0 "$broken_probe_pid" 2>/dev/null; then
+    broken_probe_running=0
+    break
+  fi
+  sleep 0.05
+  broken_poll=$((broken_poll + 1))
+done
+broken_probe_rc=0
+if [ "$broken_probe_running" -eq 0 ]; then
+  wait "$broken_probe_pid" || broken_probe_rc=$?
+fi
+broken_watchdog_shell_pid=""
+broken_watchdog_sleep_pid=""
+broken_command_pid=""
+[ ! -s "$broken_watchdog_pids" ] || read -r broken_watchdog_shell_pid broken_watchdog_sleep_pid < "$broken_watchdog_pids"
+[ ! -s "$broken_command_pid_file" ] || read -r broken_command_pid < "$broken_command_pid_file"
+broken_child_alive=0
+for broken_pid in "$broken_watchdog_shell_pid" "$broken_watchdog_sleep_pid" "$broken_command_pid"; do
+  if [ -n "$broken_pid" ] && kill -0 "$broken_pid" 2>/dev/null; then
+    broken_child_alive=1
+  fi
+done
+broken_result=0
+[ ! -s "$broken_result_file" ] || read -r broken_result < "$broken_result_file"
+broken_artifact=$(find "$broken_watchdog_dir" -name 'edc-timeout-*' -print -quit)
+if [ "$broken_probe_running" -ne 0 ] || [ "$broken_probe_rc" -ne 0 ] || [ "$broken_result" -eq 0 ] \
+  || ! grep -q 'fallback watchdog timer failed (exit 86)' "$broken_error_file" \
+  || [ "$broken_child_alive" -ne 0 ] || [ -n "$broken_artifact" ]; then
+  for cleanup_pid in "$broken_watchdog_sleep_pid" "$broken_watchdog_shell_pid" "$broken_command_pid" "$broken_probe_pid"; do
+    [ -z "$cleanup_pid" ] || kill "$cleanup_pid" 2>/dev/null || true
+  done
+  wait "$broken_probe_pid" 2>/dev/null || true
+  echo "FAIL: broken fallback timer did not fail closed (probe_running=$broken_probe_running probe_rc=$broken_probe_rc result=$broken_result child_alive=$broken_child_alive artifact=${broken_artifact:-none})"
+  [ ! -f "$broken_error_file" ] || cat "$broken_error_file"
+  exit 1
+fi
+echo "PASS: broken fallback timer fails closed and reaps all processes"
 
 # ── 4e: run_with_timeout fires on exceeded time ───────────────────────────────
 timeout_rc=0

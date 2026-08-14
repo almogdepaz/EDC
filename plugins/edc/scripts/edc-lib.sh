@@ -420,25 +420,48 @@ run_with_timeout() {
   # the command; the parent emits the diagnostic after observing that marker.
   # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
   # non-interactive scripts, which swallows here-strings passed to the caller.
-  local timeout_marker
+  local timeout_marker watchdog_sleep_pid_file
   timeout_marker=$(mktemp "${TMPDIR:-/tmp}/edc-timeout-$$.XXXXXX") || return 1
-  rm -f "$timeout_marker"
+  watchdog_sleep_pid_file="${timeout_marker}.watchdog-pid"
+  rm -f "$timeout_marker" "$watchdog_sleep_pid_file"
+  local cmd_pid="" watchdog_pid="" watchdog_sleep_pid=""
+  trap 'trap - TERM INT; [ -z "${cmd_pid:-}" ] || kill "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || kill "$watchdog_pid" 2>/dev/null || true; [ -z "${cmd_pid:-}" ] || wait "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || wait "$watchdog_pid" 2>/dev/null || true; rm -f "${timeout_marker:-}" "${watchdog_sleep_pid_file:-}"; exit 143' TERM INT
   exec 3<&0
   "$@" <&3 &
-  local cmd_pid=$!
-  local watchdog_pid=""
-  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; rm -f "${timeout_marker:-}"; exit 143' TERM INT
+  cmd_pid=$!
   exec 3<&-
-  # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
-  # the pipe write-end. If it did, the sleep (reparented to init when the
-  # subshell dies on kill) would keep the downstream `stream_filter` reader
-  # blocked for the full watchdog duration after the real command already exited.
-  (sleep "$secs" && kill -0 "$cmd_pid" 2>/dev/null && \
-    { : > "$timeout_marker"; kill "$cmd_pid" 2>/dev/null || true; }) >/dev/null &
+  (
+    watchdog_sleep_pid=""
+    trap 'trap - TERM INT; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || wait "$watchdog_sleep_pid" 2>/dev/null || true; exit 143' TERM INT
+    sleep "$secs" &
+    watchdog_sleep_pid=$!
+    printf '%s\n' "$watchdog_sleep_pid" > "$watchdog_sleep_pid_file"
+    if wait "$watchdog_sleep_pid"; then
+      if kill -0 "$cmd_pid" 2>/dev/null; then
+        : > "$timeout_marker"
+        kill "$cmd_pid" 2>/dev/null || true
+      fi
+    fi
+    trap - TERM INT
+  ) >/dev/null 2>&1 &
   watchdog_pid=$!
-  wait "$cmd_pid"
-  local rc=$?
-  kill "$watchdog_pid" 2>/dev/null || true
+  while [ ! -s "$watchdog_sleep_pid_file" ]; do
+    if ! kill -0 "$watchdog_pid" 2>/dev/null; then
+      wait "$watchdog_pid" 2>/dev/null || true
+      kill "$cmd_pid" 2>/dev/null || true
+      wait "$cmd_pid" 2>/dev/null || true
+      rm -f "$timeout_marker" "$watchdog_sleep_pid_file"
+      trap - TERM INT
+      echo "ERROR: phase '$label' fallback watchdog failed to start" >&2
+      return 1
+    fi
+    sleep 0.01
+  done
+  IFS= read -r watchdog_sleep_pid < "$watchdog_sleep_pid_file"
+  rm -f "$watchdog_sleep_pid_file"
+  local rc=0
+  wait "$cmd_pid" || rc=$?
+  kill "$watchdog_sleep_pid" 2>/dev/null || true
   wait "$watchdog_pid" 2>/dev/null || true
   if [ -f "$timeout_marker" ]; then
     echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2

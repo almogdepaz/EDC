@@ -5,6 +5,8 @@ set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
 ROOT="$(pwd)"
+TMPDIR_T4=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_T4"' EXIT
 # Per-phase run_with_timeout wraps now live in edc-lib.sh (SPAWN section); the build/update
 # spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
 SPAWN="plugins/edc/scripts/edc-lib.sh"
@@ -84,6 +86,76 @@ else
   exit 1
 fi
 
+# ── 4d2: fallback reaps its watchdog shell and timer on fast completion ───────
+REAL_SLEEP=$(command -v sleep)
+mkdir -p "$TMPDIR_T4/watchdog-bin"
+cat > "$TMPDIR_T4/watchdog-bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "30" ]; then
+  printf '%s %s\n' "$PPID" "$$" > "$EDC_T4_WATCHDOG_PIDS"
+fi
+exec "$EDC_T4_REAL_SLEEP" "$@"
+EOF
+cat > "$TMPDIR_T4/watchdog-bin/fast-command" <<'EOF'
+#!/usr/bin/env bash
+while [ ! -s "$EDC_T4_WATCHDOG_PIDS" ]; do
+  "$EDC_T4_REAL_SLEEP" 0.01
+done
+printf '%s\n' "fallback-fast"
+exit 23
+EOF
+chmod +x "$TMPDIR_T4/watchdog-bin/sleep" "$TMPDIR_T4/watchdog-bin/fast-command"
+watchdog_pids="$TMPDIR_T4/watchdog-pids"
+(
+  export PATH="$TMPDIR_T4/watchdog-bin:$PATH"
+  export EDC_T4_REAL_SLEEP="$REAL_SLEEP"
+  export EDC_T4_WATCHDOG_PIDS="$watchdog_pids"
+  TIMEOUT_BIN=""
+  EDC_TIMEOUT_WARNED=1
+  fallback_rc=0
+  fallback_output=$(run_with_timeout 30 "fallback-fast-test" fast-command 2>&1) || fallback_rc=$?
+  [ "$fallback_output" = "fallback-fast" ] && [ "$fallback_rc" -eq 23 ]
+) &
+fallback_probe_pid=$!
+fallback_probe_running=1
+fallback_poll=0
+while [ "$fallback_poll" -lt 40 ]; do
+  if ! kill -0 "$fallback_probe_pid" 2>/dev/null; then
+    fallback_probe_running=0
+    break
+  fi
+  sleep 0.05
+  fallback_poll=$((fallback_poll + 1))
+done
+fallback_probe_rc=0
+if [ "$fallback_probe_running" -eq 0 ]; then
+  wait "$fallback_probe_pid" || fallback_probe_rc=$?
+fi
+watchdog_shell_pid=""
+watchdog_sleep_pid=""
+if [ -s "$watchdog_pids" ]; then
+  read -r watchdog_shell_pid watchdog_sleep_pid < "$watchdog_pids"
+fi
+watchdog_shell_alive=0
+watchdog_sleep_alive=0
+if [ -n "$watchdog_shell_pid" ] && kill -0 "$watchdog_shell_pid" 2>/dev/null; then
+  watchdog_shell_alive=1
+fi
+if [ -n "$watchdog_sleep_pid" ] && kill -0 "$watchdog_sleep_pid" 2>/dev/null; then
+  watchdog_sleep_alive=1
+fi
+if [ "$fallback_probe_running" -ne 0 ] || [ "$fallback_probe_rc" -ne 0 ] \
+  || [ -z "$watchdog_shell_pid" ] || [ -z "$watchdog_sleep_pid" ] \
+  || [ "$watchdog_shell_alive" -ne 0 ] || [ "$watchdog_sleep_alive" -ne 0 ]; then
+  for cleanup_pid in "$watchdog_sleep_pid" "$watchdog_shell_pid" "$fallback_probe_pid"; do
+    [ -z "$cleanup_pid" ] || kill "$cleanup_pid" 2>/dev/null || true
+  done
+  wait "$fallback_probe_pid" 2>/dev/null || true
+  echo "FAIL: fallback fast command leaked or blocked (probe_running=$fallback_probe_running probe_rc=$fallback_probe_rc watchdog_shell_alive=$watchdog_shell_alive watchdog_sleep_alive=$watchdog_sleep_alive)"
+  exit 1
+fi
+echo "PASS: fallback fast command promptly reaps watchdog shell and timer"
+
 # ── 4e: run_with_timeout fires on exceeded time ───────────────────────────────
 timeout_rc=0
 run_with_timeout 1 "slow-test" sleep 5 2>/tmp/t4-timeout-err.txt || timeout_rc=$?
@@ -109,9 +181,6 @@ else
 fi
 
 # ── 4f: pipe guards — null-check on read_meta_last_commit ────────────────────
-TMPDIR_T4=$(mktemp -d)
-trap 'rm -rf "$TMPDIR_T4"' EXIT
-
 cd "$TMPDIR_T4"
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null

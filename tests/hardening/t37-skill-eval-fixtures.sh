@@ -17,6 +17,8 @@ for lens in audit security delivery; do
   check "$lens has at least 3 fixtures" "$([ "${count:-0}" -ge 3 ] && echo 1 || echo 0)"
 done
 
+check "audit fixtures cover simplification tags and antipattern overlap" "$(grep -E -r -q 'stdlib|native|yagni|cargo cult|shooting the messenger|boat anchor' "$FIXTURES/audit" && echo 1 || echo 0)"
+
 node_ok=0
 if node --input-type=module - "$FIXTURES" <<'NODE'
 import assert from "node:assert/strict";

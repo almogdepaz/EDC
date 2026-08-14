@@ -71,15 +71,12 @@ The user's agent session uses thin command wrappers that call deterministic orch
 
 1. Validates context freshness (`edc-context/manifest.json.sourceCommit` vs HEAD)
 2. Auto-rebuilds or auto-updates context if stale (via `edc-recover-context.sh`)
-3. Spawns one fresh `<agent> -p` subprocess per module with the skill content
-   piped as the prompt (`edc-resolve-prompt`)
-4. For review: routes changed files through `edc-context/manifest.json` and consolidates per-module reports into a single review file
+3. Materializes validated task manifests under `.git/edc/runs/<run-id>/` and launches fresh module workers through a bounded coordinator-owned pool
+4. Validates staged worker outputs before deterministic synthesis/consolidation and canonical promotion
 
 Review task routing is explicit: mapped files get their module context, unexpected unmapped files are reviewed under the synthetic `unmapped` bucket with repo-level context only, and files matching `unmapped.allowedGlobs` are intentionally skipped but represented by a deterministic `allowed-unmapped` report.
 
-Each subprocess is a fresh context with a single instruction. The driving
-session does not perform analysis itself — it spawns workers and verifies
-their outputs.
+Each subprocess is a fresh context with one declared task and output set. Models do not launch agents or choose process flags; the runtime owns concurrency, timeout/cancellation, provenance, logs, and promotion.
 
 ## Skill files as prompt templates
 
@@ -109,8 +106,9 @@ spawns subprocesses:
 - `codex`  → `codex exec`
 - `pi`     → `pi --mode json`
 
-`scripts/edc-lib.sh` centralizes the per-agent subprocess dispatch, prompt
-resolution, pi JSON supervision, and codex-home isolation.
+`scripts/edc-lib.sh` centralizes per-agent dispatch, prompt resolution, pi JSON supervision, worker task manifests, and codex-home isolation. `EDC_MAX_CONCURRENCY` defaults to `4` (`1` is serial fallback).
+
+Pi worker discovery is always disabled with `--no-extensions`. Operators may load exactly one approved prompt-neutral extension by setting `EDC_PI_EXTENSION_PATH` to an absolute readable entrypoint. For agent-observer, point it at the installed/built `extension.ts` or JavaScript entrypoint. Workers receive structured run/task/phase/module environment provenance.
 
 ## Context lifecycle
 
@@ -126,7 +124,8 @@ resolution, pi JSON supervision, and codex-home isolation.
 
 ```bash
 edc review full --agent pi             # combined full repo review
-edc review diff main --agent pi        # combined current branch vs main
+edc review diff main --agent pi --include-working-tree  # complete dirty candidate vs main
+edc review diff main --agent pi --committed-only        # committed HEAD vs main
 edc security full --agent pi           # security full repo review
 edc security diff main --agent pi      # security current branch vs main
 edc delivery full --agent pi           # delivery/architecture full repo review
@@ -138,6 +137,8 @@ edc-review.sh --pr 42 --base main      # lower-level security PR by number (uses
 edc-review.sh https://github.com/...   # lower-level security PR by URL (uses gh)
 edc-review.sh path/to/diff.patch       # lower-level security diff file
 ```
+
+Dirty differential review requires `--include-working-tree` or `--committed-only`; clean trees need neither. Include mode creates one immutable synthetic commit shared by the parallel security, delivery, and quality lenses. It includes staged, unstaged, deleted, and non-ignored untracked files, recursively snapshots dirty initialized submodules, and does not change HEAD, refs, or any real index. Combined review prepares context once, launches all lenses concurrently, waits for every lens even after a sibling failure, then promotes validated reports.
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.
 Use `--ignore-context` for a pure direct review with no context build/update and

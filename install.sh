@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.1}"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -152,39 +152,10 @@ skill_rel() {
 }
 
 install_terminal_cli() {
-  local scripts_target="$HOME/.edc/scripts"
-  local hooks_target="$HOME/.edc/hooks/lib"
-  mkdir -p "$scripts_target" "$hooks_target"
-
-  local runtime_install_entries=(
-    "plugins/edc/scripts/edc|$scripts_target/edc|x"
-    "plugins/edc/scripts/edc-review.sh|$scripts_target/edc-review.sh|x"
-    "plugins/edc/scripts/edc-review-all.sh|$scripts_target/edc-review-all.sh|x"
-    "plugins/edc/scripts/edc-delivery-review.sh|$scripts_target/edc-delivery-review.sh|x"
-    "plugins/edc/scripts/edc-build.sh|$scripts_target/edc-build.sh|x"
-    "plugins/edc/scripts/edc-update.sh|$scripts_target/edc-update.sh|x"
-    "plugins/edc/scripts/edc-audit.sh|$scripts_target/edc-audit.sh|x"
-    "plugins/edc/scripts/edc-doctor.sh|$scripts_target/edc-doctor.sh|x"
-    "plugins/edc/scripts/edc-manifest.sh|$scripts_target/edc-manifest.sh|x"
-    "plugins/edc/hooks/lib/classify-cli.mjs|$hooks_target/classify-cli.mjs|x"
-    "plugins/edc/hooks/lib/json-cli.mjs|$hooks_target/json-cli.mjs|x"
-    "plugins/edc/hooks/lib/pi-supervisor.mjs|$hooks_target/pi-supervisor.mjs|x"
-    "plugins/edc/hooks/lib/stream-filter.mjs|$hooks_target/stream-filter.mjs|x"
-    "plugins/edc/hooks/lib/route.mjs|$hooks_target/route.mjs|"
-    "plugins/edc/hooks/lib/paths.mjs|$hooks_target/paths.mjs|"
-    "plugins/edc/scripts/edc-clean-slate.sh|$scripts_target/edc-clean-slate.sh|x"
-    "plugins/edc/scripts/edc-lib.sh|$scripts_target/edc-lib.sh|"
-    "plugins/edc/scripts/edc-assert-fresh.sh|$scripts_target/edc-assert-fresh.sh|x"
-    "plugins/edc/scripts/edc-recover-context.sh|$scripts_target/edc-recover-context.sh|x"
-    "plugins/edc/scripts/edc-build-plan.sh|$scripts_target/edc-build-plan.sh|x"
-  )
-
-  local entry src dst executable
-  for entry in "${runtime_install_entries[@]}"; do
-    IFS='|' read -r src dst executable <<< "$entry"
-    copy_from_source "$src" "$dst"
-    [ "$executable" = "x" ] && chmod +x "$dst"
-  done
+  local runtime_manifest="$SCRIPT_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs"
+  [ -f "$runtime_manifest" ] || die "installer source missing: plugins/edc/hooks/lib/runtime-manifest.mjs"
+  command -v node >/dev/null 2>&1 || die "node is required for EDC runtime installation"
+  node "$runtime_manifest" install "$HOME" "$SCRIPT_DIR/plugins/edc" >/dev/null
 
   install_shell_path
 }

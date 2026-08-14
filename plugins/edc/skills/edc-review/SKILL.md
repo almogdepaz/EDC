@@ -40,9 +40,9 @@ The `edc-review.sh` orchestrator invokes this mode for per-module security revie
    - `edc-context/modules/{module}.md`
 5. Scope review strictly to listed files. Inspect callers/dependencies only when security blast radius or reachability requires it.
 6. Follow `methodology.md`, `adversarial.md`, `patterns.md`, and `reporting.md`.
-7. Write `edc-context/review-tasks/report-{module}.md`. The report file is mandatory.
+7. Read the exact report destination from the task file's `Write your report to` instruction and write that task-declared report path. The report file is mandatory.
 
-Do not write elsewhere, update `manifest.json`, or consolidate. The orchestrator handles consolidation.
+This is a read-only review. Do not mutate source, tests, git state, context, or plans. Write only the task-declared report path; the orchestrator handles consolidation.
 
 ### Mode B — standalone
 

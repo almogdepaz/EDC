@@ -312,27 +312,17 @@ The agent must:
 
 ---
 
-## 8. Target Granularity & Subagent Usage
+## 8. Target Granularity & Coordinator Ownership
 
-This skill governs analysis of a **single target**. The target may be a whole repository, one module, or one submodule. The invoking orchestrator decides granularity; this skill does not pick its own scope.
+This skill governs analysis of a **single target**. The target may be a whole repository, one module, or one submodule. The deterministic orchestrator decides granularity; this worker does not pick its own scope or launch other agents.
 
-When invoked from the v2 build orchestrator (`edc-build-impl`), this skill is spawned **per-module**: the agent's target is one module, sibling modules are accessed only through their signature index (no sibling source bodies), and the orchestrator never reads source code itself.
+In a v2 build, the worker receives exactly one module. Sibling modules are accessed only through coordinator-supplied signatures or staged docs; do not read sibling source bodies.
 
-**Large target rule.** If the target is broad or exceeds the agent's working budget (heuristic: > ~30k LOC, > ~80 source files, or any single file > ~3k LOC), preserve the whole-target mental model first. Produce a concise parent context that explains the shared authority, invariants, coupling, and failure modes across the target. For broad test/tooling/support targets, add internal sub-routing or harness/workflow guidance so future agents can choose the right source/test area without losing the general context.
+**Large target rule.** If the target is broad or exceeds the working budget (heuristic: > ~30k LOC, > ~80 source files, or any single file > ~3k LOC), preserve the whole-target mental model first. Produce concise parent context explaining shared authority, invariants, coupling, and failure modes. For broad test/tooling/support targets, add internal sub-routing or harness/workflow guidance so future agents can choose the right source/test area without losing general context.
 
 Do not split solely because LOC or file count is high. Large coherent modules often need one general context doc so agents can reason across files. Split or promote only when subareas have independent durable ownership contracts, separate authority boundaries, or unrelated verification workflows that would make one parent doc misleading. If splitting would produce filesystem shards or inventory docs, keep the parent doc and add internal routing guidance instead.
 
-Subagents (nested or top-level) must:
-- Run with a clean context (no parent conversation inheritance).
-- Follow the same micro-first rules defined in this skill.
-- Write distilled high-signal context directly to disk at the path the orchestrator specifies.
-- Return a bounded summary (≤500 tokens) for the parent to integrate.
-
-Within a single-target run, the agent may also spawn nested subagents for:
-- Dense or complex individual functions.
-- Long data-flow or control-flow chains spanning many files within the target.
-- Cryptographic / mathematical logic.
-- Complex state machines.
+Run with clean context, follow the micro-first rules, write distilled context only to the coordinator-declared path, and return a bounded summary. Do not invoke skills or agents as processes.
 
 ---
 

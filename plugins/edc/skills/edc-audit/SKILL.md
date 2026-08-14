@@ -7,7 +7,7 @@ description: Identifies code quality, maintainability, overengineering, bloat, d
 
 Analyze code quality and maintainability using the `edc-context/` files as the baseline for what the code SHOULD look like. This is a read-only scoped analysis pass: audit workers must not mutate source code, branch state, generated context, or canonical reports outside their assigned report artifact.
 
-**Clean Slate Rule:** When spawning subagents for analysis, they MUST be fresh agents with NO access to the current conversation context. This prevents bias from user discussion influencing findings. See `edc-build-impl` for rationale.
+**Clean Slate Rule:** The deterministic coordinator launches each audit worker without parent conversation context. This worker must analyze only its assigned scope and must not launch other agents.
 
 ## Required references
 

@@ -83,5 +83,17 @@ Each finding in either report should include:
 - what the problem is
 - where it appears (`file:line` where practical)
 - why it matters
-- whether it violates a cited standard or is a possible smell / judgement call
+- whether it violates a cited standard, antipattern catalog overlap, or is a possible smell / judgement call
 - suggested simplification or fix in one sentence
+- simplification tag where applicable: `delete:`, `stdlib:`, `native:`, `yagni:`, or `shrink:`
+- estimated removal only when obvious: `estimated removal: ~N lines / M deps`
+
+For pure simplification/bloat findings, prefer the compact form:
+
+```md
+- file:Lx-Ly: yagni: factory with one product. Inline constructor. estimated removal: ~40 lines.
+```
+
+Rank biggest cuts first inside each report section when severity is otherwise equal.
+
+If a scoped worker finds no code-quality findings, write exactly enough structure to prove the scan ran, then say: `Lean already. Ship.` Do not pad with generic recommendations.

@@ -24,6 +24,7 @@ setup_repo() {
   printf 'two\n' > src/a.txt
   git add src/a.txt
   git commit -q -m change
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_fake_pi() {
@@ -31,8 +32,17 @@ write_fake_pi() {
   cat > "$TMP/bin/pi" <<'FAKE_PI'
 #!/bin/sh
 set -eu
-mkdir -p edc-context/review-tasks
-printf '## Findings\n\nmock review via pi\n' > edc-context/review-tasks/report-ignore-context.md
+prompt_file=""
+for arg in "$@"; do
+  case "$arg" in @*) prompt_file=${arg#@} ;; esac
+done
+[ -n "$prompt_file" ] || { echo 'missing pi prompt file' >&2; exit 2; }
+task_path=$(grep '^TASK FILE: ' "$prompt_file" | head -1 | sed 's/^TASK FILE: //')
+[ -n "$task_path" ] || { echo 'missing task path in prompt' >&2; exit 2; }
+module=$(basename "$task_path" .md)
+task_dir=$(dirname "$task_path")
+mkdir -p "$task_dir"
+printf '## Findings\n\nmock review via pi\n' > "$task_dir/report-$module.md"
 printf '{"type":"result","is_error":false,"result":"ok"}\n'
 printf '{"type":"agent_end","messages":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"ok"}]}]}\n'
 FAKE_PI
@@ -46,20 +56,36 @@ unset EDC_BASH
 PATH="$TMP/bin:$PATH" \
 EDC_AGENT_CLI=pi \
 EDC_KEEP_REVIEW_TASKS=1 \
-bash "$SCRIPT" HEAD --base HEAD~1 --ignore-context >out.log 2>err.log
+bash "$SCRIPT" HEAD --base HEAD~1 --committed-only --ignore-context >.git/t19-out.log 2>.git/t19-err.log
 rc=$?
 
 if [ "$rc" -eq 0 ] && [ -f review-HEAD.md ] && grep -q 'mock review via pi' review-HEAD.md; then
   check "19.1: review auto-mode runs without EDC_BASH" 1
 else
   check "19.1: review auto-mode runs without EDC_BASH" 0
-  cat out.log err.log
+  cat .git/t19-out.log .git/t19-err.log
 fi
 
 if env | grep -q '^EDC_BASH='; then
   check "19.2: EDC_BASH stays unset in test process" 0
 else
   check "19.2: EDC_BASH stays unset in test process" 1
+fi
+
+mkdir -p "$TMP/runtime/scripts" "$TMP/runtime/hooks/lib" "$TMP/edc-context"
+cp "$ROOT/plugins/edc/scripts/edc" "$TMP/runtime/scripts/edc"
+cp -R "$ROOT/plugins/edc/hooks/lib/." "$TMP/runtime/hooks/lib/"
+cat >"$TMP/runtime/scripts/edc-audit.sh" <<'FAKE_AUDIT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$EDC_PI_INJECT_ARGS"
+FAKE_AUDIT
+chmod +x "$TMP/runtime/scripts/edc" "$TMP/runtime/scripts/edc-audit.sh"
+printf '{"schemaVersion":2,"policy":{"defaultMode":"inject"}}\n' >"$TMP/edc-context/manifest.json"
+if (cd "$TMP" && PATH="$TMP/bin:$PATH" EDC_PI_INJECT_ARGS="$TMP/pi-inject-args" EDC_BUILD_MODEL=test/build EDC_REVIEW_MODEL=test/review bash runtime/scripts/edc quality full --agent pi) \
+  && [ -f "$TMP/pi-inject-args" ]; then
+  check "19.3: terminal quality review accepts pi inject mode" 1
+else
+  check "19.3: terminal quality review accepts pi inject mode" 0
 fi
 
 echo

@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
+ORIG_DIR="$(pwd)"
 TMPDIR_T3=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T3"' EXIT
 
@@ -18,6 +19,7 @@ git config user.email "test@test.com"
 git config user.name "Test"
 git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
+node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T3" "$ORIG_DIR/plugins/edc" >/dev/null
 HEAD=$(git rev-parse HEAD)
 
 # ── 3a: assert_context_fresh rejects index.md without ## headings ─────────────
@@ -28,7 +30,7 @@ EOF
 printf 'plain text with no headings at all\n' > edc-context/index.md
 
 result=0
-bash "$(cd - > /dev/null && pwd)/$SCRIPT" --check-context 2>"$TMPDIR_T3/stderr.txt" || result=$?
+bash "$ORIG_DIR/$SCRIPT" --check-context 2>"$TMPDIR_T3/stderr.txt" || result=$?
 if [ "$result" -ne 0 ] && grep -q "no '## ' headings" "$TMPDIR_T3/stderr.txt"; then
   echo "PASS: index.md without ## headings rejected with descriptive error"
 else
@@ -55,7 +57,6 @@ sed -i.bak "s/\"head\": \"HEAD\"/\"head\": \"$HEAD\"/" edc-context/review-tasks/
 
 printf 'just plain text with zero markdown structure\n' > edc-context/review-tasks/report-foo.md
 
-ORIG_DIR="$(cd - > /dev/null && pwd)"
 result=0
 bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
 if [ "$result" -ne 0 ] && grep -q "no '## ' headings" "$TMPDIR_T3/stderr.txt"; then

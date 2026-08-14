@@ -82,7 +82,7 @@ edc update --agent pi --base <default-branch>
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope, then lens. `diff` without a base uses the detected default branch. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, and quality concurrently against one candidate. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
 
 ## Background job state
 
@@ -118,6 +118,18 @@ Known interactions:
 - Context-pruning packages are safest with EDC's default `advisory` mode. In `inject` mode, EDC intentionally adds repo/module context messages to the session.
 - Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may block or redirect EDC's normal `bash`, `edit`, and `write` activity. That is expected plugin behavior, not an EDC bypass target.
 - Build/update/review/delivery-review/quality-review need the requirements and write permissions listed above.
+
+### Observing EDC pi workers
+
+EDC pi workers use `--no-extensions` to prevent arbitrary extension discovery. To load one explicitly approved prompt-neutral observer, configure its absolute entrypoint:
+
+```text
+# ~/.edc/config
+EDC_PI_EXTENSION_PATH=/absolute/path/to/agent_observer/src/extension.ts
+EDC_MAX_CONCURRENCY=4
+```
+
+EDC then invokes each worker with `--no-extensions -e <path>`. The observer can register every coordinator-launched worker while unrelated global/project extensions remain disabled. Run/task/phase/module provenance is also available in `EDC_RUN_ID`, `EDC_TASK_ID`, `EDC_TASK_PHASE`, and `EDC_TASK_MODULE`. Worker artifacts live under `.git/edc/runs/<run-id>/`.
 
 ## Modes
 

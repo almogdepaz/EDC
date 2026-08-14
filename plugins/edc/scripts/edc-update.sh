@@ -118,6 +118,7 @@ auto_detect_base() {
 update_main() {
   edc_result_begin update
   trap edc_result_on_exit EXIT
+  edc_runtime_preflight_or_exit
   local base=""
   local -a passthrough=()
 

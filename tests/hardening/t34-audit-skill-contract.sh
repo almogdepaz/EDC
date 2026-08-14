@@ -53,6 +53,15 @@ for category in \
   check "audit includes quality category: $category" "$(has "$category" && echo 1 || echo 0)"
 done
 
+check "audit includes simplification ladder" "$(has "Simplification ladder" && has "existing repo helper" && has "standard library" && has "native platform" && has "installed dependency" && has "one line" && has "minimum custom code" && echo 1 || echo 0)"
+check "audit includes ponytail simplification tags" "$(has "delete:" && has "stdlib:" && has "native:" && has "yagni:" && has "shrink:" && echo 1 || echo 0)"
+check "audit orders by simplification impact" "$(has "rank biggest cuts first" && has "estimated removal" && echo 1 || echo 0)"
+check "audit can stop on no findings" "$(has "Lean already. Ship." && echo 1 || echo 0)"
+check "audit includes root-cause fix heuristic" "$(has "root-cause fix" && has "grep every caller" && echo 1 || echo 0)"
+check "audit includes smallest runnable check heuristic" "$(has "smallest runnable check" && echo 1 || echo 0)"
+check "audit includes accepted debt marker" "$(has "edc-debt:" && has "upgrade when" && echo 1 || echo 0)"
+check "audit includes antipattern catalog overlap" "$(has "Antipattern catalog overlap" && has "boat anchor" && has "cargo cult" && has "action at a distance" && has "magic pushbutton" && has "soft code" && has "shooting the messenger" && echo 1 || echo 0)"
+
 for smell in \
   "mysterious name" \
   "feature envy" \

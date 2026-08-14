@@ -79,6 +79,7 @@ mkdir -p "$STAGE/plugins/edc/hooks/lib"
 cp plugins/edc/hooks/lib/classify-cli.mjs "$STAGE/plugins/edc/hooks/lib/"
 cp plugins/edc/hooks/lib/route.mjs        "$STAGE/plugins/edc/hooks/lib/"
 cp plugins/edc/hooks/lib/paths.mjs        "$STAGE/plugins/edc/hooks/lib/"
+cp plugins/edc/hooks/lib/runtime-manifest.mjs "$STAGE/plugins/edc/hooks/lib/"
 cp "$TMP/manifest.json" "$STAGE/manifest.json"
 
 no_shell=$(printf '%s\n' "src/sub/foo.ts" | node "$STAGE/plugins/edc/hooks/lib/classify-cli.mjs" "$STAGE/manifest.json" 2>&1 | awk -F '\t' 'NR == 1 {print $2}')

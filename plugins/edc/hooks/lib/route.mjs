@@ -13,11 +13,6 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
-  copyFileSync,
-  statSync,
-  chmodSync,
-  mkdirSync,
-  readdirSync,
 } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -30,6 +25,7 @@ import {
   EDC_INDEX_REL,
   EDC_MODULES_DIR_REL,
 } from "./paths.mjs";
+import { installRuntime } from "./runtime-manifest.mjs";
 
 // --- plugin layout ---
 
@@ -402,117 +398,10 @@ function isEdcProject(projectRoot) {
 export function installOrchestratorScript(projectRoot, pluginRoot) {
   if (!isEdcProject(projectRoot)) return;
 
-  installScriptFiles(projectRoot, pluginRoot);
-  installClassifierRuntime(projectRoot, pluginRoot);
-  installPrivatePromptBundles(projectRoot, pluginRoot);
-}
-
-function shouldCopyFile(src, dst) {
-  if (!existsSync(dst)) return true;
   try {
-    return statSync(src).mtimeMs > statSync(dst).mtimeMs;
-  } catch {
-    return true;
-  }
-}
-
-function installScriptFiles(projectRoot, pluginRoot) {
-  const sourceDir = join(pluginRoot, "scripts");
-  if (!existsSync(sourceDir)) return;
-
-  const destDir = join(projectRoot, ".edc", "scripts");
-
-  let scriptNames;
-  try {
-    scriptNames = readdirSync(sourceDir).filter(
-      (name) => name === "edc" || (name.endsWith(".sh") && name !== "edc-spawn-analyze.sh"),
-    );
-  } catch {
-    return;
-  }
-
-  for (const scriptName of scriptNames) {
-    const pluginScript = join(sourceDir, scriptName);
-    const destScript = join(destDir, scriptName);
-    if (!shouldCopyFile(pluginScript, destScript)) continue;
-
-    try {
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(pluginScript, destScript);
-      chmodSync(destScript, 0o755);
-    } catch (err) {
-      process.stderr.write(
-        `[edc] WARNING: could not install ${scriptName}: ${err.message}\n`,
-      );
-    }
-  }
-}
-
-function installClassifierRuntime(projectRoot, pluginRoot) {
-  const sourceDir = join(pluginRoot, "hooks", "lib");
-  const destDir = join(projectRoot, ".edc", "hooks", "lib");
-  for (const fileName of ["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs", "route.mjs", "paths.mjs"]) {
-    const src = join(sourceDir, fileName);
-    const dst = join(destDir, fileName);
-    if (!existsSync(src) || !shouldCopyFile(src, dst)) continue;
-    try {
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(src, dst);
-      if (["classify-cli.mjs", "json-cli.mjs", "pi-supervisor.mjs", "stream-filter.mjs"].includes(fileName)) chmodSync(dst, 0o755);
-    } catch (err) {
-      process.stderr.write(
-        `[edc] WARNING: could not install classifier runtime ${fileName}: ${err.message}\n`,
-      );
-    }
-  }
-}
-
-function installPrivatePromptBundles(projectRoot, pluginRoot) {
-  const bundleRoots = [join(pluginRoot, "prompt-bundles"), join(pluginRoot, "skills")];
-  const destRoot = join(projectRoot, ".edc", "skills");
-
-  for (const bundleRoot of bundleRoots) {
-    if (!existsSync(bundleRoot)) continue;
-    let bundleNames;
-    try {
-      bundleNames = readdirSync(bundleRoot).filter((name) =>
-        existsSync(join(bundleRoot, name, "SKILL.md")),
-      );
-    } catch {
-      continue;
-    }
-
-    for (const bundleName of bundleNames) {
-      copyTreeIfStale(join(bundleRoot, bundleName), join(destRoot, bundleName));
-    }
-  }
-}
-
-function copyTreeIfStale(sourceDir, destDir) {
-  let entries;
-  try {
-    entries = readdirSync(sourceDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  for (const entry of entries) {
-    const src = join(sourceDir, entry.name);
-    const dst = join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      copyTreeIfStale(src, dst);
-      continue;
-    }
-    if (!entry.isFile() || !shouldCopyFile(src, dst)) continue;
-
-    try {
-      mkdirSync(destDir, { recursive: true });
-      copyFileSync(src, dst);
-    } catch (err) {
-      process.stderr.write(
-        `[edc] WARNING: could not install prompt bundle file ${entry.name}: ${err.message}\n`,
-      );
-    }
+    installRuntime(projectRoot, pluginRoot);
+  } catch (err) {
+    process.stderr.write(`[edc] WARNING: could not install project runtime: ${err.message}\n`);
   }
 }
 

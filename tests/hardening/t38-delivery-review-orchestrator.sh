@@ -61,17 +61,12 @@ setup_repo() {
   git add src/app.ts
   git commit -q -m change
 
-  mkdir -p edc-context/modules .edc/skills/edc-delivery-review/references .edc/skills/edc-build-impl .edc/skills/edc-update-impl
+  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T38/repo" "$ROOT/plugins/edc" >/dev/null
+  mkdir -p edc-context/modules
   printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
   printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md
   head=$(git rev-parse HEAD)
   printf '{"schemaVersion":2,"sourceCommit":"%s","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' "$head" > edc-context/manifest.json
-  printf 'DELIVERY_SKILL_MARKER\n' > .edc/skills/edc-delivery-review/SKILL.md
-  printf 'SPEC_AXIS_MARKER\n' > .edc/skills/edc-delivery-review/references/spec-axis.md
-  printf 'ARCH_AXIS_MARKER\n' > .edc/skills/edc-delivery-review/references/architecture-axis.md
-  printf 'REPORTING_MARKER\n' > .edc/skills/edc-delivery-review/references/reporting.md
-  printf '# Build\n' > .edc/skills/edc-build-impl/SKILL.md
-  printf '# Update\n' > .edc/skills/edc-update-impl/SKILL.md
 }
 
 export PATH="$MOCK_BIN:$PATH"
@@ -90,12 +85,14 @@ if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q 'DELIVERY_BASE_REF: HEAD~1' "$TMPDIR_T38/last-prompt" \
   && grep -q "DELIVERY_TARGET_COMMIT: $head_sha" "$TMPDIR_T38/last-prompt" \
   && grep -q "DELIVERY_BASE_COMMIT: $base_sha" "$TMPDIR_T38/last-prompt" \
-  && grep -q 'Dirty tracked files: git diff --name-only && git diff --cached --name-only' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'Dirty tracked patch: git diff && git diff --cached' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'DELIVERY_SKILL_MARKER' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'SPEC_AXIS_MARKER' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'ARCH_AXIS_MARKER' "$TMPDIR_T38/last-prompt" \
-  && grep -q 'REPORTING_MARKER' "$TMPDIR_T38/last-prompt" \
+  && ! grep -q 'Dirty tracked files:' "$TMPDIR_T38/last-prompt" \
+  && ! grep -q 'Dirty tracked patch:' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'Changed gitlinks:' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'git -C <submodule-path> diff' "$TMPDIR_T38/last-prompt" \
+  && grep -q 'name: edc-delivery-review' "$TMPDIR_T38/last-prompt" \
+  && grep -q '# Goal / Spec Delivery Axis' "$TMPDIR_T38/last-prompt" \
+  && grep -q '# Architecture Fit Axis' "$TMPDIR_T38/last-prompt" \
+  && grep -q '# Delivery / Architecture Reporting' "$TMPDIR_T38/last-prompt" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" && j.finalReview === "delivery-review-HEAD.md" ? 0 : 1)'; then
   echo "PASS: delivery-review writes report from embedded skill bundle"
 else
@@ -111,6 +108,33 @@ else
   exit 1
 fi
 unset EDC_REVIEW_MODEL
+
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+printf 'dirty\n' >> src/app.ts
+rm -f "$TMPDIR_T38/last-prompt"
+set +e
+dirty_out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1)
+dirty_rc=$?
+set -e
+if [ "$dirty_rc" -eq 2 ] \
+  && [ ! -f "$TMPDIR_T38/last-prompt" ] \
+  && grep -q -- '--include-working-tree' <<<"$dirty_out" \
+  && grep -q -- '--committed-only' <<<"$dirty_out"; then
+  echo "PASS: standalone dirty delivery review fails before agent execution"
+else
+  echo "FAIL: standalone dirty delivery review did not fail before agent execution (rc=$dirty_rc)"
+  echo "$dirty_out"
+  exit 1
+fi
+if bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >/dev/null 2>&1 \
+  && grep -q 'DELIVERY_TARGET_COMMIT:' "$TMPDIR_T38/last-prompt" \
+  && ! grep -q 'Dirty tracked patch:' "$TMPDIR_T38/last-prompt"; then
+  echo "PASS: standalone committed-only delivery review excludes dirty patch authority"
+else
+  echo "FAIL: standalone committed-only delivery review failed"
+  exit 1
+fi
 
 setup_repo
 echo valid > "$TMPDIR_T38/scenario"

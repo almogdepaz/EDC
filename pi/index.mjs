@@ -26,6 +26,21 @@ import {
   getContextFreshness,
   installOrchestratorScript,
 } from "../plugins/edc/hooks/lib/route.mjs";
+import { BACKGROUND_JOB_TERMINATION_GRACE_MS } from "../plugins/edc/hooks/lib/termination-policy.mjs";
+import { argTokens, renderArgs, renderShellArgs, shellQuote, tokenizeArgs } from "./lib/args.mjs";
+import {
+  backgroundJobAlreadyRunningMessage,
+  backgroundJobStartedMessage,
+  renderBackgroundFooterStatus,
+} from "./lib/background-result.mjs";
+import {
+  applyDirtyReviewPolicy,
+  defaultBaseReviewArgs,
+  defaultBaseUpdateArgs,
+  reviewContextSummary,
+  reviewDeclinedMessage,
+  shouldProceedWithReview,
+} from "./lib/review-scope.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // pi/index.mjs → repo root → plugins/edc
@@ -70,35 +85,16 @@ const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
 const EDC_BACKGROUND_STARTING_STALE_MS = 60 * 1000;
 const EDC_BACKGROUND_UI_KEY = "edc-review";
 const EDC_BACKGROUND_UI_POLL_MS = 2000;
+const EDC_BACKGROUND_TERMINATION_POLL_MS = 25;
+const EDC_LOCAL_COMMAND_TIMEOUT_MS = 10000;
 
 let backgroundStatusTimer = null;
-
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
 
 function currentPiModelSlug(ctx) {
   const provider = ctx?.model?.provider;
   const id = ctx?.model?.id;
   if (typeof provider !== "string" || typeof id !== "string") return "";
   return `${provider}/${id}`;
-}
-
-function tokenizeArgs(args) {
-  return String(args || "").trim().split(/\s+/).filter(Boolean);
-}
-
-function argTokens(args) {
-  if (Array.isArray(args)) return args.map(String).filter((arg) => arg.length > 0);
-  return tokenizeArgs(args);
-}
-
-function renderArgs(args) {
-  return argTokens(args).join(" ");
-}
-
-function renderShellArgs(args) {
-  return argTokens(args).map(shellQuote).join(" ");
 }
 
 function isHelpRequest(args) {
@@ -144,11 +140,6 @@ function sendInfo(pi, customType, content) {
   pi.sendMessage({ customType, content, display: true });
 }
 
-function reviewSkipsContextPrompt(args) {
-  const tokens = argTokens(args);
-  return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
-}
-
 function isEdcOrchestratorCommand(command) {
   const scriptName = "edc-(?:build|update|review|review-all|delivery-review|audit|doctor)\\.sh";
   return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
@@ -166,130 +157,6 @@ function extendEdcBashTimeout(event) {
   }
 }
 
-function gitRefExists(cwd, ref) {
-  try {
-    execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
-      cwd,
-      timeout: 3000,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function detectDefaultBaseRef(cwd) {
-  try {
-    const remoteHead = execFileSync("git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
-      cwd,
-      timeout: 3000,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (remoteHead && gitRefExists(cwd, remoteHead)) return remoteHead;
-  } catch {
-    // origin/HEAD is optional in local/test repos.
-  }
-
-  for (const ref of ["main", "master", "origin/main", "origin/master"]) {
-    if (gitRefExists(cwd, ref)) return ref;
-  }
-
-  return "main";
-}
-
-function defaultBaseReviewArgs(cwd) {
-  return ["HEAD", "--base", detectDefaultBaseRef(cwd)];
-}
-
-function defaultBaseUpdateArgs(cwd) {
-  return ["--base", detectDefaultBaseRef(cwd)];
-}
-
-function commitDistance(cwd, sourceCommit, headCommit) {
-  if (!sourceCommit || !headCommit) return "unknown";
-  try {
-    return execFileSync("git", ["rev-list", "--count", `${sourceCommit}..${headCommit}`], {
-      cwd,
-      timeout: 3000,
-      encoding: "utf-8",
-    }).trim() || "0";
-  } catch {
-    return "unknown";
-  }
-}
-
-function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cwd)) {
-  switch (freshness.state) {
-    case "fresh":
-      return "EDC context: fresh.";
-    case "missing":
-      return [
-        "EDC context: missing/incomplete.",
-        `reason: ${freshness.reason || "unknown"}`,
-        "review will build context before reviewing unless you pass --no-context-refresh or --ignore-context.",
-      ].join("\n");
-    case "stale": {
-      const source = String(freshness.sourceCommit || "unknown");
-      const head = String(freshness.headCommit || "unknown");
-      const behind = commitDistance(ctx.cwd, freshness.sourceCommit, freshness.headCommit);
-      return [
-        "EDC context: stale.",
-        `built at: ${source.slice(0, 8)}`,
-        `HEAD: ${head.slice(0, 8)}`,
-        `behind by: ${behind} commit${behind === "1" ? "" : "s"}`,
-        "review will update context before reviewing unless you pass --no-context-refresh or --ignore-context.",
-      ].join("\n");
-    }
-    case "unknown":
-      return [`EDC context: unknown.`, `reason: ${freshness.reason || "unknown"}`].join("\n");
-    default:
-      return `EDC context: ${freshness.state || "unknown"}.`;
-  }
-}
-
-async function shouldProceedWithReview(args, ctx, freshness = getContextFreshness(ctx.cwd)) {
-  if (reviewSkipsContextPrompt(args)) return true;
-
-  if (freshness.state !== "missing" && freshness.state !== "stale") return true;
-
-  if (!ctx.ui?.confirm || ctx.hasUI === false) return true;
-
-  const isMissing = freshness.state === "missing";
-  const action = isMissing ? "build" : "update";
-
-  return ctx.ui.confirm(
-    `EDC context ${freshness.state}`,
-    `${reviewContextSummary(ctx, freshness)}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses and can take several minutes.`,
-  );
-}
-
-function canonicalReviewCli(commandName, args) {
-  const tokens = argTokens(args);
-  if (tokens.includes("--full")) return `edc ${commandName} full --agent pi`;
-  const baseIndex = tokens.indexOf("--base");
-  const base = baseIndex >= 0 ? tokens[baseIndex + 1] : "<base>";
-  return `edc ${commandName} diff ${base || "<base>"} --agent pi`;
-}
-
-function reviewDeclinedMessage(args, commandName = "review") {
-  const canonical = canonicalReviewCli(commandName, args);
-  const directBase = canonicalReviewCli("security", args);
-  return [
-    "Review cancelled; EDC context was not refreshed.",
-    "",
-    "Refresh context, then rerun:",
-    `\`${canonical}\``,
-    "",
-    "Security-only direct review can skip context refresh:",
-    `\`${directBase} --no-context-refresh\``,
-    "",
-    "Or ignore existing context entirely:",
-    `\`${directBase} --ignore-context\``,
-  ].join("\n");
-}
-
 async function selectReviewScope(ctx, options = {}) {
   const supportsFull = options.supportsFull === true;
   const commandName = options.commandName || "review";
@@ -302,14 +169,16 @@ async function selectReviewScope(ctx, options = {}) {
 
   switch (choice) {
     case EDC_SCOPE_MENU.CHANGED_DEFAULT:
-    case "changed files vs default branch":
-      return { args: defaultBaseReviewArgs(ctx.cwd) };
+    case "changed files vs default branch": {
+      const policy = await applyDirtyReviewPolicy(defaultBaseReviewArgs(ctx.cwd), ctx);
+      return policy.cancelled ? policy : { scope: "diff", args: policy.args };
+    }
     case EDC_SCOPE_MENU.FULL_CURRENT:
     case "full current repo":
       if (!supportsFull) {
         return { error: `full current repo scope is not supported for edc ${commandName} yet; use changed files or custom refs.` };
       }
-      return { args: options.fullArgs || ["--full"] };
+      return { scope: "full", args: options.fullArgs || ["--full"] };
     case EDC_SCOPE_MENU.CUSTOM_REFS:
     case "custom refs": {
       if (typeof ctx.ui.input !== "function") {
@@ -319,7 +188,8 @@ async function selectReviewScope(ctx, options = {}) {
       if (!base) return { cancelled: true };
       const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
       if (!target) return { cancelled: true };
-      return { args: [String(target), "--base", String(base)] };
+      const policy = await applyDirtyReviewPolicy([String(target), "--base", String(base)], ctx);
+      return policy.cancelled ? policy : { scope: "diff", args: policy.args };
     }
     default:
       return { cancelled: true };
@@ -404,7 +274,7 @@ function backgroundGitPath(cwd, gitRelativePath) {
   try {
     const gitPath = execFileSync("git", ["rev-parse", "--git-path", gitRelativePath], {
       cwd,
-      timeout: 3000,
+      timeout: EDC_LOCAL_COMMAND_TIMEOUT_MS,
       encoding: "utf-8",
     }).trim();
     if (!gitPath) return null;
@@ -458,7 +328,7 @@ function currentHead(cwd) {
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], {
       cwd,
-      timeout: 3000,
+      timeout: EDC_LOCAL_COMMAND_TIMEOUT_MS,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -688,10 +558,13 @@ read_result_field() {
     else if (key === "scope") value = json.scope || "";
     else if (key === "base") value = json.base || "";
     else if (key === "target") value = json.target || "";
+    else if (key === "candidateKind") value = json.candidateKind || "";
+    else if (key === "candidateCommit") value = json.candidateCommit || "";
     else if (key === "dirtyTrackedIncluded") value = typeof json.dirtyTrackedIncluded === "boolean" ? (json.dirtyTrackedIncluded ? "included" : "excluded") : "";
     else if (key === "untrackedIncluded") value = typeof json.untrackedIncluded === "boolean" ? (json.untrackedIncluded ? "included" : "excluded") : "";
     else if (key === "finalReview") value = json.finalReview || "";
     else if (key === "outputs") value = Array.isArray(json.outputs) ? json.outputs.join(", ") : "";
+    else if (key === "details") value = json.details ? JSON.stringify(json.details) : "";
     process.stdout.write(String(value || "").replace(/[\\r\\n]+/g, " "));
   ' "$result_file" "$1" 2>/dev/null || true
 }
@@ -704,9 +577,12 @@ structured_child_result="$(read_result_field childResult)"
 structured_scope="$(read_result_field scope)"
 structured_base="$(read_result_field base)"
 structured_target="$(read_result_field target)"
+structured_candidate_kind="$(read_result_field candidateKind)"
+structured_candidate_commit="$(read_result_field candidateCommit)"
 structured_dirty_tracked="$(read_result_field dirtyTrackedIncluded)"
 structured_untracked="$(read_result_field untrackedIncluded)"
 structured_outputs="$(read_result_field outputs)"
+structured_details="$(read_result_field details)"
 final_review=""
 if [ ${shellQuote(kind)} = "review" ]; then
   final_review="$(awk '/^Verified: /{p=$2} /^Consolidated: /{if (p == "") p=$2} END{print p}' "$log_file" 2>/dev/null || true)"
@@ -741,9 +617,12 @@ fi
   [ -n "$structured_scope" ] && echo "scope=$structured_scope"
   [ -n "$structured_base" ] && echo "base=$structured_base"
   [ -n "$structured_target" ] && echo "target=$structured_target"
+  [ -n "$structured_candidate_kind" ] && echo "candidate_kind=$structured_candidate_kind"
+  [ -n "$structured_candidate_commit" ] && echo "candidate_commit=$structured_candidate_commit"
   [ -n "$structured_dirty_tracked" ] && echo "dirty_tracked_files=$structured_dirty_tracked"
   [ -n "$structured_untracked" ] && echo "untracked_files=$structured_untracked"
   [ -n "$structured_outputs" ] && echo "outputs=$structured_outputs"
+  [ -n "$structured_details" ] && echo "details=$structured_details"
   [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
   [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
   [ -n "$final_review" ] && echo "final_review=$final_review"
@@ -797,42 +676,98 @@ function readBackgroundJobStatus(cwd) {
   };
 }
 
-function killBackgroundJob(cwd) {
+function isSignalTargetAlive(pid, processGroup) {
+  try {
+    process.kill(processGroup ? -pid : pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+async function waitForSignalTargetExit(pid, processGroup) {
+  const deadline = Date.now() + BACKGROUND_JOB_TERMINATION_GRACE_MS;
+  while (isSignalTargetAlive(pid, processGroup)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, EDC_BACKGROUND_TERMINATION_POLL_MS));
+  }
+  return true;
+}
+
+function terminalKillOutcome(message) {
+  return { isTerminal: true, message };
+}
+
+function runningKillOutcome(message) {
+  return { isTerminal: false, message };
+}
+
+async function killBackgroundJob(cwd) {
   const job = readBackgroundJobStatus(cwd);
-  if (!job) return "No running background EDC job found.";
+  if (!job) return terminalKillOutcome("No running background EDC job found.");
 
   const status = job.status;
   const kind = status.kind || "job";
   if (status.status !== "running") {
-    return `No running background EDC job found. Current ${kind} status: ${status.status || "unknown"}.`;
+    return terminalKillOutcome(`No running background EDC job found. Current ${kind} status: ${status.status || "unknown"}.`);
   }
 
   const active = runningBackgroundJob(cwd);
-  if (!active) return "No running background EDC job found; stale status was cleaned up.";
+  if (!active) return terminalKillOutcome("No running background EDC job found; stale status was cleaned up.");
 
   const pid = Number(status.pid);
   if (!Number.isInteger(pid) || pid <= 0) {
-    return `Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`;
+    return runningKillOutcome(`Cannot kill background EDC ${kind} ${status.run_id || "current"}: status file has invalid pid ${status.pid || "missing"}.`);
   }
 
+  let processGroup = true;
   try {
     process.kill(-pid, "SIGTERM");
   } catch (groupError) {
+    processGroup = false;
     try {
       process.kill(pid, "SIGTERM");
     } catch (pidError) {
-      return `Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`;
+      if (pidError?.code !== "ESRCH") {
+        return runningKillOutcome(`Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${pidError?.message || groupError?.message || "unknown error"}`);
+      }
     }
   }
 
+  let terminated;
+  try {
+    terminated = await waitForSignalTargetExit(pid, processGroup);
+  } catch (error) {
+    return runningKillOutcome(`Failed to verify background EDC ${kind} ${status.run_id || "current"} termination: ${error?.message || "unknown error"}`);
+  }
+  if (!terminated) {
+    try {
+      process.kill(processGroup ? -pid : pid, "SIGKILL");
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        return runningKillOutcome(`Failed to force-kill background EDC ${kind} ${status.run_id || "current"}: ${error?.message || "unknown error"}`);
+      }
+    }
+    try {
+      terminated = await waitForSignalTargetExit(pid, processGroup);
+    } catch (error) {
+      return runningKillOutcome(`Failed to verify background EDC ${kind} ${status.run_id || "current"} force-kill: ${error?.message || "unknown error"}`);
+    }
+  }
+  if (!terminated) {
+    return runningKillOutcome(`Failed to kill background EDC ${kind} ${status.run_id || "current"}: ${processGroup ? "process group" : "process"} ${pid} remained alive after SIGKILL.`);
+  }
+
   markRunningBackgroundCancelled(cwd, job.statusPath, status);
-  return [
+  return terminalKillOutcome([
     `Background EDC ${kind} killed.`,
     "",
     `Run ID: ${status.run_id || "current"}`,
     `PID: ${status.pid}`,
     status.log ? `Log: ${status.log}` : "",
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n"));
 }
 
 function renderBackgroundJobStatus(args, cwd) {
@@ -867,11 +802,14 @@ function renderBackgroundJobStatus(args, cwd) {
   if (status.scope) lines.push(`scope: ${status.scope}`);
   if (status.base) lines.push(`base: ${status.base}`);
   if (status.target) lines.push(`target: ${status.target}`);
+  if (status.candidate_kind) lines.push(`candidate: ${status.candidate_kind}`);
+  if (status.candidate_commit) lines.push(`candidate commit: ${status.candidate_commit.slice(0, 12)}`);
   if (status.dirty_tracked_files) lines.push(`dirty tracked files: ${status.dirty_tracked_files}`);
   if (status.untracked_files) lines.push(`untracked files: ${status.untracked_files}`);
   if (status.outputs) lines.push(`outputs: ${status.outputs}`);
   if (status.failure_reason) lines.push(`reason: ${status.failure_reason}`);
   if (status.failure_hint) lines.push(`hint: ${status.failure_hint}`);
+  if (status.details) lines.push(`details: ${status.details}`);
   if (status.child_result) lines.push(`child result: ${status.child_result}`);
   if (status.log) lines.push(`log: ${status.log}`);
   lines.push("");
@@ -889,37 +827,9 @@ function renderBackgroundJobStatus(args, cwd) {
   return lines.join("\n");
 }
 
-function formatBackgroundElapsed(status) {
-  const startedAt = Date.parse(status.started_at || "");
-  if (!Number.isFinite(startedAt)) return "";
-
-  const finishedAt = Date.parse(status.finished_at || "");
-  const end = Number.isFinite(finishedAt) ? finishedAt : Date.now();
-  const elapsedSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
-  if (elapsedSeconds < 60) return `${elapsedSeconds}s`;
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
-
-  const elapsedHours = Math.floor(elapsedMinutes / 60);
-  const remainingMinutes = elapsedMinutes % 60;
-  return `${elapsedHours}h ${remainingMinutes}m`;
-}
-
 function canShowBackgroundStatusUi(ctx) {
   return ctx?.hasUI !== false && !!ctx?.ui
     && (typeof ctx.ui.setStatus === "function" || typeof ctx.ui.setWidget === "function");
-}
-
-function renderBackgroundFooterStatus(status) {
-  const kind = status.kind || "review";
-  if (status.status === "running") {
-    const elapsed = formatBackgroundElapsed(status);
-    return `edc ${kind}: running${elapsed ? ` ${elapsed}` : ""}`;
-  }
-  if (status.status === "success") return `edc ${kind}: ✓ complete`;
-  if (status.status === "failed") return `edc ${kind}: ✗ failed`;
-  return `edc ${kind}: ${status.status || "unknown"}`;
 }
 
 function clearBackgroundStatusUi(ctx) {
@@ -972,29 +882,6 @@ function startBackgroundStatusWatcher(ctx) {
   backgroundStatusTimer.unref?.();
 }
 
-function backgroundJobStartedMessage(result) {
-  const kind = result.kind || "job";
-  return [
-    `Background EDC ${kind} started.`,
-    "",
-    `Run ID: ${result.runId}`,
-    `PID: ${result.pid}`,
-    result.logFile ? `Log: ${result.logFile}` : "",
-  ].filter(Boolean).join("\n");
-}
-
-function backgroundJobAlreadyRunningMessage(result) {
-  const kind = result.status?.kind || "job";
-  return [
-    `A background EDC ${kind} is already running for this repo.`,
-    "",
-    `Run ID: ${result.runId}`,
-    result.status?.log ? `Log: ${result.status.log}` : "",
-    "",
-    "Check progress: `/edc` → Job status.",
-  ].filter(Boolean).join("\n");
-}
-
 function interactiveOnlyMessage() {
   return [
     "/edc is interactive-only.",
@@ -1009,19 +896,23 @@ function interactiveOnlyMessage() {
   ].join("\n");
 }
 
-function killRunningJobAction(pi, ctx) {
-  const message = killBackgroundJob(ctx.cwd);
-  stopBackgroundStatusWatcher();
-  clearBackgroundStatusUi(ctx);
-  sendInfo(pi, "edc-job-kill", message);
+async function killRunningJobAction(pi, ctx) {
+  const outcome = await killBackgroundJob(ctx.cwd);
+  if (outcome.isTerminal) {
+    stopBackgroundStatusWatcher();
+    clearBackgroundStatusUi(ctx);
+  } else {
+    startBackgroundStatusWatcher(ctx);
+  }
+  sendInfo(pi, "edc-job-kill", outcome.message);
 }
 
-async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review") {
+async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review", scope = "") {
   const renderedArgs = args || [];
   const freshness = getContextFreshness(ctx.cwd);
   const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
   if (!proceed) {
-    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, commandName));
+    sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, commandName, scope));
     return;
   }
 
@@ -1044,7 +935,7 @@ async function runScopedReview(pi, ctx, kind, scriptName, options = {}) {
     sendInfo(pi, "edc-review-scope", scope.error);
     return;
   }
-  await startReviewJob(pi, ctx, kind, scriptName, scope.args || [], options.commandName || "review");
+  await startReviewJob(pi, ctx, kind, scriptName, scope.args || [], options.commandName || "review", scope.scope || "");
 }
 
 function reviewConfigForLens(lens, isFullScope) {
@@ -1076,8 +967,10 @@ async function argsForReviewScope(ctx, scopeChoice) {
   switch (scopeChoice) {
     case EDC_MENU.FULL_REVIEW:
       return { isFullScope: true, args: [] };
-    case EDC_MENU.DIFF_DEFAULT:
-      return { isFullScope: false, args: defaultBaseReviewArgs(ctx.cwd) };
+    case EDC_MENU.DIFF_DEFAULT: {
+      const policy = await applyDirtyReviewPolicy(defaultBaseReviewArgs(ctx.cwd), ctx);
+      return policy.cancelled ? policy : { isFullScope: false, args: policy.args };
+    }
     case EDC_MENU.DIFF_CUSTOM: {
       if (typeof ctx.ui.input !== "function") {
         return { error: "custom refs require CLI for now: edc review diff <base> --agent pi" };
@@ -1086,7 +979,8 @@ async function argsForReviewScope(ctx, scopeChoice) {
       if (!base) return { cancelled: true };
       const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
       if (!target) return { cancelled: true };
-      return { isFullScope: false, args: [String(target), "--base", String(base)] };
+      const policy = await applyDirtyReviewPolicy([String(target), "--base", String(base)], ctx);
+      return policy.cancelled ? policy : { isFullScope: false, args: policy.args };
     }
     default:
       return { cancelled: true };
@@ -1112,7 +1006,7 @@ async function runReviewFromMenuScope(pi, ctx, scopeChoice) {
     sendInfo(pi, "edc-menu", "EDC menu cancelled.");
     return;
   }
-  await startReviewJob(pi, ctx, config.kind, config.scriptName, config.args ?? scope.args, config.commandName);
+  await startReviewJob(pi, ctx, config.kind, config.scriptName, config.args ?? scope.args, config.commandName, scope.isFullScope ? "full" : "diff");
 }
 
 function runBackgroundAction(pi, ctx, kind, scriptName, args = "") {
@@ -1141,7 +1035,7 @@ async function handleEdcMenu(pi, args, ctx) {
   }
 
   if (isKillJobRequest(args)) {
-    killRunningJobAction(pi, ctx);
+    await killRunningJobAction(pi, ctx);
     return;
   }
 
@@ -1182,7 +1076,7 @@ async function handleEdcMenu(pi, args, ctx) {
       sendInfo(pi, "edc-job-status", renderBackgroundJobStatus("", ctx.cwd));
       break;
     case EDC_MENU.KILL_JOB:
-      killRunningJobAction(pi, ctx);
+      await killRunningJobAction(pi, ctx);
       break;
     case EDC_MENU.BUILD:
       runBackgroundAction(pi, ctx, "build", "edc-build.sh");

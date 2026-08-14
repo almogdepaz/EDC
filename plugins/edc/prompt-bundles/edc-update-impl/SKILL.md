@@ -59,26 +59,7 @@ Also include any modules that `edc-context/modules/<name>.md` documents as coupl
 
 ### Step 3 — Re-analyze affected modules
 
-`edc-build-plan.sh` expects the FULL module list on stdin and a comma-separated `--changed` filter as a single argument. Build the input from the existing manifest, then pipe it in:
-
-```bash
-# Comma-join the affected module names (no spaces)
-CHANGED="$(IFS=,; echo "${affected[*]}")"
-
-# Project the manifest's modules[] into the script's expected {name, paths} shape,
-# then pipe and filter
-jq '{
-  modules: [
-    .modules[] | {
-      name,
-      paths: ((.match.exactFiles // []) + (.match.prefixes // []) + (.match.globs // []))
-    }
-  ]
-}' edc-context/manifest.json \
-| bash plugins/edc/scripts/edc-build-plan.sh --changed "$CHANGED"
-```
-
-Execute the resulting `module-context` task list the same way as the build flow (see `edc-build-impl` step 2): spawn one clean subagent per task using the embedded `prompt` verbatim, run in parallel batches, collect summaries. Do not interpret, edit, or skip tasks.
+Analyze each affected module directly within this clean update worker, one module at a time. Preserve module-wide ownership, invariants, coupling, and failure-mode understanding; do not narrow analysis to the changed lines alone. Do not launch agents, invoke skills as processes, or choose subprocess flags. Update fanout remains coordinator-owned and is intentionally not part of this mutation-heavy incremental path.
 
 ### Step 4 — Update `edc-context/modules/<name>.md` files
 

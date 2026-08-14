@@ -47,12 +47,13 @@ fi
 # ── 5c2: shellcheck is wired in package scripts and CI ─────────────────────
 if grep -q '"lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/\*.sh"' package.json \
   && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh"' package.json \
-  && grep -q '"test": "npm run lint:hardening && bash tests/hardening/run-all.sh"' package.json \
+  && grep -q '"test:modules": "node --test tests/unit/\*.test.mjs"' package.json \
+  && grep -q '"test": "npm run lint:hardening && npm run test:modules && npm run test:benchmark && bash tests/hardening/run-all.sh"' package.json \
   && grep -q 'npm run lint:shell' .github/workflows/ci.yml \
   && grep -q 'npm test' .github/workflows/ci.yml; then
-  echo "PASS: shellcheck is wired into runtime and hardening scripts in CI"
+  echo "PASS: shellcheck and focused unit tests are wired into CI"
 else
-  echo "FAIL: shellcheck package script or CI wiring missing"
+  echo "FAIL: shellcheck, focused unit test, or CI wiring missing"
   exit 1
 fi
 
@@ -88,14 +89,29 @@ const fs = require('fs');
 const packageVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
 const marketplace = JSON.parse(fs.readFileSync('.claude-plugin/marketplace.json', 'utf8'));
 const plugin = JSON.parse(fs.readFileSync('plugins/edc/.claude-plugin/plugin.json', 'utf8'));
+const manifest = JSON.parse(fs.readFileSync('edc-context/manifest.json', 'utf8'));
+const installer = fs.readFileSync('install.sh', 'utf8');
+if (packageVersion !== '1.1.5') process.exit(1);
 if (marketplace.metadata.version !== packageVersion) process.exit(1);
 if (!marketplace.plugins.every((entry) => entry.version === packageVersion)) process.exit(1);
 if (plugin.version !== packageVersion) process.exit(1);
+if (manifest.edcVersion !== packageVersion) process.exit(1);
+if (!installer.includes(`EDC_INSTALL_REF="\${EDC_INSTALL_REF:-v${packageVersion}}"`)) process.exit(1);
 NODE
 then
-  echo "PASS: distribution metadata versions match package.json"
+  echo "PASS: v1.1.5 distribution, context, and installer versions match"
 else
-  echo "FAIL: distribution metadata versions drift from package.json"
+  echo "FAIL: v1.1.5 distribution, context, or installer versions drift"
+  exit 1
+fi
+
+if [ -f CHANGELOG.md ] \
+  && grep -q '^## \[1.1.5\]' CHANGELOG.md \
+  && [ -f SECURITY.md ] \
+  && grep -q 'https://github.com/almogdepaz/edc/security/advisories/new' SECURITY.md; then
+  echo "PASS: release and vulnerability-reporting policy files exist"
+else
+  echo "FAIL: release or vulnerability-reporting policy files missing"
   exit 1
 fi
 
@@ -224,11 +240,16 @@ else
   exit 1
 fi
 
-# ── 5f2: terminal runtime install derives copy/chmod from one table ────────
-if grep -q 'runtime_install_entries=(' install.sh \
-  && grep -q "IFS='|' read -r src dst executable" install.sh \
+# ── 5f2: terminal runtime install derives copy/chmod from canonical manifest ─
+if bash -n install.sh \
+  && grep -q 'node "\$runtime_manifest" install "\$HOME"' install.sh \
+  && ! grep -q 'runtime_install_entries=(' install.sh \
+  && grep -q 'worker-pool.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'worker-manifest.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'build-dag.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-worker.sh' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
-  echo "PASS: terminal runtime install derives copy/chmod from one table"
+  echo "PASS: terminal runtime install derives copy/chmod from canonical manifest"
 else
   echo "FAIL: terminal runtime install still duplicates copy/chmod lists"
   exit 1
@@ -241,10 +262,10 @@ if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
   && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
   && grep -q 'edc-audit/references/quality-checks.md' install.sh \
   && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
-  && grep -q 'classify-cli.mjs' install.sh \
-  && grep -q 'json-cli.mjs' install.sh \
-  && grep -q 'pi-supervisor.mjs' install.sh \
-  && grep -q 'stream-filter.mjs' install.sh; then
+  && grep -q 'classify-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'json-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'pi-supervisor.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'stream-filter.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs; then
   echo "PASS: pi installer copies private skills and node runtime helpers for spawned subprocesses"
 else
   echo "FAIL: pi installer does not copy private skills/node runtime helpers"

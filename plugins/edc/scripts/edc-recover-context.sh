@@ -115,10 +115,24 @@ _edc_set_manifest_update_base() {
   _edc_update_args=(${normalized_args[@]+"${normalized_args[@]}"} "--base" "$canonical_commit")
 }
 
-_edc_recovery_success_with_warning_if_fresh() {
+_edc_recovery_outputs_complete() {
+  assert_context_fresh 2>/dev/null || return 1
+  edc_entrypoint_valid || return 1
+
+  local required_file
+  for required_file in "$EDC_ISSUES" "$EDC_COMPLEXITY" "$EDC_BUILD_INFO"; do
+    [ -f "$required_file" ] || return 1
+  done
+  grep -q '^##' "$EDC_ISSUES" || return 1
+  grep -q '^##' "$EDC_COMPLEXITY" || return 1
+  node "$EDC_JSON_CLI" valid-json "$EDC_BUILD_INFO" >/dev/null 2>&1 || return 1
+  bash "$_edc_recover_dir/edc-doctor.sh" >/dev/null 2>&1 || return 1
+}
+
+_edc_recovery_success_with_warning_if_complete() {
   local phase="$1"
-  if assert_context_fresh 2>/dev/null; then
-    echo "EDC context recovery succeeded with warning: $phase subprocess reported failure, but context validation passed." >&2
+  if _edc_recovery_outputs_complete; then
+    echo "EDC context recovery succeeded with warning: $phase subprocess reported failure, but complete build output validation passed." >&2
     echo "HINT: treating validated durable context as success; inspect the agent log for transport/provider diagnostics." >&2
     return 0
   fi
@@ -128,9 +142,21 @@ _edc_recovery_success_with_warning_if_fresh() {
 _edc_recovery_failed_after_spawn() {
   local phase="$1"
   echo "EDC context recovery failed." >&2
-  echo "reason: $phase subprocess failed and context validation did not pass" >&2
+  echo "reason: $phase subprocess failed and complete build output validation did not pass" >&2
   echo "next step: inspect the agent log above, then rerun context recovery after fixing the reported issue" >&2
   echo "hint: if the agent wrote partial context, run edc doctor or rebuild with edc build --agent <agent> --force" >&2
+}
+
+_edc_recovery_handle_failed_spawn() {
+  local phase="$1" spawn_rc="$2"
+  if [ "$spawn_rc" -eq 124 ]; then
+    echo "EDC context recovery failed." >&2
+    echo "reason: $phase subprocess timed out; refusing to continue because worker cleanup cannot be proven" >&2
+    echo "next step: confirm no build workers remain, then rerun context recovery" >&2
+    return 1
+  fi
+  _edc_recovery_success_with_warning_if_complete "$phase" \
+    || { _edc_recovery_failed_after_spawn "$phase"; return 1; }
 }
 
 recover_context_if_needed() {
@@ -140,7 +166,7 @@ recover_context_if_needed() {
 
   _edc_split_recovery_args "$@"
 
-  local state
+  local state spawn_rc=0
   state=$(_edc_classify_context_state)
 
   # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
@@ -154,8 +180,9 @@ recover_context_if_needed() {
       echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..." >&2
       local build_prompt
       build_prompt=$(resolve_prompt build ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
-      if ! edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt"; then
-        _edc_recovery_success_with_warning_if_fresh "edc-build" || { _edc_recovery_failed_after_spawn "edc-build"; return 1; }
+      edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt" || spawn_rc=$?
+      if [ "$spawn_rc" -ne 0 ]; then
+        _edc_recovery_handle_failed_spawn "edc-build" "$spawn_rc" || return 1
       fi
       ;;
     STALE)
@@ -163,8 +190,12 @@ recover_context_if_needed() {
         echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
         local update_prompt
         if update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}); then
-          if ! edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt"; then
-            if _edc_recovery_success_with_warning_if_fresh "edc-update"; then
+          spawn_rc=0
+          edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" || spawn_rc=$?
+          if [ "$spawn_rc" -eq 124 ]; then
+            _edc_recovery_handle_failed_spawn "edc-update" "$spawn_rc" || return 1
+          elif [ "$spawn_rc" -ne 0 ]; then
+            if _edc_recovery_success_with_warning_if_complete "edc-update"; then
               return 0
             fi
             echo "→ edc-update failed; retrying context recovery with a force build..." >&2
@@ -190,8 +221,10 @@ recover_context_if_needed() {
   fi
   local force_build_prompt
   force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
-  if ! edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt"; then
-    _edc_recovery_success_with_warning_if_fresh "edc-build retry" || { _edc_recovery_failed_after_spawn "edc-build retry"; return 1; }
+  spawn_rc=0
+  edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" || spawn_rc=$?
+  if [ "$spawn_rc" -ne 0 ]; then
+    _edc_recovery_handle_failed_spawn "edc-build retry" "$spawn_rc" || return 1
   fi
 
   if assert_context_fresh 2>/dev/null; then

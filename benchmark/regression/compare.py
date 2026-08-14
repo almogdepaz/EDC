@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -48,24 +49,40 @@ def aggregate(sha: str, repo: str):
     build_costs = [float(b["total_cost_usd"]) for b in builds if b.get("status") == "ok"]
     review_costs = [float(r["total_cost_usd"]) for r in reviews if r.get("status") == "ok"]
 
-    # recall: per CVE, take best confidence across attempts; partial=0.5, exact=1.0
-    by_cve: dict[str, list[str]] = {}
-    for s in scores:
-        by_cve.setdefault(s["cve"], []).append(s.get("confidence", "miss"))
+    # Recall is verdict-derived. Dual-phase rows carry their weighted score in
+    # combined_score; legacy rows use `found`, while current rows use `verdict`.
+    verdict_scores = {"exact": 1.0, "partial": 0.5, "missed": 0.0, "miss": 0.0}
+    by_cve: dict[str, list[float]] = {}
+    judge_errors = 0
+    for row in scores:
+        verdict = (row.get("verdict") or row.get("found") or "").strip()
+        build_verdict = (row.get("build_verdict") or "").strip()
+        combined = (row.get("combined_score") or "").strip()
+        if "judge_error" in (verdict, build_verdict):
+            judge_errors += 1
+            continue
+        if combined:
+            try:
+                value = float(combined)
+            except ValueError:
+                judge_errors += 1
+                continue
+            if not math.isfinite(value) or value < 0:
+                judge_errors += 1
+                continue
+        else:
+            value = verdict_scores.get(verdict)
+        if value is None:
+            judge_errors += 1
+            continue
+        cve = (row.get("cve") or "").strip()
+        if not cve:
+            judge_errors += 1
+            continue
+        by_cve.setdefault(cve, []).append(value)
 
-    def best(confs):
-        if any(c == "exact" for c in confs):
-            return 1.0
-        if any(c == "partial" for c in confs):
-            return 0.5
-        return 0.0
-
-    if by_cve:
-        per_cve = {cve: best(confs) for cve, confs in by_cve.items()}
-        recall = sum(per_cve.values()) / len(per_cve)
-    else:
-        per_cve = {}
-        recall = 0.0
+    per_cve = {cve: max(values) for cve, values in by_cve.items()}
+    recall = sum(per_cve.values()) / len(per_cve) if per_cve else 0.0
 
     # module coverage: every build-metrics row with status=ok must have module_count > 0
     module_ok = all(int(b["module_count"]) > 0 for b in builds if b.get("status") == "ok")
@@ -78,6 +95,7 @@ def aggregate(sha: str, repo: str):
         "median_review_cost": median_or_none(review_costs),
         "recall": recall,
         "per_cve": per_cve,
+        "judge_errors": judge_errors,
         "module_ok": module_ok,
     }
 
@@ -124,6 +142,7 @@ def main():
         print(f"  median build $:  pre={fmt_money(pre['median_build_cost'])}  post={fmt_money(post['median_build_cost'])}  Δ={pct_delta(pre['median_build_cost'], post['median_build_cost'])!r}")
         print(f"  median review $: pre={fmt_money(pre['median_review_cost'])}  post={fmt_money(post['median_review_cost'])}  Δ={pct_delta(pre['median_review_cost'], post['median_review_cost'])!r}")
         print(f"  recall:          pre={pre['recall']:.3f}  post={post['recall']:.3f}  Δ={post['recall']-pre['recall']:+.3f}")
+        print(f"  judge errors:    pre={pre['judge_errors']}  post={post['judge_errors']}")
 
         cves = sorted(set(pre["per_cve"]) | set(post["per_cve"]))
         for cve in cves:
@@ -134,6 +153,9 @@ def main():
 
         # Verdict
         repo_pass = True
+        if post["judge_errors"] > 0:
+            print(f"  ✗ FAIL unresolved judge/scoring errors: {post['judge_errors']}")
+            repo_pass = False
         if post["recall"] < pre["recall"]:
             print(f"  ✗ FAIL recall: {post['recall']:.3f} < {pre['recall']:.3f}")
             repo_pass = False

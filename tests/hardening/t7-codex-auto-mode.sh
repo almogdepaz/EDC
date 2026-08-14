@@ -104,16 +104,7 @@ echo "initial" > seed.txt
 git add seed.txt
 git commit -q -m "init"
 
-mkdir -p .edc/skills/edc-build-impl
-mkdir -p .edc/skills/edc-update-impl
-mkdir -p .edc/skills/edc-review
-printf 'edc-build\n' > .edc/skills/edc-build-impl/SKILL.md
-printf 'edc-update\n' > .edc/skills/edc-update-impl/SKILL.md
-printf 'edc-review\n' > .edc/skills/edc-review/SKILL.md
-printf '# methodology\n' > .edc/skills/edc-review/methodology.md
-printf '# adversarial\n' > .edc/skills/edc-review/adversarial.md
-printf '# reporting\n' > .edc/skills/edc-review/reporting.md
-printf '# patterns\n' > .edc/skills/edc-review/patterns.md
+node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T7" "$ORIG_DIR/plugins/edc" >/dev/null
 
 mkdir -p edc-context/modules
 base_head=$(git rev-parse HEAD)
@@ -137,7 +128,7 @@ fi
 echo "→ using mock codex at: $which_codex"
 
 result=0
-out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"

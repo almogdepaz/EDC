@@ -7,56 +7,73 @@ Owns all canonical prompt bundles and methodology documents consumed by EDC subp
 **Primary paths:** `plugins/edc/prompt-bundles/`, `plugins/edc/skills/`.
 
 ## Purpose
-This module defines what spawned agents are instructed to do. Private implementation bundles (`edc-build-impl`, `edc-update-impl`, `edc-module-context-impl`) are resolved by orchestrators. Public skills (`edc-review`, `edc-audit`, `edc-delivery-review`) are exposed to humans and agent wrappers, while orchestrators may also embed those public bundles into controlled worker prompts. The runtime invokes the same bundles from Claude, Cursor, Codex, and Pi; prompt text remains backend-neutral while `runtime-cli` injects backend/install-specific script-substitution preambles.
+This module defines what spawned agents are instructed to do. Private implementation bundles (`edc-build-impl`, `edc-update-impl`, `edc-module-context-impl`) are resolved by orchestrators. Public skills (`edc-review`, `edc-audit`, `edc-delivery-review`) are exposed to humans and agent wrappers, while orchestrators may also embed those public bundles into controlled worker prompts. Prompt text remains backend-neutral; `runtime-cli` injects backend/install-specific substitution preambles and now owns worker fanout, process flags, staging, promotion, and validation.
 
-The current prompt contract separates three skill lenses that command names compose differently: `edc-review` is security/adversarial review only, `edc-delivery-review` handles goal/spec delivery and architecture fit, and `edc-audit` handles code-quality/maintainability. The CLI's `review`/`review-all` command is a runtime aggregation of all three phases, not a fourth public skill. Audit was split into reference files and is embedded as a complete bundle for worker/synthesis subprocesses. Module docs and the index still follow the routing-first, high-signal v2 context contract.
+The current prompt contract explicitly separates semantic worker work from coordinator control flow. Build assembly guidance is semantic only because shell/Node now owns discovery, module task planning, bounded pools, build-time audit fanout, manifest finalization, promotion, curator passes, and doctor validation. Update remains a single clean mutation worker that directly edits affected context rather than launching its own fanout. Audit and module-context prompts tell workers to analyze only assigned scope and not launch agents or invoke skills as processes.
 
 ## Skill inventory
-- `edc-build-impl`: full v2 context build contract, mandatory module fanout, routing-first index shape, reports, manifest post-step, `AGENTS.md` entrypoint, and validation. Report wording now frames complexity output as code quality / maintainability signals.
-- `edc-update-impl`: incremental update contract for changed files/modules; preserves runtime policy, avoids noisy index rewrites for local-only changes, refreshes manifest through the deterministic post-step, and uses the same code-quality/maintainability report wording.
-- `edc-module-context-impl`: micro-first analysis methodology whose persisted output is distilled high-signal module context, not scratch analysis or obvious inventory.
+- `edc-build-impl`: semantic assembly contract for coordinator-owned v2 context builds. It describes routing-first index shape, high-signal module docs, partial-manifest ownership, build metadata, agent entrypoint expectations, and output discipline, while forbidding agent/process launch and canonical artifact writes from the worker prompt.
+- `edc-update-impl`: incremental update contract for changed files/modules. It preserves runtime policy, avoids noisy index rewrites for local-only changes, refreshes manifest through the deterministic post-step, and now says affected modules are analyzed directly inside the clean update worker one at a time; update fanout is coordinator-owned and intentionally absent from the mutation-heavy path.
+- `edc-module-context-impl`: micro-first analysis methodology whose persisted output is distilled high-signal module context, not scratch analysis or obvious inventory. Its target-granularity section now emphasizes deterministic coordinator ownership, assigned scope, no sibling source bodies except supplied signatures/docs, and no nested agent/skill process invocation.
 - `edc-review`: slim public security/adversarial review skill. It keeps scoped task-file mode for orchestrated per-module review, loads routing/coupling/blast-radius context, requires attack-path evidence, and explicitly excludes delivery/spec and generic code-quality findings.
-- `edc-audit`: public code-quality/maintainability audit skill. `SKILL.md` is intentionally small and requires `references/scope-and-standards.md`, `smell-baseline.md`, `quality-checks.md`, and `reporting.md` before producing worker or synthesis reports. The quality checks bias toward simplification first: delete dead/speculative code, use repo helpers/stdlib/native platform/installed dependencies before custom code, prefer root-cause fixes and smallest runnable checks, treat `edc-debt:` markers as valid only with concrete upgrade triggers, tag simplification findings (`delete:`, `stdlib:`, `native:`, `yagni:`, `shrink:`), and allow terse `Lean already. Ship.` outputs when no finding survives evidence review.
+- `edc-audit`: public code-quality/maintainability audit skill. The top-level skill is small and requires reference files before producing worker or synthesis reports. It now states the deterministic coordinator launches audit workers without parent conversation context and workers must not launch other agents.
 - `edc-delivery-review`: public goal/spec delivery plus architecture-fit skill. It keeps delivery and architecture verdicts side by side, discovers spec sources, calibrates the real goal/non-goals, verifies module ownership/source-of-truth/API/migration fit against EDC context, and excludes security or local smell findings.
 
+## Audit methodology details
+`edc-audit/references/quality-checks.md` now carries the concrete simplification ladder used by quality workers:
+1. delete dead/speculative surface,
+2. reuse an existing repo helper,
+3. use standard library/runtime,
+4. use native platform capability,
+5. use an already-installed dependency,
+6. inline a one-liner,
+7. write minimum custom code only if the earlier rungs do not fit.
+
+Simplification findings may use `delete:`, `stdlib:`, `native:`, `yagni:`, or `shrink:` tags, rank biggest cuts first when severity is otherwise equal, and include removal estimates only when obvious. The reference also adds a sharp hunt list for wrappers, single-implementation abstractions, dead flags, custom queues/DSLs, and hand-rolled parsing/formatting helpers; an antipattern overlap catalog; accepted `edc-debt:` marker rules requiring a ceiling and upgrade trigger; root-cause-over-symptom bug-fix guidance; and smallest-runnable-check test guidance. `reporting.md` adds compact simplification report shape and the exact no-finding phrase `Lean already. Ship.`
+
 ## Key documents
+- `edc-build-impl/SKILL.md`: current semantic assembly contract. It should stay aligned with the runtime-embedded assembly prompt in `edc-build.sh`, especially index section order, contextless/report exclusion from ordinary index read path, and partial-manifest field ownership.
 - `edc-build-impl/manifest-schema.md`: authoritative v2 manifest schema, routing algorithm, field ownership, routing-index AGENTS template, and doctor validation rules.
 - `edc-build-impl/adapter-contract.md`: integration contract for context adapters that treats `index.md` as the routing/coupling/invariant entrypoint, not just an architecture overview.
+- `edc-module-context-impl/{SKILL.md,resources/*}`: module-analysis methodology and examples embedded into build module workers by `runtime-cli`.
 - `edc-review/{methodology,adversarial,reporting,patterns}.md`: security workflow embedded by `runtime-cli` into per-module review prompts.
-- `edc-audit/references/*`: scoped quality standards, Fowler smell baseline, concrete quality checks, simplification ladder, sharp simplification hunt list, antipattern overlap catalog, accepted-debt marker rules, and canonical report contract used by audit workers and synthesis.
+- `edc-audit/references/*`: scoped quality standards, Fowler smell baseline, concrete quality checks, simplification ladder, antipattern overlap catalog, accepted-debt marker rules, and canonical report contract used by audit workers and synthesis.
 - `edc-delivery-review/references/*`: spec-axis discovery/taxonomy, architecture-fit checks, and required side-by-side reporting structure.
 
 ## Runtime resolution
-`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. Pi search paths include `.pi/skills` and `$HOME/.pi/agent/skills`; Pi wrappers expose only public review/audit/delivery skills through `resources_discover`, while private implementation bundles remain prompt material for spawned orchestrator runs. The effective prompt includes a substitution preamble telling agents to run helper scripts from `$EDC_SCRIPTS_DIR` with Bash-compatible commands. Audit and security review bundles are embedded by `edc-lib.sh`; delivery-review embeds its bundle in `edc-delivery-review.sh` and validates that all references are present. `review-all` composes these public-skill-backed orchestrators through runtime result files rather than adding prompt text here.
+`runtime-cli` resolves these files via `_find_skill_for_agent` in `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations. Pi search paths include `.pi/skills` and `$HOME/.pi/agent/skills`; Pi wrappers expose only public review/audit/delivery skills through `resources_discover`, while private implementation bundles remain prompt material for spawned orchestrator runs. The effective prompt includes a substitution preamble telling agents to run helper scripts from the installed/project-local scripts dir with Bash-compatible commands. Audit and security review bundles are embedded by `edc-lib.sh`; delivery-review embeds its bundle in `edc-delivery-review.sh` and validates that all references are present. `review-all` composes child orchestrators through runtime result files rather than adding prompt text here.
 
 ## Invariants
-- Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, review-task routing, review-all phase aggregation, audit fanout, scope selection, or report validation.
+- Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, worker graph shape, concurrency, subprocess flags, review-task routing, review-all phase aggregation, audit fanout, scope selection, staging/promotion, or report validation.
 - v2 paths are canonical; v1 paths (`edc-context/.meta.json`, top-level `context.md`, top-level reports) are forbidden in production context.
-- Clean-slate isolation is part of the contract: module context, review, delivery-review, and audit analysis should run in fresh subprocesses with only code and skill prompt context.
+- Clean-slate isolation is part of the contract: module context, review, delivery-review, and audit analysis should run in fresh subprocesses with only code/assigned task/skill prompt context.
 - Persisted module docs and the index must pass the signal filter: keep contracts/coupling/hazards; omit anything a future agent can rediscover with one Read, Grep, or Glob.
 - Manifest authoring is split: LLM authors structural fields; `edc-manifest.sh` owns `generatedAt`, `sourceCommit`, and coverage counts.
 - `policy.defaultMode` is operator-controlled and must be preserved by rebuild/update flows.
 - Public skills and private implementation bundles must remain distinguishable; Pi resource discovery intentionally exposes only `edc-review`, `edc-audit`, and `edc-delivery-review`.
-- Tests and CI should provide controlled skill fixtures rather than depending on a developer's real global skill install.
+- Audit findings must stay evidence-based and simplification-first; the ladder/tags are not license for generic style advice or invented deletion precision.
 
 ## Trust boundaries
 - Skill markdown is executable instruction content. Installer/runtime code copies it into user/project skill locations; drift changes agent behavior.
 - Public review/audit/delivery skills are available to humans; implementation bundles should remain hidden from normal resource discovery and only invoked by orchestrators.
+- Build/update prompt wording can cause agents to write canonical artifacts or launch processes if it drifts from coordinator ownership; tests should pin these prohibitions.
 - Review methodology creates output files early to reduce lost findings during timeouts.
 - Audit scoped workers must not write canonical reports; synthesis owns canonical report generation. Simplification findings should cite real code evidence, rank bigger cuts first when severity is otherwise equal, and avoid invented removal precision.
 - Delivery-review is read-only except for its requested report artifact.
 - Script path substitution is required because installed repos often have `.edc/scripts` or `$HOME/.edc/scripts`, not development paths.
 
 ## Coupling
-- `runtime-cli` embeds these prompts in build/update/security-review/quality-review subprocesses and carries Pi/Bash substitution details around them; delivery-review has a parallel bundle emitter in its orchestrator; review-all composes child orchestrators rather than embedding a separate skill.
+- `runtime-cli` embeds these prompts in build/update/security-review/quality-review subprocesses and carries Pi/Bash substitution details around them; delivery-review has a parallel bundle emitter; review-all composes child orchestrators rather than embedding a separate skill.
 - `plugin-surface` copies prompt bundles and public skill trees into project-local `.edc/skills` so spawned agents can resolve private bundles inside target repos.
 - `agent-wrappers` exposes public skills to Pi while hiding private bundles; visible-skill changes require Pi docs/tests/package checks.
-- `hardening-tests` pin prompt-resolution behavior, public/private visibility, skill contract wording, simplification-ladder/reporting phrases, antipattern/debt-marker terms, skill fixture schemas, temp-HOME setup, and decoupling from dev-repo paths.
-- `benchmarking` mutates/evaluates security review methodology during autoresearch loops; delivery/audit scope boundaries should not accidentally dilute security benchmark prompts.
+- `hardening-tests` pin prompt-resolution behavior, public/private visibility, coordinator-vs-worker wording, skill contract wording, simplification-ladder/reporting phrases, antipattern/debt-marker terms, skill fixture schemas, temp-HOME setup, and decoupling from dev-repo paths.
+- `benchmarking` mutates/evaluates security review methodology during autoresearch loops; delivery/audit scope boundaries and simplification wording should not dilute security benchmark prompts.
 
 ## Fragility points
-- Methodology breadth is large; weaker models can skip mandatory phases unless prompts keep imperative task headers and explicit no-skip language. The audit simplification ladder is intentionally opinionated; wording changes should preserve delete/repo-helper/stdlib/native/dependency/YAGNI/shrink coverage, root-cause/smallest-check heuristics, and the evidence requirement, not turn it into generic style advice.
+- Prompt text and runtime-embedded prompts can drift. Keep `edc-build-impl/SKILL.md`, `edc-build.sh` assembly prompt, update skill index-order wording, and hardening tests synchronized.
+- Methodology breadth is large; weaker models can skip mandatory phases unless prompts keep imperative task headers and explicit no-skip language.
+- The audit simplification ladder is intentionally opinionated; wording changes should preserve delete/repo-helper/stdlib/native/dependency/YAGNI/shrink coverage, root-cause/smallest-check heuristics, and evidence requirements.
 - Splitting skills into reference files improves tuneability but requires installer, project-local copy, and prompt embedding code to preserve directory structure.
-- Host support for clean subprocesses varies; the build/review/audit fanout contracts depend on `runtime-cli` enforcing isolated spawns.
-- Prompt text references helper paths that are only valid in the dev repo; the runtime preamble must stay aligned with installer layout and Bash-compatible helper invocation.
+- Host support for clean subprocesses varies; the build/review/audit worker contracts depend on `runtime-cli` enforcing isolated spawns.
+- Prompt text references helper paths that are only valid in the dev repo; the runtime preamble and update/build instructions must stay aligned with installed layout and Bash-compatible helper invocation.
 - Routing-first index and skill-boundary requirements are prompt/test-enforced; changing section labels/order or workflow names can break hardening tests even when runtime routing still works.

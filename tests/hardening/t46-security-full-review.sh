@@ -21,6 +21,7 @@ printf 'console.log("hi")\n' > src/app.ts
 printf '# docs\n' > docs/usage.md
 git add src/app.ts docs/usage.md
 git commit -q -m init
+node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 
 printf '# Repo\n\n## Route by path/task\n' > edc-context/index.md
 printf '# Core\n\n## Scope\n' > edc-context/modules/core.md

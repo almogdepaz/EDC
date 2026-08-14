@@ -102,6 +102,183 @@ edc_result_failure() {
   edc_result_write "${1:-1}" "${2:-pipeline-failed}" "${3:-$EDC_RESULT_KIND pipeline failed}" "${4:-inspect the log for the subprocess error and rerun after fixing it}" "${5:-}" "${6:-}"
 }
 
+edc_runtime_source_root() {
+  if [ -n "${EDC_PLUGIN_ROOT:-}" ] && [ -f "$EDC_PLUGIN_ROOT/hooks/lib/runtime-manifest.mjs" ]; then
+    printf '%s\n' "$EDC_PLUGIN_ROOT"
+    return 0
+  fi
+  local physical_pwd
+  physical_pwd=$(pwd -P)
+  case "$EDC_SCRIPTS_DIR" in
+    "$PWD/.edc/scripts"|"$physical_pwd/.edc/scripts")
+      return 1
+      ;;
+  esac
+  if [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ]; then
+    case "$EDC_SCRIPTS_DIR" in
+      "$HOME/.edc/scripts") printf '%s\n' "$HOME" ;;
+      *) printf '%s\n' "$(cd "$EDC_SCRIPTS_DIR/.." && pwd)" ;;
+    esac
+    return 0
+  fi
+  return 1
+}
+
+edc_runtime_failure_result_write() {
+  local preflight_output="$1" result_file="" result_kind="" started_head=""
+  if [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ]; then
+    result_file="${EDC_RESULT_FILE:-$EDC_BUILD_DIR/last-run.json}"
+    result_kind="review"
+    started_head="${EDC_REVIEW_RESULT_STARTED_HEAD:-}"
+  elif [ "${EDC_RESULT_ACTIVE:-0}" = "1" ]; then
+    result_file=$(edc_result_file)
+    result_kind="${EDC_RESULT_KIND:-runtime}"
+    started_head="${EDC_RESULT_STARTED_HEAD:-}"
+  else
+    return 0
+  fi
+
+  local finished_head
+  finished_head=$(git rev-parse HEAD 2>/dev/null || true)
+  if ! node - "$preflight_output" "$result_file" "$result_kind" "$started_head" "$finished_head" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [inputPath, outputPath, kind, startedHead, finishedHead] = process.argv.slice(2);
+const line = fs.readFileSync(inputPath, "utf8").trim().split(/\r?\n/).pop() || "{}";
+let failure = {};
+try { failure = JSON.parse(line); } catch {}
+const result = {
+  schemaVersion: 1,
+  kind,
+  phase: kind,
+  status: "failed",
+  exitCode: Number(failure.exitCode) || 1,
+  reasonCode: failure.reasonCode || "runtime-validation-failed",
+  message: failure.message || "EDC runtime preflight failed",
+  hint: failure.hint || "rerun the EDC installer",
+  details: failure.details || {},
+  outputs: [],
+  finishedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+};
+if (startedHead) result.startedHead = startedHead;
+if (finishedHead) result.finishedHead = finishedHead;
+if (process.env.EDC_RESULT_SCOPE) result.scope = process.env.EDC_RESULT_SCOPE;
+if (process.env.EDC_RESULT_BASE) result.base = process.env.EDC_RESULT_BASE;
+if (process.env.EDC_RESULT_TARGET) result.target = process.env.EDC_RESULT_TARGET;
+if (process.env.EDC_RESULT_CANDIDATE_KIND) result.candidateKind = process.env.EDC_RESULT_CANDIDATE_KIND;
+if (process.env.EDC_RESULT_CANDIDATE_COMMIT) result.candidateCommit = process.env.EDC_RESULT_CANDIDATE_COMMIT;
+if (process.env.EDC_RESULT_DIRTY_TRACKED_INCLUDED) result.dirtyTrackedIncluded = process.env.EDC_RESULT_DIRTY_TRACKED_INCLUDED === "1";
+if (process.env.EDC_RESULT_UNTRACKED_INCLUDED) result.untrackedIncluded = process.env.EDC_RESULT_UNTRACKED_INCLUDED === "1";
+fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+const temporaryPath = `${outputPath}.${process.pid}.tmp`;
+fs.writeFileSync(temporaryPath, `${JSON.stringify(result, null, 2)}\n`);
+fs.renameSync(temporaryPath, outputPath);
+NODE
+  then
+    echo "WARNING: failed to write EDC runtime failure result: $result_file" >&2
+  fi
+  if [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = "1" ]; then
+    EDC_REVIEW_RESULT_WRITTEN=1
+  else
+    EDC_RESULT_WRITTEN=1
+  fi
+}
+
+edc_runtime_preflight_or_exit() {
+  local runtime_cli="$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs"
+  local source_root="" out rc reason message hint details
+  out=$(mktemp "${TMPDIR:-/tmp}/edc-runtime-preflight-$$.XXXXXX.json") || exit 1
+  if [ ! -f "$runtime_cli" ]; then
+    printf '%s\n' '{"reasonCode":"runtime-install-incomplete","message":"runtime preflight helper is missing","hint":"rerun the EDC installer to repair project-local .edc","details":{"missingPath":".edc/hooks/lib/runtime-manifest.mjs"}}' > "$out"
+    rc=1
+  else
+    source_root=$(edc_runtime_source_root || true)
+    if [ -n "$source_root" ]; then
+      node "$runtime_cli" preflight "$PWD" "$source_root" > "$out" 2>&1 || rc=$?
+    else
+      node "$runtime_cli" preflight "$PWD" > "$out" 2>&1 || rc=$?
+    fi
+    rc=${rc:-0}
+  fi
+  if [ "$rc" -eq 0 ]; then
+    rm -f "$out"
+    return 0
+  fi
+
+  reason=$(node -e 'const fs=require("fs"); const text=fs.readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop()||"{}"; let j={}; try{j=JSON.parse(text)}catch{}; process.stdout.write(j.reasonCode||"runtime-validation-failed");' "$out" 2>/dev/null || printf 'runtime-validation-failed')
+  message=$(node -e 'const fs=require("fs"); const text=fs.readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop()||"{}"; let j={}; try{j=JSON.parse(text)}catch{}; process.stdout.write(j.message||"EDC runtime preflight failed");' "$out" 2>/dev/null || printf 'EDC runtime preflight failed')
+  hint=$(node -e 'const fs=require("fs"); const text=fs.readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop()||"{}"; let j={}; try{j=JSON.parse(text)}catch{}; process.stdout.write(j.hint||"rerun the EDC installer");' "$out" 2>/dev/null || printf 'rerun the EDC installer')
+  details=$(node -e 'const fs=require("fs"); const text=fs.readFileSync(process.argv[1],"utf8").trim().split(/\r?\n/).pop()||"{}"; let j={}; try{j=JSON.parse(text)}catch{}; process.stdout.write(JSON.stringify(j.details||{}));' "$out" 2>/dev/null || printf '{}')
+  export EDC_RESULT_DETAILS_JSON="$details"
+  echo "ERROR: $message" >&2
+  echo "code: $reason" >&2
+  [ -n "$hint" ] && echo "hint: $hint" >&2
+  edc_runtime_failure_result_write "$out"
+  rm -f "$out"
+  exit 1
+}
+
+edc_load_ignore_patterns() {
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@"
+    return 0
+  fi
+  [ -f ".edcignore" ] || return 0
+
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      \#*) continue ;;
+    esac
+    printf '%s\n' "$line"
+  done < ".edcignore"
+}
+
+edc_path_matches_ignore() {
+  local path="$1" pattern="$2"
+  if [[ "$pattern" == */ ]]; then
+    [[ "$path" == ${pattern}* ]]
+    return
+  fi
+
+  # shellcheck disable=SC2053 # intentional glob match for ignore patterns
+  [[ "$path" == "$pattern" ]] \
+    || [[ "$path" == "$pattern/"* ]] \
+    || [[ "$path" == $pattern ]]
+}
+
+edc_filter_ignored_files() {
+  local files="$1"
+  shift
+  local patterns
+  patterns=$(edc_load_ignore_patterns "$@")
+  if [ -z "$patterns" ]; then
+    printf '%s' "$files"
+    return 0
+  fi
+
+  local filtered=""
+  local file pattern ignored
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    ignored=0
+    while IFS= read -r pattern; do
+      [ -z "$pattern" ] && continue
+      if edc_path_matches_ignore "$file" "$pattern"; then
+        ignored=1
+        break
+      fi
+    done <<< "$patterns"
+    [ "$ignored" -eq 1 ] && continue
+    filtered+="${file}"$'\n'
+  done <<< "$files"
+
+  printf '%s' "$filtered"
+}
+
 edc_result_on_exit() {
   local rc=$?
   if [ "${EDC_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then
@@ -111,7 +288,7 @@ edc_result_on_exit() {
 }
 
 edc_result_scope_from_args() {
-  unset EDC_RESULT_SCOPE EDC_RESULT_BASE EDC_RESULT_TARGET EDC_RESULT_DIRTY_TRACKED_INCLUDED EDC_RESULT_UNTRACKED_INCLUDED
+  unset EDC_RESULT_SCOPE EDC_RESULT_BASE EDC_RESULT_TARGET EDC_RESULT_CANDIDATE_KIND EDC_RESULT_CANDIDATE_COMMIT EDC_RESULT_DIRTY_TRACKED_INCLUDED EDC_RESULT_UNTRACKED_INCLUDED
   local target="" base="" full_scope=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -151,7 +328,10 @@ edc_result_scope_from_args() {
     export EDC_RESULT_SCOPE="differential"
     export EDC_RESULT_BASE="$base"
     export EDC_RESULT_TARGET="${target:-HEAD}"
-    export EDC_RESULT_DIRTY_TRACKED_INCLUDED="1"
+    export EDC_RESULT_CANDIDATE_KIND="committed"
+    EDC_RESULT_CANDIDATE_COMMIT=$(git rev-parse --verify "${target:-HEAD}^{commit}" 2>/dev/null || true)
+    export EDC_RESULT_CANDIDATE_COMMIT
+    export EDC_RESULT_DIRTY_TRACKED_INCLUDED="0"
     export EDC_RESULT_UNTRACKED_INCLUDED="0"
   fi
 }
@@ -227,7 +407,7 @@ run_with_timeout() {
     local rc=$?
     if [ $rc -eq 124 ]; then
       echo "ERROR: phase '$label' timed out after ${secs}s" >&2
-      return 1
+      return 124
     fi
     return $rc
   fi
@@ -236,28 +416,157 @@ run_with_timeout() {
     export EDC_TIMEOUT_WARNED=1
   fi
 
-  # watchdog fallback: the watchdog subshell prints the timeout message itself
-  # when it fires; we just forward the command's exit code.
+  # watchdog fallback: the watchdog records timeout state before terminating
+  # the command; the parent emits the diagnostic after observing that marker.
   # Preserve stdin via fd 3: bash redirects async cmds' stdin to /dev/null in
   # non-interactive scripts, which swallows here-strings passed to the caller.
+  local timeout_marker watchdog_sleep_pid_file watchdog_sleep_pid_tmp watchdog_sleep_pid_ready
+  local watchdog_startup_failure_marker watchdog_outcome_dir watchdog_failure_marker
+  timeout_marker=$(mktemp "${TMPDIR:-/tmp}/edc-timeout-$$.XXXXXX") || return 1
+  watchdog_sleep_pid_file="${timeout_marker}.watchdog-pid"
+  watchdog_sleep_pid_tmp="${watchdog_sleep_pid_file}.tmp"
+  watchdog_sleep_pid_ready="${watchdog_sleep_pid_file}.ready"
+  watchdog_startup_failure_marker="${timeout_marker}.watchdog-startup-failure"
+  watchdog_outcome_dir="${timeout_marker}.watchdog-outcome"
+  watchdog_failure_marker="${timeout_marker}.watchdog-failure"
+  rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
+  rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+  # trap -p emits shell-quoted restoration commands; eval is limited to that output.
+  local caller_term_trap caller_int_trap
+  caller_term_trap=$(trap -p TERM)
+  caller_int_trap=$(trap -p INT)
+  local cmd_pid="" watchdog_pid="" watchdog_sleep_pid=""
+  trap 'trap - TERM INT; [ -z "${cmd_pid:-}" ] || kill "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || kill "$watchdog_pid" 2>/dev/null || true; [ -z "${cmd_pid:-}" ] || wait "$cmd_pid" 2>/dev/null || true; [ -z "${watchdog_pid:-}" ] || wait "$watchdog_pid" 2>/dev/null || true; rm -f "${timeout_marker:-}" "${watchdog_sleep_pid_file:-}" "${watchdog_sleep_pid_tmp:-}" "${watchdog_sleep_pid_ready:-}" "${watchdog_startup_failure_marker:-}" "${watchdog_failure_marker:-}"; rmdir "${watchdog_outcome_dir:-}" 2>/dev/null || true; exit 143' TERM INT
   exec 3<&0
   "$@" <&3 &
-  local cmd_pid=$!
-  local watchdog_pid=""
-  trap 'kill "${cmd_pid:-}" "${watchdog_pid:-}" 2>/dev/null || true; exit 143' TERM INT
+  cmd_pid=$!
   exec 3<&-
-  # NOTE: >/dev/null on the subshell so its forked `sleep` child doesn't inherit
-  # the pipe write-end. If it did, the sleep (reparented to init when the
-  # subshell dies on kill) would keep the downstream `stream_filter` reader
-  # blocked for the full watchdog duration after the real command already exited.
-  (sleep "$secs" && kill "$cmd_pid" 2>/dev/null && \
-    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2) >/dev/null &
+  (
+    watchdog_sleep_pid=""
+    trap 'trap - TERM INT; [ -z "${watchdog_sleep_pid:-}" ] || kill "$watchdog_sleep_pid" 2>/dev/null || true; [ -z "${watchdog_sleep_pid:-}" ] || wait "$watchdog_sleep_pid" 2>/dev/null || true; exit 143' TERM INT
+    sleep "$secs" &
+    watchdog_sleep_pid=$!
+    watchdog_publication_failed=0
+    case "$watchdog_sleep_pid" in
+      ""|*[!0-9]*) watchdog_publication_failed=1 ;;
+    esac
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! printf '%s\n' "$watchdog_sleep_pid" > "$watchdog_sleep_pid_tmp"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! mv "$watchdog_sleep_pid_tmp" "$watchdog_sleep_pid_file"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -eq 0 ] \
+      && ! : > "$watchdog_sleep_pid_ready"; then
+      watchdog_publication_failed=1
+    fi
+    if [ "$watchdog_publication_failed" -ne 0 ]; then
+      rm -f "$watchdog_sleep_pid_tmp" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_ready" || true
+      : > "$watchdog_startup_failure_marker" || true
+      kill "$watchdog_sleep_pid" 2>/dev/null || true
+      kill "$cmd_pid" 2>/dev/null || true
+      wait "$watchdog_sleep_pid" 2>/dev/null || true
+      exit 1
+    fi
+    watchdog_timer_rc=0
+    wait "$watchdog_sleep_pid" || watchdog_timer_rc=$?
+    # mkdir atomically decides whether command completion or the watchdog owns cleanup.
+    watchdog_owns_outcome=0
+    if mkdir "$watchdog_outcome_dir" 2>/dev/null; then
+      watchdog_owns_outcome=1
+    elif [ ! -d "$watchdog_outcome_dir" ]; then
+      kill "$cmd_pid" 2>/dev/null || true
+      exit 1
+    fi
+    if [ "$watchdog_owns_outcome" -eq 1 ]; then
+      if [ "$watchdog_timer_rc" -eq 0 ]; then
+        if ! : > "$timeout_marker"; then
+          kill "$cmd_pid" 2>/dev/null || true
+          exit 1
+        fi
+      elif ! printf '%s\n' "$watchdog_timer_rc" > "$watchdog_failure_marker"; then
+        kill "$cmd_pid" 2>/dev/null || true
+        exit 1
+      fi
+      kill "$cmd_pid" 2>/dev/null || true
+    fi
+    trap - TERM INT
+  ) >/dev/null 2>&1 &
   watchdog_pid=$!
-  wait "$cmd_pid"
-  local rc=$?
-  kill "$watchdog_pid" 2>/dev/null || true
-  wait "$watchdog_pid" 2>/dev/null || true
+  local watchdog_startup_failed=0 watchdog_pid_valid=1 watchdog_publication_failed=0
+  while [ ! -f "$watchdog_sleep_pid_ready" ]; do
+    if [ -f "$watchdog_startup_failure_marker" ] || ! kill -0 "$watchdog_pid" 2>/dev/null; then
+      watchdog_startup_failed=1
+      break
+    fi
+    sleep 0.01
+  done
+  if [ "$watchdog_startup_failed" -ne 0 ]; then
+    [ ! -f "$watchdog_startup_failure_marker" ] || watchdog_publication_failed=1
+    wait "$watchdog_pid" 2>/dev/null || true
+    kill "$cmd_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+      "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
+    rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+    trap - TERM INT
+    [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+    [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
+    if [ "$watchdog_publication_failed" -eq 1 ]; then
+      echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
+    else
+      echo "ERROR: phase '$label' fallback watchdog failed to start" >&2
+    fi
+    return 1
+  fi
+  if ! IFS= read -r watchdog_sleep_pid < "$watchdog_sleep_pid_file"; then
+    watchdog_pid_valid=0
+  else
+    case "$watchdog_sleep_pid" in
+      ""|*[!0-9]*) watchdog_pid_valid=0 ;;
+    esac
+  fi
+  if [ "$watchdog_pid_valid" -eq 0 ]; then
+    kill "$watchdog_pid" 2>/dev/null || true
+    kill "$cmd_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    wait "$cmd_pid" 2>/dev/null || true
+    rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+      "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker" || true
+    rmdir "$watchdog_outcome_dir" 2>/dev/null || true
+    trap - TERM INT
+    [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+    [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
+    echo "ERROR: phase '$label' fallback watchdog timer PID publication failed" >&2
+    return 1
+  fi
+  rm -f "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker"
+  local rc=0 watchdog_rc=0 watchdog_timer_rc=""
+  wait "$cmd_pid" || rc=$?
+  mkdir "$watchdog_outcome_dir" 2>/dev/null || true
+  kill "$watchdog_sleep_pid" 2>/dev/null || true
+  wait "$watchdog_pid" || watchdog_rc=$?
+  if [ -f "$watchdog_failure_marker" ]; then
+    IFS= read -r watchdog_timer_rc < "$watchdog_failure_marker" || watchdog_timer_rc="unknown"
+    echo "ERROR: phase '$label' fallback watchdog timer failed (exit ${watchdog_timer_rc})" >&2
+    rc=1
+  elif [ "$watchdog_rc" -ne 0 ]; then
+    echo "ERROR: phase '$label' fallback watchdog failed (exit ${watchdog_rc})" >&2
+    rc=1
+  elif [ -f "$timeout_marker" ]; then
+    echo "ERROR: phase '$label' timed out after ${secs}s (watchdog)" >&2
+    rc=124
+  fi
+  rm -f "$timeout_marker" "$watchdog_sleep_pid_file" "$watchdog_sleep_pid_tmp" \
+    "$watchdog_sleep_pid_ready" "$watchdog_startup_failure_marker" "$watchdog_failure_marker"
+  rmdir "$watchdog_outcome_dir" 2>/dev/null || true
   trap - TERM INT
+  [ -z "$caller_term_trap" ] || eval "$caller_term_trap"
+  [ -z "$caller_int_trap" ] || eval "$caller_int_trap"
   return $rc
 }
 
@@ -339,7 +648,7 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_AGENT_CLI|EDC_PROVIDER)
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
         # Only set if not already exported by the caller.
         if [ -z "${!key:-}" ]; then
           export "$key=$val"
@@ -373,7 +682,96 @@ resolve_model_for_phase() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. COST LOG — per-spawn telemetry (model_observed, tokens, cost).
+# 4. WORKER COORDINATION — isolated run storage and bounded task manifests.
+# ════════════════════════════════════════════════════════════════════════════
+
+EDC_WORKER_POOL_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-pool.mjs"
+EDC_WORKER_MANIFEST_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-manifest.mjs"
+EDC_WORKER_RUNNER="$EDC_SCRIPTS_DIR/edc-worker.sh"
+
+edc_worker_max_concurrency() {
+  local value="${EDC_MAX_CONCURRENCY:-4}"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
+      return 2
+      ;;
+  esac
+  if [ "$value" -lt 1 ] || [ "$value" -gt 64 ]; then
+    echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
+    return 2
+  fi
+  echo "$value"
+}
+
+# edc_create_worker_run <phase> <out-dir-var> <out-id-var>
+edc_create_worker_run() {
+  local phase="$1" out_dir_var="$2" out_id_var="$3"
+  local __worker_git_dir __worker_run_id __worker_run_dir
+  __worker_git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) \
+    || { echo "ERROR: worker coordination requires a git repository" >&2; return 2; }
+  __worker_run_id="${phase}-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM:-0}"
+  __worker_run_dir="$__worker_git_dir/edc/runs/$__worker_run_id"
+  mkdir -p "$__worker_run_dir/prompts" "$__worker_run_dir/staged" "$__worker_run_dir/tasks" || return 1
+  printf -v "$out_dir_var" '%s' "$__worker_run_dir"
+  printf -v "$out_id_var" '%s' "$__worker_run_id"
+}
+
+# edc_worker_task_append <jsonl> <id> <phase> <module> <prompt> <timeout>
+#                        <failure-policy> <output>...
+edc_worker_task_append() {
+  local tasks_file="$1" id="$2" phase="$3" module="$4" prompt_file="$5" timeout_secs="$6" failure_policy="$7"
+  shift 7
+  # shellcheck disable=SC2016 # JavaScript template literals must not expand in Bash.
+  node -e '
+    const [id, phase, module, promptFile, timeoutText, failurePolicy, ...outputs] = process.argv.slice(1);
+    process.stdout.write(`${JSON.stringify({
+      id,
+      phase,
+      ...(module ? { module } : {}),
+      promptFile,
+      timeoutSeconds: Number(timeoutText),
+      failurePolicy,
+      outputs,
+    })}\n`);
+  ' "$id" "$phase" "$module" "$prompt_file" "$timeout_secs" "$failure_policy" "$@" >> "$tasks_file"
+}
+
+edc_worker_manifest_write() {
+  local manifest_path="$1" run_id="$2" run_dir="$3" tasks_file="$4"
+  local max_concurrency
+  max_concurrency=$(edc_worker_max_concurrency) || return $?
+  node "$EDC_WORKER_MANIFEST_CLI" "$manifest_path" "$run_id" "$run_dir" "$max_concurrency" "$tasks_file"
+}
+
+edc_worker_pool_run() {
+  local manifest_path="$1"
+  [ -f "$EDC_WORKER_POOL_CLI" ] || { echo "ERROR: worker pool not found: $EDC_WORKER_POOL_CLI" >&2; return 2; }
+  [ -x "$EDC_WORKER_RUNNER" ] || { echo "ERROR: worker runner not executable: $EDC_WORKER_RUNNER" >&2; return 2; }
+  node "$EDC_WORKER_POOL_CLI" --runner "$EDC_WORKER_RUNNER" "$manifest_path"
+}
+
+# edc_worker_run_single <run-dir> <run-id> <task-id> <phase> <module>
+#                       <prompt> <timeout> <failure-policy> <output>...
+edc_worker_run_single() {
+  local run_dir="$1" run_id="$2" task_id="$3" phase="$4" module="$5" prompt_file="$6" timeout_secs="$7" failure_policy="$8"
+  shift 8
+  local tasks_file="$run_dir/$task_id.jsonl" manifest_file="$run_dir/$task_id-manifest.json"
+  : > "$tasks_file"
+  edc_worker_task_append "$tasks_file" "$task_id" "$phase" "$module" "$prompt_file" "$timeout_secs" "$failure_policy" "$@" || return 1
+  edc_worker_manifest_write "$manifest_file" "$run_id" "$run_dir" "$tasks_file" || return 1
+  edc_worker_pool_run "$manifest_file"
+}
+
+edc_promote_file() {
+  local staged="$1" canonical="$2" temporary
+  temporary="${canonical}.$$"
+  mkdir -p "$(dirname "$canonical")"
+  cp "$staged" "$temporary" && mv "$temporary" "$canonical"
+}
+
+# ════════════════════════════════════════════════════════════════════════════
+# 5. COST LOG — per-spawn telemetry (model_observed, tokens, cost).
 # ════════════════════════════════════════════════════════════════════════════
 # Appends one JSON line per spawn to $EDC_SPAWN_LOG (default:
 # edc-context/build/spawn-log.jsonl, fallback /tmp/edc-spawn-log.jsonl).
@@ -503,138 +901,16 @@ edc_run_filtered_stream() {
 # compatibility with paths that haven't migrated to prompt-file yet.
 
 edc_spawn() {
-  local phase="$1" timeout_secs="$2"
-  shift 2
-
-  local prompt_file="" prompt=""
-  if [ "${1:-}" = "--prompt-file" ]; then
-    prompt_file="$2"
-    [ -f "$prompt_file" ] || { echo "ERROR: edc_spawn: --prompt-file '$prompt_file' not found" >&2; return 2; }
-    shift 2
-  else
-    prompt="$1"
-    shift
+  local backend="$EDC_SCRIPTS_DIR/edc-agent-backends.sh"
+  if [ ! -f "$backend" ]; then
+    echo "ERROR: agent backend helper not found at $backend" >&2
+    return 1
   fi
-
-  local model=""
-  resolve_model_for_phase "$phase" model
-
-  # Capture stream to a tempfile so we can parse the result line for cost log.
-  # When EDC_PRESERVE_TRANSCRIPTS=1 (or EDC_TRANSCRIPT_DIR is set), the
-  # capture is COPIED to a stable location after parsing; otherwise deleted.
-  local capture capture_is_temp=0
-  if capture=$(mktemp "${TMPDIR:-/tmp}/edc-spawn-$$.XXXXXX.jsonl"); then
-    capture_is_temp=1
-  else
-    capture="/dev/null"
-  fi
-  local t0
-  t0=$(date +%s)
-  local rc=0
-
-  case "$EDC_AGENT_CLI" in
-    claude)
-      # --dangerously-skip-permissions: required for headless agent spawns. Without
-      # it, claude code defaults to permissionMode=default which makes the model
-      # think it needs to prompt the user before any tool use. In -p (non-TTY) mode
-      # there is no user to prompt — sonnet/opus charge ahead anyway, haiku gives up
-      # immediately ("what do you need?"). Setting this matches the parent bench
-      # harness's own claude -p invocation.
-      local -a cmd=(claude -p --output-format stream-json --verbose \
-                    --dangerously-skip-permissions)
-      [ -n "$model" ] && cmd+=(--model "$model")
-      # Force Claude Code's Task-tool subagents to inherit the requested model.
-      # Without an override, claude code reads CLAUDE_CODE_SUBAGENT_MODEL from
-      # ~/.claude/settings.json (env block) AFTER process env, so a plain
-      # `export CLAUDE_CODE_SUBAGENT_MODEL=...` is silently overwritten by the
-      # user's global setting. --settings injects the env into claude code's
-      # config layer where it wins. Inline JSON keeps it self-contained.
-      if [ -n "$model" ]; then
-        cmd+=(--settings "$(printf '{"env":{"CLAUDE_CODE_SUBAGENT_MODEL":"%s"}}' "$model")")
-      fi
-      if [ -n "$prompt_file" ]; then
-        cmd+=(--system-prompt-file "$prompt_file" \
-              --exclude-dynamic-system-prompt-sections \
-              --allowed-tools "Read,Write,Bash,Grep,Glob")
-        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-null "" \
-          "${cmd[@]}" "execute the task per the system prompt."
-        rc=$?
-      else
-        cmd+=(--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob")
-        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-text "$prompt" \
-          "${cmd[@]}"
-        rc=$?
-      fi
-      ;;
-    cursor)
-      local -a cmd=(cursor agent -p --output-format stream-json --force --trust)
-      [ -n "$model" ] && cmd+=(--model "$model")
-      # Cursor doesn't expose --system-prompt-file; prompt-file mode falls back
-      # to inlining the file contents as the user message.
-      local effective_prompt
-      if [ -n "$prompt_file" ]; then
-        effective_prompt=$(cat "$prompt_file")
-      else
-        effective_prompt="$prompt"
-      fi
-      edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-text "$effective_prompt" \
-        "${cmd[@]}"
-      rc=$?
-      ;;
-    codex)
-      local -a cmd=()
-      if [ -n "$CODEX_EXEC_HOME" ]; then
-        cmd=(env CODEX_HOME="$CODEX_EXEC_HOME" codex exec --json --color never --sandbox workspace-write)
-      else
-        cmd=(codex exec --json --color never --sandbox workspace-write)
-      fi
-      [ -n "$model" ] && cmd+=(--model "$model")
-      cmd+=(-)
-      local effective_prompt
-      if [ -n "$prompt_file" ]; then
-        effective_prompt=$(cat "$prompt_file")
-      else
-        effective_prompt="$prompt"
-      fi
-      STREAM_FILTER_AGENT="$EDC_AGENT_CLI" STREAM_FILTER_MODEL="$model" edc_run_codex_stream "$timeout_secs" "$phase" "$capture" "$effective_prompt" "${cmd[@]}"
-      rc=$?
-      ;;
-    pi)
-      local effective_prompt_file="" cleanup_prompt_file=0
-      if [ -n "$prompt_file" ]; then
-        effective_prompt_file="$prompt_file"
-      else
-        effective_prompt_file=$(mktemp "${TMPDIR:-/tmp}/edc-pi-prompt-$$.XXXXXX.md") \
-          || { echo "ERROR: could not create pi prompt file" >&2; return 1; }
-        printf '%s' "$prompt" > "$effective_prompt_file"
-        cleanup_prompt_file=1
-      fi
-      local -a cmd=(env EDC_PI_SUBPROCESS=1 pi --mode json --no-session --no-context-files --no-skills --no-prompt-templates -p)
-      [ -n "$model" ] && cmd+=(--model "$model")
-      cmd+=("@$effective_prompt_file")
-      local pi_supervisor="$EDC_SCRIPTS_DIR/../hooks/lib/pi-supervisor.mjs"
-      if [ ! -f "$pi_supervisor" ]; then
-        echo "ERROR: pi supervisor not found at $pi_supervisor" >&2
-        [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
-        return 1
-      fi
-      edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-null "" \
-        node "$pi_supervisor" "${cmd[@]}"
-      rc=$?
-      [ "$cleanup_prompt_file" -eq 1 ] && rm -f "$effective_prompt_file"
-      ;;
-    *)
-      echo "ERROR: edc_spawn: unknown EDC_AGENT_CLI=$EDC_AGENT_CLI" >&2
-      [ "$capture_is_temp" -eq 1 ] && rm -f "$capture"
-      return 2
-      ;;
-  esac
-
-  local duration=$(( $(date +%s) - t0 ))
-  [ "$capture_is_temp" -eq 1 ] && _edc_log_spawn_metrics "$phase" "$model" "$duration" "$capture"
-  [ "$capture_is_temp" -eq 1 ] && _edc_preserve_transcript "$phase" "$capture"
-  [ "$capture_is_temp" -eq 1 ] && rm -f "$capture"
-  return $rc
+  # Load only when a verified orchestrator reaches its first model spawn.
+  # The sourced file replaces this bootstrap function with the real dispatcher.
+  # shellcheck source=edc-agent-backends.sh
+  . "$backend"
+  edc_spawn "$@"
 }
 
 # _edc_preserve_transcript <phase> <capture-file>
@@ -1010,6 +1286,9 @@ edc_diff_curator_forbidden_paths() {
   return 1
 }
 
+# Security reviewers own only their assigned module report/result plus runtime
+# telemetry. Canonical context and audit reports are shared phase inputs here;
+# their generated/untracked status does not make them writable by this phase.
 edc_review_write_allowed_path() {
   local path="$1"
   shift || true

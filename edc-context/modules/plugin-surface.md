@@ -2,38 +2,44 @@
 # Module: plugin-surface
 
 ## Scope
-Owns package/plugin metadata, Claude Code/Cursor hooks, documentation for shipped plugin behavior, and the shared JavaScript routing/context-injection library reused by Pi.
+Owns package/plugin metadata, Claude Code/Cursor hooks, user-facing package documentation, and the shared JavaScript routing/context-injection and worker-coordination helpers reused by shell and Pi.
 
-**Primary paths:** `package.json`, `.claude-plugin/marketplace.json`, `plugins/edc/README.md`, `plugins/edc/.claude-plugin/`, `plugins/edc/hooks/`.
+**Primary paths:** `README.md`, `package.json`, `.claude-plugin/marketplace.json`, `plugins/edc/README.md`, `plugins/edc/.claude-plugin/`, `plugins/edc/hooks/`.
 
 ## Purpose
-This module is the host-agent surface for EDC context. It installs/copies orchestrator scripts into target repos, reads `edc-context/manifest.json`, optionally injects `edc-context/index.md` at session start, and injects matching module docs before file-touching tools when runtime mode is `inject`. It also exposes JS-only routing/freshness helpers used by the Pi adapter so Pi does not fork manifest semantics.
+This module is the host-agent and distribution surface for EDC context. It installs/copies orchestrator scripts, hook/runtime `.mjs` helpers, and prompt bundles into target repos; reads `edc-context/manifest.json`; optionally injects `edc-context/index.md` at session start; and injects matching module docs before file-touching tools when runtime mode is `inject`. It also exposes JS-only routing/freshness/install helpers used by the Pi adapter and now carries deterministic worker helper CLIs used by shell orchestrators.
 
-The current package metadata publishes EDC as `@sgtbeatdown/edc`, exposes the Pi extension at `./pi/index.mjs`, includes `pi/**` and user docs/security/changelog files in the npm allowlist, declares an optional `@earendil-works/pi-coding-agent` peer dependency, and provides a Pi gallery image.
+The public docs/package surface names the workflow taxonomy precisely: combined review (`review`/`review-all`) runs security, delivery/architecture, and quality phases concurrently against one immutable candidate; `security-review` is security/adversarial; `delivery-review` is goal/spec delivery plus architecture-fit; `quality-review` is code-quality/maintainability (`audit` remains a deprecated alias). Documentation now also describes explicit dirty-tree policies, candidate metadata, coordinator-owned worker pools, per-lens `EDC_MAX_CONCURRENCY`, git-private run artifacts, Pi `--no-extensions`, and the optional single-observer `EDC_PI_EXTENSION_PATH` contract.
 
 ## Actors and entrypoints
 - Claude Code/Cursor call `hooks/session-start.mjs` on session lifecycle events.
 - Claude Code/Cursor call `hooks/pretooluse-context-inject.mjs` before `Edit`, `Write`, and `Bash`.
 - Pi imports `buildSessionStartContent`, `buildToolCallInjection`, `getContextFreshness`, and `installOrchestratorScript` from `hooks/lib/route.mjs`.
-- Package/plugin managers consume `package.json`, `plugins/edc/.claude-plugin/plugin.json`, marketplace metadata, and root npm package allowlist.
+- Shell orchestrators invoke JS helper CLIs in `plugins/edc/hooks/lib/`, including `json-cli.mjs`, `classify-cli.mjs`, `worker-manifest.mjs`, `worker-pool.mjs`, and `build-dag.mjs`.
+- Package/plugin managers consume `package.json`, `plugins/edc/.claude-plugin/plugin.json`, marketplace metadata, root docs, and npm package allowlists.
 - CI/package checks validate that the published package contains runtime files and excludes benchmarks/tests/generated context.
 
 ## Key files
-- `package.json`: npm/pi package contract. It declares name/version, runtime file allowlist, optional Pi peer dependency, `pi.extensions`, gallery image, and test/pack/publish scripts.
-- `plugins/edc/hooks/lib/route.mjs`: shared runtime library for plugin-root resolution, manifest loading, staleness/freshness checks, path extraction, routing, session-start content, per-tool injection, and project-local script/prompt installation. `getContextFreshness(projectRoot)` returns `fresh|stale|missing|unknown` with reasons/commit SHAs for Pi review preflight.
-- `plugins/edc/hooks/lib/paths.mjs`: JS mirror of shell path constants (`edc-context`, manifest, index, modules, reports).
-- `plugins/edc/hooks/lib/platform.mjs`: Claude-vs-Cursor payload classifier.
-- `plugins/edc/hooks/session-start.mjs`: best-effort install of `.edc/scripts`/private prompt bundles and optional index injection in `inject` mode.
-- `plugins/edc/hooks/pretooluse-context-inject.mjs`: parses hook payloads, extracts touched paths, routes them, dedups injection by session, and formats host-specific output.
-- `plugins/edc/hooks/hooks.json`: hook event declarations.
-- `plugins/edc/README.md`: documents backend support; Pi is described as an interactive `/edc` menu registered by `pi/`, and review routing is documented as manifest-driven with deterministic `allowed-unmapped` accounting for expected unmapped paths.
+- `README.md`: root user-facing package docs. It documents workflow taxonomy, `--diff` scope syntax, CLI examples, structured result semantics, agent surfaces, worker concurrency, git-private run artifact locations, and Pi worker observability configuration.
+- `package.json`: npm/pi package contract. It declares package name/version, runtime allowlist, optional Pi peer dependency, `pi.extensions`, gallery image, and test/pack/publish scripts. The broad `plugins/edc/hooks/**` and `plugins/edc/scripts/**` allowlists include worker helper CLIs and `edc-worker.sh`.
+- `plugins/edc/README.md`: plugin architecture docs. It now frames shell/Node coordinators as owners of task manifests, bounded pools, timeout/cancellation, provenance, logs, staged validation, and canonical promotion.
+- `plugins/edc/hooks/lib/route.mjs`: shared runtime library for plugin-root resolution, manifest loading, staleness/freshness checks, path extraction, routing, session-start content, per-tool injection, and project-local runtime installation through the canonical runtime manifest.
+- `plugins/edc/hooks/lib/json-cli.mjs`: deterministic JSON dispatch for build plans, doctor/manifest utilities, review routing manifests, audit module selection, and spawn metrics. Build-plan validation rejects non-kebab module names and missing/empty module paths before worker manifests are generated.
+- `plugins/edc/hooks/lib/json-result-commands.mjs`: extracted structured result writing, review phase normalization, and review-all aggregation handlers.
+- `plugins/edc/hooks/lib/runtime-manifest.mjs`: authoritative v1.1.5 runtime inventory. It performs transactional/token-owned installation and verifies regular-file type, modes, metadata, fingerprints, and per-artifact hashes before any managed smoke/helper execution.
+- `plugins/edc/hooks/lib/worker-pool.mjs`: Node worker coordinator used by shell. It is intentionally in the hook library so installed/project-local runtimes receive it with the same copy mechanism as classifier/router helpers.
+- `plugins/edc/hooks/lib/worker-manifest.mjs`: JSONL-to-manifest helper used by shell worker orchestration.
+- `plugins/edc/hooks/lib/build-dag.mjs`: full-build task graph expander that prepares module-context and build-audit worker prompts/manifests.
+- `plugins/edc/hooks/lib/pi-supervisor.mjs`: Pi JSON subprocess supervisor; it ignores retrying `agent_end` events so Pi provider retry does not get classified as terminal failure.
+- `plugins/edc/hooks/lib/paths.mjs`, `platform.mjs`, `session-start.mjs`, and `pretooluse-context-inject.mjs`: JS mirrors of shell paths, host payload parsing, best-effort installation, and context injection.
 
 ## Core flows
-### Session start
+### Session start and runtime installation
 1. Resolve project root and plugin root.
-2. Copy runtime scripts and private prompt bundles into `<repo>/.edc/` when stale/missing.
-3. Load manifest. Missing manifest emits build guidance; advisory mode no-ops; inject mode emits staleness warning plus `index.md` content.
-4. Hosts receive valid no-op output on errors rather than thrown exceptions.
+2. Validate the declared source inventory, take a token-owned install lock, stage every declared script/hook/prompt artifact, write per-artifact metadata, validate staged bytes, and atomically promote `<repo>/.edc/` while preserving approved user files.
+3. Runtime consumers preflight the installed inventory and fail closed on missing, symlinked, stale, or byte-mismatched artifacts; repair is explicit rather than a preflight side effect.
+4. Load manifest. Missing manifest emits build guidance; advisory mode no-ops; inject mode emits staleness warning plus `index.md` content.
+5. Hosts receive valid no-op output on errors rather than thrown exceptions.
 
 ### Per-tool injection
 1. Normalize tool names to lowercase and extract paths from edit/write file args or path-shaped Bash tokens.
@@ -42,40 +48,44 @@ The current package metadata publishes EDC as `@sgtbeatdown/edc`, exposes the Pi
 4. Deduplicate by `(sessionId,moduleName)` in a temp-file key.
 5. Read the matching module doc and return additional context formatted for Claude/Cursor/Pi wrappers.
 
+### Worker helper distribution
+Shell worker orchestration depends on JS files that live in this module but are executed from `.edc/hooks/lib/` in installed repos. Any new managed helper must be declared once in `runtime-manifest.mjs`, included in package allowlists, and covered by source-inventory, install, integrity, and package tests. Terminal install and project-local installation consume that same inventory.
+
 ### Package publication
 1. `npm test` runs the hardening suite via `tests/hardening/run-all.sh`.
 2. `npm run pack:check` performs `npm pack --dry-run` so CI/prepublish sees final package contents.
-3. `package.json.files` intentionally includes runtime/plugin/Pi/docs/license surfaces and excludes `tests/**`, `benchmark/**`, `edc-context/**`, and `review-tasks/**`.
-4. Pi extension discovery depends on `pi.extensions` pointing at `./pi/index.mjs`; moving the Pi implementation requires updating package metadata, tests, and manifest routing together.
-
-### Freshness reporting
-`getContextFreshness` is intentionally lightweight: it checks manifest parseability, index existence/`##` structure, and `manifest.sourceCommit` versus `git rev-parse HEAD`. It does not run doctor; it exists for UX preflight and warning text, while shell orchestrators remain canonical validators.
+3. `package.json.files` intentionally includes runtime/plugin/Pi/prompt/docs/license surfaces and excludes `tests/**`, `benchmark/**`, `edc-context/**`, and `review-tasks/**`.
+4. Pi extension discovery depends on `pi.extensions` pointing at `./pi/index.mjs`; moving Pi implementation or worker-observer documentation requires package metadata, tests, docs, and manifest routing updates together.
 
 ## Invariants
 - Runtime injection is disabled unless `manifest.policy.defaultMode === "inject"`.
-- JS routing must mirror `edc-route.sh`: exact file, longest prefix, glob, then priority/tie ambiguity.
+- JS routing must mirror shell routing: exact file, longest prefix, glob, then priority/tie ambiguity.
 - Hook code should never throw into host runtimes; failures return no-op content.
 - Project-local `.edc/skills` is private orchestrator prompt material, not a public skill registry.
 - JS path constants must mirror `runtime-cli` shell constants.
-- Published npm package contents must include all runtime/Pi/plugin/prompt files needed at install time but not generated context, tests, or benchmark corpora.
+- Installed/project-local runtimes must exactly match the canonical runtime inventory before managed helpers execute; metadata alone is not trusted as proof of current bytes.
+- Published npm package contents must include all runtime/Pi/plugin/prompt/docs/license files needed at install time but not generated context, tests, benchmarks, or scratch run artifacts.
+- Root/package docs are part of the public API: command names, visible skills, workflow descriptions, worker configuration, and Pi extension-observer constraints should match runtime behavior.
 
 ## Trust boundaries
 - Hook payloads and Bash command text are untrusted. Path extraction only selects context to display; it grants no authority.
 - Manifest/module docs are repo-controlled content and should only be injected when mode permits.
-- Script/prompt installation copies from the installed plugin to the target repo best-effort; it must not make session start fail.
-- Freshness checks are advisory UX signals. Shell `edc-assert-fresh.sh`/`edc-doctor.sh` are the authoritative gates, and shell review routing remains authoritative for mapped/unmapped/allowed-unmapped task generation.
-- Package metadata is a distribution contract; tests should catch accidental omission of runtime files or inclusion of generated/private scratch artifacts.
+- Script/prompt/hook-runtime installation copies from the installed plugin transactionally. Host session startup may surface installation diagnostics best-effort, but runtime use fails closed until the full trusted inventory validates.
+- Worker helper CLIs validate manifests/paths before shell workers execute, but their inputs are still untrusted orchestrator IPC.
+- Freshness checks are advisory UX signals. Shell `edc-assert-fresh.sh`/`edc-doctor.sh` are authoritative gates.
+- Package metadata and root docs are distribution contracts; tests should catch accidental omission of runtime files, stale visible-skill/command claims, or inclusion of generated/private scratch artifacts.
 
 ## Coupling
-- Mirrors `runtime-cli` route/path behavior; parity is pinned by hardening route tests.
-- Imported directly by `agent-wrappers` for Pi session/tool injection and background-review preflight.
-- Copies prompt bundles from `canonical-skills` into project-local `.edc/skills` for spawned subprocesses.
-- Package metadata and docs must agree with the `pi/` layout owned by `agent-wrappers`.
-- Validated by `hardening-tests` for hook parsing, mode behavior, route parity, context-dir source of truth, package contents, and Pi extension wiring.
+- Mirrors `runtime-cli` route/path behavior and now hosts JS worker helper CLIs used by `runtime-cli` shell scripts.
+- Imported directly by `agent-wrappers` for Pi session/tool injection, background-review preflight, and project-local script/skill/hook-runtime cache installation.
+- Copies prompt bundles and public skill directories from `canonical-skills` into project-local `.edc/skills` for spawned subprocesses.
+- Package metadata and docs must agree with the `pi/` layout, visible-skill set, and Pi worker observability guidance owned by `agent-wrappers`.
+- Validated by `hardening-tests` for hook parsing, mode behavior, route parity, context-dir source of truth, package contents/script allowlists, visible skills, structured-result helpers, worker helper installation, and Pi extension wiring.
 
 ## Fragility points
 - `extractFilePathsFromBash` is heuristic; shell variables, spaces, process substitution, generated filenames, or unusual quoting can miss context or route incidental tokens.
-- `resolvePluginRoot` uses filesystem heuristics unless `EDC_PLUGIN_ROOT` is set; unusual packaging layouts can break script/prompt installation.
+- `resolvePluginRoot` uses filesystem heuristics unless `EDC_PLUGIN_ROOT` is set; unusual packaging layouts can break script/prompt/helper installation.
+- Copy-all `.mjs` installation reduces forgotten-file drift but means experimental hook-lib files become project-local runtime if they are shipped in the package.
 - Dedup depends on session ids. Missing ids intentionally disable dedup, causing repeated injection.
 - `getContextFreshness` intentionally accepts any parseable manifest and non-stub index; do not treat it as a replacement for doctor.
-- Package allowlists drift easily when files move (for example `agents/pi` to `pi/`); keep package tests and manifest routing aligned with distribution layout.
+- Package allowlists drift easily when files move or new scripts/skills/helpers are added; keep package tests, docs, and manifest routing aligned with distribution layout.

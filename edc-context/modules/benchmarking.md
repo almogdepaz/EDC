@@ -4,47 +4,52 @@
 ## Scope
 Owns the CVE benchmark harness, scoring tools, judge audits, transcript recovery helpers, GEPA integration, and autonomous skill-tuning experiments.
 
-**Primary paths:** selected tracked `benchmark/` sources plus `benchmark/gepa/`, `benchmark/pr-review/`, and `benchmark/regression/`; large target/artifact trees such as `benchmark/curl/**`, `benchmark/redis/**`, and scratch `.edc-bench` output are intentionally outside context coverage.
+**Primary paths:** selected tracked `benchmark/` sources plus `benchmark/gepa/`, `benchmark/pr-review/`, and `benchmark/regression/`; large target/artifact trees such as `benchmark/curl/**`, `benchmark/redis/**`, and scratch `.edc-bench` output are intentionally outside normal context coverage.
 
 ## Purpose
 This module measures whether EDC review/build prompts find known security vulnerabilities. It runs agent analyses against vulnerable historical revisions, scores findings against ground truth, audits judge failures, and supports autoresearch loops that mutate review methodology and keep only changes that improve benchmark outcomes.
 
-This module is not directly changed by the current Pi/package branch, but it remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. Package/CI changes intentionally exclude benchmark corpora from npm package contents and normal hardening execution.
+Deterministic scorer/regression unit tests now run in normal CI, while live model/CVE runs remain opt-in. The module remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. Benchmark scoring should evaluate the security/adversarial lens (`edc-review` skill or `security-review` command), not the CLI's combined `review`/`review-all` command. Delivery/spec review and code-quality audit findings belong to separate workflows and should not be treated as security benchmark wins. If a benchmark starts invoking production build/security/quality pipelines directly, it must account for worker artifacts under `.git/edc/runs/<run-id>/`, `EDC_MAX_CONCURRENCY`, staged-output validation, and structured phase results.
 
 ## Key files and flows
 - `benchmark/run.sh`: legacy per-CVE runner. It clones/reuses target repos, checks out vulnerable revisions, prompts Claude over affected files, writes/falls back to `edc-context/reports/issues.md`, then invokes `score.py`.
-- `benchmark/score.py`: two-phase scorer. Keyword prefilter gates an LLM judge; judge refusals/parse failures become explicit `judge_error` rows rather than silent misses. Supports dual build/review scoring and combined-score weighting.
+- `benchmark/score.py`: two-phase scorer. Literal category keywords and explicitly declared category regexes are evaluated separately; empty affected-file entries cannot match everything. Keyword prefilter gates an LLM judge; judge refusals/parse failures become explicit `judge_error` rows rather than silent misses. Supports dual build/review scoring and combined-score weighting.
 - `benchmark/audit.py`: audits regression TSVs for suspicious miss/error rows where transcripts still contain CVE/file evidence.
 - `benchmark/transcript_utils.py`: reconstructs `issues.md` from Claude JSONL transcripts by replaying Write/Edit/MultiEdit/Bash heredoc events.
 - `benchmark/autoresearch.sh`: autonomous loop that lets an agent edit skill files, hashes attempts, commits, benchmarks fast CVEs, validates regressions, and reverts failed prompt mutations.
-- `benchmark/regression/*`: regression harness and result comparison utilities.
+- `benchmark/regression/*`: regression harness and result comparison utilities. `compare.py` adapts current `verdict`, legacy `found`, and valid nonnegative `combined_score` rows; unresolved judge/scoring errors are counted separately and fail post-comparison rather than becoming misses.
 - `benchmark/gepa/*`: GEPA adapter/runner/template material for prompt optimization experiments.
 - `benchmark/pr-review/*`: Cursor PR benchmark harness.
 
 ## Invariants
-- Scoring failure modes must remain explicit: `judge_error` is not a miss and should not be folded into recall until resolved.
+- Scoring failure modes must remain explicit: `judge_error` is not a miss and should not be folded into recall until resolved; regression comparison must report and fail on unresolved post-run judge/scoring errors.
 - The LLM judge must quote evidence from analysis output before issuing a verdict.
 - Dual-phase scoring distinguishes build-context leakage from true review-phase discovery.
 - Autoresearch must hash tried prompt states, keep logs, and revert unsuccessful prompt mutations without losing unrelated work.
 - Benchmark worktrees/transcripts are scratch artifacts and should not be treated as source modules or production context.
+- Security benchmark prompts should stay aligned with the `edc-review` skill / `security-review` command; delivery-review, quality-review, audit, and combined review-all outputs are different products unless a benchmark explicitly opts into those lenses.
+- Production pipeline benchmarks should preserve worker-run artifacts and structured results when debugging failures instead of scraping only canonical reports.
 - npm/package publication must not include large benchmark corpora, generated context, tests, or review-task scratch output.
 
 ## Trust boundaries
 - Benchmark prompts intentionally analyze vulnerable code; outputs are evaluation artifacts, not production reports.
 - LLM judge responses are untrusted and parsed defensively for refusal, bad JSON, bad verdicts, and missing quoted evidence.
 - Autoresearch commits/reverts prompt changes and should run only in a controlled branch/worktree.
+- Worker-pool run logs/transcripts, if produced by production orchestrators, are diagnostics and can contain untrusted model output.
 - External repos are cloned into private temp/scratch locations and may be large or unavailable.
 
 ## Coupling
-- Mutates/evaluates `canonical-skills`, especially review methodology.
-- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL` but the current benchmark runner remains Claude-centric).
-- Review-routing changes such as direct context-skip modes and allowed-unmapped accounting can affect benchmark comparability if the harness starts using the production review pipeline directly.
-- Transcript reconstruction knows Claude Code JSONL shapes also consumed by `edc-spawn-analyze.sh`-style analysis.
-- Status plans at repo root document benchmark-driven prompt changes and are intentionally allowed/unmapped in manifest coverage.
+- Mutates/evaluates `canonical-skills`, especially security review methodology. Skill-boundary changes can affect benchmark comparability by reducing generic findings that are no longer security-scored.
+- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL`). Production pipeline invocation now also depends on worker-pool concurrency, staged validation, and run-artifact retention.
+- Review-routing changes such as direct context-skip modes, allowed-unmapped/contextless accounting, default-base/scope selection, dirty-file inclusion, delivery/quality split-outs, or worker-stage validation can affect benchmark comparability if the harness uses production review directly.
+- Transcript reconstruction knows Claude Code JSONL shapes also consumed by EDC spawn/transcript logging.
+- Benchmark status/launch notes such as `benchmark/PI_EDC_X_THREAD.md` are mapped here when tracked, while large target corpora remain ignored/contextless.
 - `plugin-surface` package allowlists intentionally exclude `benchmark/**`; `hardening-tests` pin that distribution boundary.
 
 ## Fragility points
 - `benchmark/run.sh` still asks for legacy `edc-context/full-context.md`; this is benchmark-specific and does not reflect v2 production layout.
 - Automated scoring is only as good as the judge model and evidence reconstruction; refusals and parse errors require human rejudging.
 - Large scratch directories can dominate local filesystem scans if accidentally tracked or added to manifest coverage.
-- Benchmark workflows can be expensive and long-running; they are not part of normal hardening-test execution.
+- Live benchmark workflows can be expensive and long-running and are not part of normal hardening execution; only deterministic scorer/comparator unit fixtures run in `npm test`.
+- Prompt-scope boundaries now matter: if autoresearch edits delivery/audit wording or invokes combined `review` while optimizing security CVE recall, it may produce changes irrelevant to the scored security workflow.
+- Worker-pool concurrency can change timing, retry, and transcript layout for production pipeline benchmarks; set `EDC_MAX_CONCURRENCY=1` when serial comparability matters.

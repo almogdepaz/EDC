@@ -331,10 +331,36 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.mkdirSync(`${raceDir}/.edc/scripts`, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: raceDir, stdio: "ignore" });
   fs.writeFileSync(`${raceDir}/tracked.txt`, "x\n");
-  fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\n");
+  fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\nworker-run/\nterm-resistant-worker.sh\n");
   childProcess.execFileSync("git", ["add", "tracked.txt", ".gitignore"], { cwd: raceDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: raceDir, stdio: "ignore" });
-  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\ntrap "" TERM\nprintf ready > .git/edc/race-ready\nsleep 30\necho "Verified: review-HEAD.md"\n`);
+  const workerRunDir = `${raceDir}/worker-run`;
+  const workerRunner = `${raceDir}/term-resistant-worker.sh`;
+  const workerManifest = `${workerRunDir}/tasks.json`;
+  const workerPgidFile = `${raceDir}/.git/edc/worker-pgid`;
+  const workerPoolPidFile = `${raceDir}/.git/edc/worker-pool-pid`;
+  const workerTermFile = `${raceDir}/.git/edc/worker-term`;
+  fs.mkdirSync(`${workerRunDir}/prompts`, { recursive: true });
+  fs.mkdirSync(`${workerRunDir}/staged`, { recursive: true });
+  fs.writeFileSync(`${workerRunDir}/prompts/worker.md`, "nested worker\n");
+  fs.writeFileSync(workerManifest, JSON.stringify({
+    schemaVersion: 1,
+    runId: "t10-nested-kill",
+    runDir: workerRunDir,
+    maxConcurrency: 1,
+    tasks: [{
+      id: "nested-worker",
+      phase: "test/nested-worker",
+      promptFile: `${workerRunDir}/prompts/worker.md`,
+      timeoutSeconds: 30,
+      outputs: [`${workerRunDir}/staged/worker.txt`],
+    }],
+  }));
+  fs.writeFileSync(workerRunner, `#!/usr/bin/env bash\nset -uo pipefail\non_term() { printf term > .git/edc/worker-term; }\ntrap on_term TERM\nprintf "%s\\n" "$$" > .git/edc/worker-pgid\nprintf "%s\\n" "$PPID" > .git/edc/worker-pool-pid\nprintf ready > .git/edc/race-ready\nwhile :; do\n  sleep 30 &\n  wait "$!" || true\ndone\n`);
+  fs.chmodSync(workerRunner, 0o755);
+  const workerPool = `${process.cwd()}/plugins/edc/hooks/lib/worker-pool.mjs`;
+  const { WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS } = await import("./plugins/edc/hooks/lib/termination-policy.mjs");
+  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nexec node ${JSON.stringify(workerPool)} --runner ${JSON.stringify(workerRunner)} ${JSON.stringify(workerManifest)}\n`);
   fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
   // Preserve the fake reviewer across each best-effort command runtime install.
   fs.mkdirSync(`${raceDir}/.edc.install.lock`, { recursive: true });
@@ -348,6 +374,28 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   fs.writeFileSync(`${raceDir}/fake-bin/bash`, `#!/bin/sh\nsleep 1\nexec ${realBash} "$@"\n`);
   fs.chmodSync(`${raceDir}/fake-bin/bash`, 0o755);
 
+  const raceStatusFile = `${raceDir}/.git/edc/status`;
+  let racePidForCleanup = 0;
+  let workerPgidForCleanup = 0;
+  const readPositivePid = (path) => {
+    if (!fs.existsSync(path)) return 0;
+    const pid = Number(fs.readFileSync(path, "utf-8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : 0;
+  };
+  const cleanupRaceProcessGroups = () => {
+    const poolPid = readPositivePid(workerPoolPidFile);
+    if (poolPid) {
+      try { process.kill(poolPid, "SIGCONT"); } catch {}
+    }
+    const status = fs.existsSync(raceStatusFile) ? fs.readFileSync(raceStatusFile, "utf-8") : "";
+    const statusPid = Number((status.match(/^pid=(\d+)$/m) || [])[1]) || 0;
+    const workerPgid = workerPgidForCleanup || readPositivePid(workerPgidFile);
+    for (const pgid of new Set([racePidForCleanup, statusPid, workerPgid].filter(Boolean))) {
+      try { process.kill(-pgid, "SIGKILL"); } catch {}
+    }
+  };
+  process.once("exit", cleanupRaceProcessGroups);
+
   const previousPath = process.env.PATH;
   process.env.PATH = `${raceDir}/fake-bin:${previousPath || ""}`;
   const raceStartIndex = calls.messages.length;
@@ -357,6 +405,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
   ]);
   process.env.PATH = previousPath;
   const raceMessages = calls.messages.slice(raceStartIndex).map((message) => message.content || "");
+  const raceStartedMessage = raceMessages.find((message) => message.includes("Background EDC review started.")) || "";
+  racePidForCleanup = Number((raceStartedMessage.match(/^PID: (\d+)$/m) || [])[1]) || 0;
   const raceStartedCount = raceMessages.filter((message) => message.includes("Background EDC review started.")).length;
   const raceBlockedCount = raceMessages.filter((message) => message.includes("already running")).length;
   if (raceStartedCount !== 1 || raceBlockedCount !== 1) {
@@ -364,28 +414,37 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
 
-  const raceStatusFile = `${raceDir}/.git/edc/status`;
   const raceReadyFile = `${raceDir}/.git/edc/race-ready`;
   for (let i = 0; i < 100; i++) {
     const raceStatus = fs.existsSync(raceStatusFile) ? fs.readFileSync(raceStatusFile, "utf-8") : "";
-    if (raceStatus.includes("status=running") && /^pid=\d+$/m.test(raceStatus) && fs.existsSync(raceReadyFile)) break;
+    if (raceStatus.includes("status=running") && /^pid=\d+$/m.test(raceStatus) && fs.existsSync(raceReadyFile) && readPositivePid(workerPgidFile) && readPositivePid(workerPoolPidFile)) break;
     if (/^status=(?:success|failed|cancelled)$/m.test(raceStatus)) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   const synchronizedRaceStatus = fs.existsSync(raceStatusFile) ? fs.readFileSync(raceStatusFile, "utf-8") : "missing";
-  if (!synchronizedRaceStatus.includes("status=running") || !/^pid=\d+$/m.test(synchronizedRaceStatus) || !fs.existsSync(raceReadyFile)) {
+  workerPgidForCleanup = readPositivePid(workerPgidFile);
+  const workerPoolPid = readPositivePid(workerPoolPidFile);
+  if (!synchronizedRaceStatus.includes("status=running") || !/^pid=\d+$/m.test(synchronizedRaceStatus) || !fs.existsSync(raceReadyFile) || !workerPgidForCleanup || !workerPoolPid) {
     const raceLogFile = `${raceDir}/.git/edc/review.log`;
     const raceLog = fs.existsSync(raceLogFile) ? fs.readFileSync(raceLogFile, "utf-8") : "missing";
-    console.log("RACE_REVIEW_READY_FAIL:" + JSON.stringify({ status: synchronizedRaceStatus, log: raceLog }));
+    console.log("RACE_REVIEW_READY_FAIL:" + JSON.stringify({ status: synchronizedRaceStatus, log: raceLog, workerPgid: workerPgidForCleanup, workerPoolPid }));
     process.exit(1);
   }
-  let racePidForCleanup = Number((synchronizedRaceStatus.match(/^pid=(\d+)$/m) || [])[1]);
-  const cleanupRaceProcessGroup = () => {
-    if (!racePidForCleanup) return;
-    try { process.kill(-racePidForCleanup, "SIGKILL"); } catch {}
-  };
-  process.once("exit", cleanupRaceProcessGroup);
+  racePidForCleanup = Number((synchronizedRaceStatus.match(/^pid=(\d+)$/m) || [])[1]);
   const killRequest = edcCmd.opts.handler("kill", { cwd: raceDir, hasUI: false });
+  for (let i = 0; i < 100 && !fs.existsSync(workerTermFile); i++) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  if (!fs.existsSync(workerTermFile)) {
+    console.log("KILL_REVIEW_WORKER_TERM_FAIL:" + workerPgidForCleanup);
+    process.exit(1);
+  }
+  // Expose equal parent/child deadlines deterministically: pause the pool after
+  // it arms child escalation, then resume just beyond one child grace window.
+  process.kill(workerPoolPid, "SIGSTOP");
+  const resumeWorkerPool = setTimeout(() => {
+    try { process.kill(workerPoolPid, "SIGCONT"); } catch {}
+  }, WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS + 100);
   await new Promise(resolve => setTimeout(resolve, 100));
   const terminatingStatus = fs.readFileSync(raceStatusFile, "utf-8");
   if (!terminatingStatus.includes("status=running")) {
@@ -393,6 +452,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
   await killRequest;
+  clearTimeout(resumeWorkerPool);
   const killMessage = calls.messages.at(-1)?.content || "";
   if (!killMessage.includes("Background EDC review killed.") || !killMessage.includes("Run ID:")) {
     console.log("KILL_REVIEW_MESSAGE_FAIL:" + JSON.stringify(killMessage));
@@ -404,19 +464,24 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" node --input-type=module
     process.exit(1);
   }
   const killedPid = Number((killedStatus.match(/^pid=(\d+)$/m) || [])[1]);
-  let killedGroupAlive = false;
-  try {
-    process.kill(-killedPid, 0);
-    killedGroupAlive = true;
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
-  if (killedGroupAlive) {
-    console.log("KILL_REVIEW_GROUP_SURVIVED_FAIL:" + killedPid);
+  const processGroupAlive = (pgid) => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch (error) {
+      if (error?.code === "ESRCH") return false;
+      throw error;
+    }
+  };
+  const killedGroupAlive = processGroupAlive(killedPid);
+  const killedWorkerGroupAlive = processGroupAlive(workerPgidForCleanup);
+  if (killedGroupAlive || killedWorkerGroupAlive) {
+    console.log("KILL_REVIEW_GROUP_SURVIVED_FAIL:" + JSON.stringify({ topPgid: killedPid, topAlive: killedGroupAlive, workerPgid: workerPgidForCleanup, workerAlive: killedWorkerGroupAlive }));
     process.exit(1);
   }
   racePidForCleanup = 0;
-  process.removeListener("exit", cleanupRaceProcessGroup);
+  workerPgidForCleanup = 0;
+  process.removeListener("exit", cleanupRaceProcessGroups);
   await edcCmd.opts.handler("", { ...menuCtx("job status"), cwd: raceDir });
   const killedStatusMessage = calls.messages.at(-1)?.content || "";
   if (!killedStatusMessage.includes("status: cancelled") || !killedStatusMessage.includes("EDC review cancelled.")) {

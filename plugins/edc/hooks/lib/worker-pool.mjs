@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 function fail(message) {
   process.stderr.write(`ERROR: worker pool: ${message}\n`);
@@ -176,7 +177,10 @@ function requestStop(reason, exceptIndex = -1) {
     if (index === exceptIndex) continue;
     running.cancellationRequested = true;
     terminateProcessGroup(running.child);
-    running.killTimer = setTimeout(() => terminateProcessGroup(running.child, "SIGKILL"), 1000);
+    running.killTimer = setTimeout(
+      () => terminateProcessGroup(running.child, "SIGKILL"),
+      WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS,
+    );
     running.killTimer.unref();
   }
 }
@@ -250,7 +254,10 @@ function launch(index) {
     stageReason = `task ${task.id} timed out after ${task.timeoutSeconds}s`;
     if (task.failurePolicy === "fail-fast") requestStop(stageReason, index);
     terminateProcessGroup(child);
-    running.killTimer = setTimeout(() => terminateProcessGroup(child, "SIGKILL"), 1000);
+    running.killTimer = setTimeout(
+      () => terminateProcessGroup(child, "SIGKILL"),
+      WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS,
+    );
     running.killTimer.unref();
   }, task.timeoutSeconds * 1000);
 

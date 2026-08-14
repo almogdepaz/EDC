@@ -71,6 +71,7 @@ export const RUNTIME_MANIFEST = Object.freeze({
     hook("route.mjs", false),
     hook("runtime-manifest.mjs"),
     hook("stream-filter.mjs"),
+    hook("termination-policy.mjs", false),
     hook("worker-manifest.mjs"),
     hook("worker-pool.mjs"),
     skill("prompt-bundles/edc-build-impl/SKILL.md"),

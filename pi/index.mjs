@@ -26,6 +26,7 @@ import {
   getContextFreshness,
   installOrchestratorScript,
 } from "../plugins/edc/hooks/lib/route.mjs";
+import { BACKGROUND_JOB_TERMINATION_GRACE_MS } from "../plugins/edc/hooks/lib/termination-policy.mjs";
 import { argTokens, renderArgs, renderShellArgs, shellQuote, tokenizeArgs } from "./lib/args.mjs";
 import {
   backgroundJobAlreadyRunningMessage,
@@ -84,7 +85,6 @@ const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
 const EDC_BACKGROUND_STARTING_STALE_MS = 60 * 1000;
 const EDC_BACKGROUND_UI_KEY = "edc-review";
 const EDC_BACKGROUND_UI_POLL_MS = 2000;
-const EDC_BACKGROUND_TERMINATION_GRACE_MS = 1000;
 const EDC_BACKGROUND_TERMINATION_POLL_MS = 25;
 const EDC_LOCAL_COMMAND_TIMEOUT_MS = 10000;
 
@@ -688,7 +688,7 @@ function isSignalTargetAlive(pid, processGroup) {
 }
 
 async function waitForSignalTargetExit(pid, processGroup) {
-  const deadline = Date.now() + EDC_BACKGROUND_TERMINATION_GRACE_MS;
+  const deadline = Date.now() + BACKGROUND_JOB_TERMINATION_GRACE_MS;
   while (isSignalTargetAlive(pid, processGroup)) {
     if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, EDC_BACKGROUND_TERMINATION_POLL_MS));

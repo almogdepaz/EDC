@@ -14,6 +14,8 @@ Audit workers:
 - must not scan the entire repo by default from a module-scoped task
 - must not report global/cross-module conclusions from a local worker; global/cross-module conclusions belong to synthesis
 
+For candidate verification, when Octocode is already installed and useful, prefer it for references, callers, duplication, and dead-export claims. Do not install or configure Octocode, widen assigned scope, treat unavailable semantic support as evidence of absence, or fail when Octocode is unavailable or unnecessary; existing Read, Grep, Glob, and Bash workflows remain valid fallbacks.
+
 ## Standards sources
 
 Before scoring code quality, load documented standards sources when they exist:

@@ -12,6 +12,7 @@ check_init
 
 SKILL_DIR="$ROOT/plugins/edc/skills/edc-audit"
 SKILL="$SKILL_DIR/SKILL.md"
+SCOPE_STANDARDS="$SKILL_DIR/references/scope-and-standards.md"
 
 echo "=== T34: audit skill contract ==="
 
@@ -21,6 +22,10 @@ has() {
 
 main_has() {
   grep -qi -- "$1" "$SKILL"
+}
+
+file_has() {
+  grep -qi -- "$2" "$1"
 }
 
 check "audit is framed as scoped analysis" "$(has "read-only scoped analysis" && echo 1 || echo 0)"
@@ -37,6 +42,8 @@ check "audit main points to smell reference" "$(main_has "references/smell-basel
 check "audit main points to quality checks reference" "$(main_has "references/quality-checks.md" && echo 1 || echo 0)"
 check "audit main points to reporting reference" "$(main_has "references/reporting.md" && echo 1 || echo 0)"
 check "audit requires standard citations" "$(has "cite the standard" && echo 1 || echo 0)"
+check "audit scope reference uses optional Octocode for candidate verification" "$(file_has "$SCOPE_STANDARDS" "already installed and useful" && file_has "$SCOPE_STANDARDS" "references, callers, duplication, and dead-export claims" && echo 1 || echo 0)"
+check "audit scope reference preserves scope, semantic uncertainty, and fallback" "$(file_has "$SCOPE_STANDARDS" "Do not install or configure Octocode" && file_has "$SCOPE_STANDARDS" "widen assigned scope" && file_has "$SCOPE_STANDARDS" "unavailable semantic support as evidence of absence" && file_has "$SCOPE_STANDARDS" "fail when Octocode is unavailable or unnecessary" && file_has "$SCOPE_STANDARDS" "existing Read, Grep, Glob, and Bash workflows remain valid fallbacks" && echo 1 || echo 0)"
 check "audit labels smell findings as possible" "$(has "possible smell" && echo 1 || echo 0)"
 check "audit skips tooling-enforced issues" "$(has "do not report formatter/linter/type errors" && echo 1 || echo 0)"
 check "audit has no security framing" "$(! grep -qi -- "security" "$SKILL" && echo 1 || echo 0)"

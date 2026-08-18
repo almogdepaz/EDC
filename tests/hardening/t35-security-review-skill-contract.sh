@@ -32,6 +32,8 @@ check "review keeps context routing guidance" "$(main_has "routing/coupling/blas
 check "review requires concrete attack path for findings" "$(has "concrete attack path" && echo 1 || echo 0)"
 check "review allows no-security-findings reports" "$(has "No security findings" && echo 1 || echo 0)"
 check "review methodology is security-titled" "$(file_has "$METHODOLOGY" "Security Review Methodology" && echo 1 || echo 0)"
+check "review uses optional Octocode for targeted security evidence" "$(file_has "$METHODOLOGY" "already installed and useful" && file_has "$METHODOLOGY" "reachability, blast-radius, dependency-source, and permitted history research" && echo 1 || echo 0)"
+check "review methodology preserves scope, semantic uncertainty, and fallback" "$(file_has "$METHODOLOGY" "Do not install or configure Octocode" && file_has "$METHODOLOGY" "widen assigned scope" && file_has "$METHODOLOGY" "unavailable semantic support as evidence of absence" && file_has "$METHODOLOGY" "fail when Octocode is unavailable or unnecessary" && file_has "$METHODOLOGY" "existing Read, Grep, Glob, and Bash workflows remain valid fallbacks" && echo 1 || echo 0)"
 check "reporting is security-titled" "$(file_has "$REPORTING" "Security Report" && echo 1 || echo 0)"
 check "reporting requires exact Findings heading" "$(file_has "$REPORTING" "exact heading \`## Findings\`" && file_has "$REPORTING" "Do not replace" && echo 1 || echo 0)"
 check "adversarial reference remains present" "$(file_has "$ADVERSARIAL" "Attacker Model" && echo 1 || echo 0)"

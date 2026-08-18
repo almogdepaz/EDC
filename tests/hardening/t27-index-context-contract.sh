@@ -16,6 +16,8 @@ BUILD_PLAN="$ROOT/plugins/edc/scripts/edc-build-plan.sh"
 JSON_CLI="$ROOT/plugins/edc/hooks/lib/json-cli.mjs"
 REVIEW_SKILL="$ROOT/plugins/edc/skills/edc-review/SKILL.md"
 REVIEW_METHODOLOGY="$ROOT/plugins/edc/skills/edc-review/methodology.md"
+AUDIT_SCOPE="$ROOT/plugins/edc/skills/edc-audit/references/scope-and-standards.md"
+DELIVERY_ARCHITECTURE="$ROOT/plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
 BENCHMARK_RUN="$ROOT/benchmark/run.sh"
 
 contains() {
@@ -26,6 +28,12 @@ contains() {
 not_contains() {
   local file="$1" text="$2"
   ! grep -Fq "$text" "$file"
+}
+
+check_no_octocode_hard_dependency() {
+  local label="$1" file="$2"
+  check "$label has no Octocode hard-dependency contract" \
+    "$(! grep -Eqi -- 'Octocode([- ]required| is required| (availability check|receipts?|telemetry|enforcement|artifacts?))|requires? Octocode|required Octocode' "$file" && echo 1 || echo 0)"
 }
 
 line_number() {
@@ -65,6 +73,14 @@ check "update prompt preserves routing-first index sections without reports" \
   "$(contains "$UPDATE_PROMPT" "preserve this section order" && contains "$UPDATE_PROMPT" "Route by path/task" && contains "$UPDATE_PROMPT" "Cross-module coupling / blast radius" && contains "$UPDATE_PROMPT" "Do not add a Reports section" && echo 1 || echo 0)"
 check "update prompt avoids noisy local-only index rewrites" \
   "$(contains "$UPDATE_PROMPT" "purely local implementation detail changed" && echo 1 || echo 0)"
+check "update prompt uses optional Octocode evidence without replacing routing authority" \
+  "$(contains "$UPDATE_PROMPT" "changed public or high-risk symbols" && contains "$UPDATE_PROMPT" "definitions, references, callers, and importers" && contains "$UPDATE_PROMPT" "additional blast-radius evidence" && contains "$UPDATE_PROMPT" "Route every discovered repository path through the shared classifier" && contains "$UPDATE_PROMPT" "manifest routing remains authoritative" && echo 1 || echo 0)"
+check "update prompt preserves assigned routing scope" \
+  "$(contains "$UPDATE_PROMPT" "Route every discovered repository path through the shared classifier" && contains "$UPDATE_PROMPT" "manifest routing remains authoritative" && contains "$UPDATE_PROMPT" "Do not infer business ownership from a call graph" && echo 1 || echo 0)"
+check "update prompt treats unavailable semantic support as unknown" \
+  "$(contains "$UPDATE_PROMPT" "unavailable semantic support as unknown" && contains "$UPDATE_PROMPT" "not evidence that a relationship is absent" && echo 1 || echo 0)"
+check "update prompt preserves no-failure fallback" \
+  "$(contains "$UPDATE_PROMPT" "Do not install or configure Octocode" && contains "$UPDATE_PROMPT" "fail when it or semantic support is unavailable" && contains "$UPDATE_PROMPT" "documented coupling remains the ordinary fallback" && echo 1 || echo 0)"
 
 check "module prompt distinguishes reasoning depth from persisted prose" \
   "$(contains "$MODULE_PROMPT" "analysis depth is the reasoning method, not the persisted artifact shape" && echo 1 || echo 0)"
@@ -84,6 +100,15 @@ check "module prompt preserves parent context for large targets" \
   "$(contains "$MODULE_PROMPT" "Large target rule" && contains "$MODULE_PROMPT" "preserve the whole-target mental model" && contains "$MODULE_PROMPT" "internal sub-routing or harness/workflow guidance" && echo 1 || echo 0)"
 check "module prompt rejects size-only splitting" \
   "$(contains "$MODULE_PROMPT" "Do not split solely because LOC or file count is high" && contains "$MODULE_PROMPT" "Split or promote only when subareas have independent durable ownership contracts" && echo 1 || echo 0)"
+check "module prompt prefers optional Octocode for targeted source research" \
+  "$(contains "$MODULE_PROMPT" "When an Octocode CLI is already installed and useful, prefer it" && contains "$MODULE_PROMPT" "installed dependency source" && contains "$MODULE_PROMPT" "history evidence already permitted by the assigned workflow" && echo 1 || echo 0)"
+check "module prompt preserves scope, semantic uncertainty, and tool fallback" \
+  "$(contains "$MODULE_PROMPT" "Keep research within the assigned target" && contains "$MODULE_PROMPT" "widen scope" && contains "$MODULE_PROMPT" "unavailable semantic support as unknown" && contains "$MODULE_PROMPT" "not evidence that a symbol or relationship is absent" && contains "$MODULE_PROMPT" "fail when it is unavailable or unnecessary" && contains "$MODULE_PROMPT" "existing Read, Grep, Glob, and Bash workflows remain valid fallbacks" && echo 1 || echo 0)"
+check_no_octocode_hard_dependency "module context prompt" "$MODULE_PROMPT"
+check_no_octocode_hard_dependency "update prompt" "$UPDATE_PROMPT"
+check_no_octocode_hard_dependency "security methodology" "$REVIEW_METHODOLOGY"
+check_no_octocode_hard_dependency "audit scope reference" "$AUDIT_SCOPE"
+check_no_octocode_hard_dependency "delivery architecture reference" "$DELIVERY_ARCHITECTURE"
 check "build-plan task asks subagents for distilled docs" \
   "$(contains "$BUILD_PLAN" "Write distilled high-signal context" && echo 1 || echo 0)"
 check "generated module task prompt forbids sibling source bodies" \

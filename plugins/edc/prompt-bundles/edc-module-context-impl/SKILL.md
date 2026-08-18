@@ -79,6 +79,12 @@ Before deep analysis, the agent performs a minimal mapping:
 
 This establishes anchors for detailed analysis.
 
+### Optional targeted source research
+
+When an Octocode CLI is already installed and useful, prefer it for focused repository structure, exact source reads, structural search, symbol definitions/references/callers, installed dependency source, and history evidence already permitted by the assigned workflow. Keep research within the assigned target and existing evidence permissions.
+
+Do not install or configure Octocode, widen scope, or fail when it is unavailable or unnecessary. Treat unavailable semantic support as unknown, not evidence that a symbol or relationship is absent; existing Read, Grep, Glob, and Bash workflows remain valid fallbacks.
+
 ---
 
 ## 5. Phase 2 — Ultra-Granular Function Analysis (Default Mode)

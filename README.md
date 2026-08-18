@@ -32,6 +32,8 @@ First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtim
 | PR bots | Convenient diff review | Remote, black-box, PR-only | Local inspectable context-aware review |
 | Semantic search / code search | Finds relevant code | Does not encode authority or invariants | Authored module docs with routing and guardrails |
 
+Workers may use an already-installed Octocode CLI for targeted source research. Octocode is optional; EDC does not install or require it.
+
 ## What EDC Does
 
 EDC separates deterministic orchestration from LLM analysis:

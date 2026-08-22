@@ -296,6 +296,7 @@ EOF
   local module_skill module_bundle="$run_dir/module-bundle.md" audit_bundle="$run_dir/audit-bundle.md"
   module_skill=$(_find_skill_for_agent "edc-module-context-impl") || return 1
   {
+    _emit_octocode_research_guidance
     cat "$module_skill"
     local resource
     for resource in COMPLETENESS_CHECKLIST.md FUNCTION_MICRO_ANALYSIS_EXAMPLE.md OUTPUT_REQUIREMENTS.md; do
@@ -355,7 +356,7 @@ CANONICAL_ISSUES_REPORT: $staged_reports/issues.md
 
 Read every staged module audit report. Synthesize maintainability findings into the complexity output and concrete correctness risks into the issues output. Both files require ## headings. Preserve module evidence. Do not re-audit source, launch agents, or write other files.
 
-$(cat "$audit_bundle")
+$(_emit_audit_reporting_prompt)
 EOF
   edc_worker_run_single "$run_dir" "$run_id" build-audit-synthesis edc-build/audit-synthesis "" "$build_audit_synthesis" "${EDC_BUILD_WORKER_TIMEOUT:-1800}" fail-fast "$staged_reports/complexity.md" "$staged_reports/issues.md" || return 1
 

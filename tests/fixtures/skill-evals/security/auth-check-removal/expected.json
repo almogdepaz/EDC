@@ -9,5 +9,6 @@
     { "category": "code style" },
     { "category": "delivery" }
   ],
-  "requiredEvidence": ["src/accounts.diff", "deleteAccount", "admin"]
+  "requiredFiles": ["src/accounts.diff"],
+  "requiredEvidence": ["deleteAccount", "admin"]
 }

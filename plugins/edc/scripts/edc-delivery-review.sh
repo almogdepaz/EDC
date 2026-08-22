@@ -74,6 +74,7 @@ emit_delivery_skill_bundle() {
   done
 
   cat <<EOF
+$(_emit_octocode_research_guidance)
 ================================================================================
 SKILL: edc-delivery-review/SKILL.md
 ================================================================================

@@ -105,6 +105,69 @@ else
   say_fail "normalizePath project-root boundary" "$boundary_check"
 fi
 
+cat > "$TMP/bad-glob-manifest.json" <<'EOF'
+{
+  "schemaVersion": 2,
+  "modules": [
+    { "name": "exact-mod", "priority": 20, "match": { "exactFiles": ["src/exact.ts"] } },
+    { "name": "prefix-mod", "priority": 10, "match": { "prefixes": ["src/"] } },
+    { "name": "bad-glob", "priority": 10, "match": { "globs": ["bad/[z-a]"] } }
+  ]
+}
+EOF
+printf '%s\n%s\n' "bad/y" "src/other.ts" > "$TMP/bad-glob-paths.txt"
+node plugins/edc/hooks/lib/classify-cli.mjs "$TMP/bad-glob-manifest.json" < "$TMP/bad-glob-paths.txt" > "$TMP/bad-glob.stdout" 2> "$TMP/bad-glob.stderr"
+bad_glob_rc=$?
+bad_glob_stderr_lines=$(wc -l < "$TMP/bad-glob.stderr" | tr -d ' ')
+if [ "$bad_glob_rc" -ne 0 ] \
+  && [ ! -s "$TMP/bad-glob.stdout" ] \
+  && [ "$bad_glob_stderr_lines" = "1" ] \
+  && grep -Fq 'classify-cli: invalid glob pattern "bad/[z-a]"' "$TMP/bad-glob.stderr" \
+  && ! grep -Eq 'SyntaxError| at ' "$TMP/bad-glob.stderr"; then
+  say_pass "malformed manifest glob returns bounded classify-cli diagnostic"
+else
+  say_fail "malformed manifest glob diagnostic" "rc=$bad_glob_rc stdout=$(cat "$TMP/bad-glob.stdout") stderr=$(tr '\n' '|' < "$TMP/bad-glob.stderr")"
+fi
+
+printf '%s\n' "src/exact.ts" | node plugins/edc/hooks/lib/classify-cli.mjs "$TMP/bad-glob-manifest.json" > "$TMP/bad-glob-exact.stdout" 2> "$TMP/bad-glob-exact.stderr"
+bad_glob_exact_rc=$?
+bad_glob_exact_stderr_lines=$(wc -l < "$TMP/bad-glob-exact.stderr" | tr -d ' ')
+if [ "$bad_glob_exact_rc" -ne 0 ] \
+  && [ ! -s "$TMP/bad-glob-exact.stdout" ] \
+  && [ "$bad_glob_exact_stderr_lines" = "1" ] \
+  && grep -Fq 'classify-cli: invalid glob pattern "bad/[z-a]"' "$TMP/bad-glob-exact.stderr" \
+  && ! grep -Eq 'SyntaxError| at ' "$TMP/bad-glob-exact.stderr"; then
+  say_pass "malformed manifest glob fails before exact/prefix routing wins"
+else
+  say_fail "malformed manifest glob before exact/prefix diagnostic" "rc=$bad_glob_exact_rc stdout=$(cat "$TMP/bad-glob-exact.stdout") stderr=$(tr '\n' '|' < "$TMP/bad-glob-exact.stderr")"
+fi
+
+: | node plugins/edc/hooks/lib/classify-cli.mjs "$TMP/bad-glob-manifest.json" > "$TMP/bad-glob-empty.stdout" 2> "$TMP/bad-glob-empty.stderr"
+bad_glob_empty_rc=$?
+bad_glob_empty_stderr_lines=$(wc -l < "$TMP/bad-glob-empty.stderr" | tr -d ' ')
+if [ "$bad_glob_empty_rc" -ne 0 ] \
+  && [ ! -s "$TMP/bad-glob-empty.stdout" ] \
+  && [ "$bad_glob_empty_stderr_lines" = "1" ] \
+  && grep -Fq 'classify-cli: invalid glob pattern "bad/[z-a]"' "$TMP/bad-glob-empty.stderr" \
+  && ! grep -Eq 'SyntaxError| at ' "$TMP/bad-glob-empty.stderr"; then
+  say_pass "malformed manifest glob fails before empty stdin succeeds"
+else
+  say_fail "malformed manifest glob empty stdin diagnostic" "rc=$bad_glob_empty_rc stdout=$(cat "$TMP/bad-glob-empty.stdout") stderr=$(tr '\n' '|' < "$TMP/bad-glob-empty.stderr")"
+fi
+
+printf '%s\n' "bad/y" | node plugins/edc/hooks/lib/classify-cli.mjs --ignore 'bad/[z-a]' "$TMP/manifest.json" > "$TMP/bad-ignore.stdout" 2> "$TMP/bad-ignore.stderr"
+bad_ignore_rc=$?
+bad_ignore_stderr_lines=$(wc -l < "$TMP/bad-ignore.stderr" | tr -d ' ')
+if [ "$bad_ignore_rc" -ne 0 ] \
+  && [ ! -s "$TMP/bad-ignore.stdout" ] \
+  && [ "$bad_ignore_stderr_lines" = "1" ] \
+  && grep -Fq 'classify-cli: invalid glob pattern "bad/[z-a]"' "$TMP/bad-ignore.stderr" \
+  && ! grep -Eq 'SyntaxError| at ' "$TMP/bad-ignore.stderr"; then
+  say_pass "malformed --ignore glob returns bounded classify-cli diagnostic"
+else
+  say_fail "malformed --ignore glob diagnostic" "rc=$bad_ignore_rc stdout=$(cat "$TMP/bad-ignore.stdout") stderr=$(tr '\n' '|' < "$TMP/bad-ignore.stderr")"
+fi
+
 echo
 echo "t17-route-js-parity: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

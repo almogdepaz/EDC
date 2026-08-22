@@ -42,6 +42,12 @@ echo "MOCK ERROR: unrecognized prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<'MOCK'
+#!/usr/bin/env bash
+[ "${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 setup_repo() {
   rm -rf "$TMPDIR_T38/repo"
@@ -93,6 +99,9 @@ if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q '# Goal / Spec Delivery Axis' "$TMPDIR_T38/last-prompt" \
   && grep -q '# Architecture Fit Axis' "$TMPDIR_T38/last-prompt" \
   && grep -q '# Delivery / Architecture Reporting' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'OCTOCODE_STATUS: available' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'octocode tools localViewStructure --queries' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'octocode tools localSearchCode --queries' "$TMPDIR_T38/last-prompt" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" && j.finalReview === "delivery-review-HEAD.md" ? 0 : 1)'; then
   echo "PASS: delivery-review writes report from embedded skill bundle"
 else

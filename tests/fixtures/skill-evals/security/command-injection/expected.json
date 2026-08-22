@@ -9,5 +9,6 @@
     { "category": "code quality" },
     { "category": "scope creep" }
   ],
-  "requiredEvidence": ["src/export.diff", "projectName", "tar"]
+  "requiredFiles": ["src/export.diff"],
+  "requiredEvidence": ["projectName", "tar"]
 }

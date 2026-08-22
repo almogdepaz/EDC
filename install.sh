@@ -76,19 +76,6 @@ done
   exit 1
 }
 
-PRIVATE_SKILLS=(
-  "plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
-  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/COMPLETENESS_CHECKLIST.md"
-  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
-  "plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
-  "plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
-  "plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
-  "plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
-  "plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
-  "plugins/edc/prompt-bundles/edc-context-curator-impl/SKILL.md"
-  "plugins/edc/prompt-bundles/edc-context-curator-edit-impl/SKILL.md"
-)
-
 PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-review/SKILL.md"
   "plugins/edc/skills/edc-review/methodology.md"
@@ -105,8 +92,6 @@ PUBLIC_SKILLS=(
   "plugins/edc/skills/edc-delivery-review/references/architecture-axis.md"
   "plugins/edc/skills/edc-delivery-review/references/reporting.md"
 )
-
-SKILLS=("${PRIVATE_SKILLS[@]}" "${PUBLIC_SKILLS[@]}")
 
 cleanup_install_tmp() {
   if [ -n "$EDC_INSTALL_TMP" ]; then
@@ -156,6 +141,10 @@ install_terminal_cli() {
   [ -f "$runtime_manifest" ] || die "installer source missing: plugins/edc/hooks/lib/runtime-manifest.mjs"
   command -v node >/dev/null 2>&1 || die "node is required for EDC runtime installation"
   node "$runtime_manifest" install "$HOME" "$SCRIPT_DIR/plugins/edc" >/dev/null
+  rm -rf \
+    "$HOME/.edc/skills/edc-review-impl" \
+    "$HOME/.edc/skills/edc-audit-impl" \
+    "$HOME/.edc/skills/edc-context"
 
   install_shell_path
 }
@@ -236,14 +225,12 @@ surface its output.
 \`\`\`bash
 set -- \$ARGUMENTS
 export EDC_AGENT_CLI=cursor
-if [ -f ".edc/scripts/edc-$script.sh" ]; then
-  bash .edc/scripts/edc-$script.sh "\$@"
-elif [ -f "\$HOME/.edc/scripts/edc-$script.sh" ]; then
-  bash "\$HOME/.edc/scripts/edc-$script.sh" "\$@"
-else
-  echo "SCRIPT_MISSING: install EDC orchestrator first"
+bootstrap="\$HOME/.edc/hooks/lib/runtime-bootstrap.mjs"
+if [ ! -f "\$bootstrap" ]; then
+  echo "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC"
   exit 1
 fi
+node "\$bootstrap" edc-$script.sh "\$@"
 \`\`\`
 
 If the script exits non-zero, surface its error verbatim and stop.
@@ -272,14 +259,12 @@ shell and surface its output. Pass through any user arguments verbatim.
 
 \`\`\`bash
 export EDC_AGENT_CLI=codex
-if [ -f ".edc/scripts/edc-$script.sh" ]; then
-  bash .edc/scripts/edc-$script.sh "\$@"
-elif [ -f "\$HOME/.edc/scripts/edc-$script.sh" ]; then
-  bash "\$HOME/.edc/scripts/edc-$script.sh" "\$@"
-else
-  echo "SCRIPT_MISSING: install EDC orchestrator first"
+bootstrap="\$HOME/.edc/hooks/lib/runtime-bootstrap.mjs"
+if [ ! -f "\$bootstrap" ]; then
+  echo "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC"
   exit 1
 fi
+node "\$bootstrap" edc-$script.sh "\$@"
 \`\`\`
 
 If the script exits non-zero, surface its error verbatim and stop.
@@ -338,23 +323,6 @@ print_cli_hint() {
   esac
 }
 
-# install_edc_skills <skills-target>
-# Drop SKILL.md (+ supporting files) into <target>/<skill-name>/. Used by
-# the claude CLI install path so resolve_prompt's claude branch can find
-# skills under ~/.edc/skills/ without depending on the claude plugin.
-install_edc_skills() {
-  local target="$1"
-  local f rel
-  rm -rf \
-    "$target/edc-review-impl" \
-    "$target/edc-audit-impl" \
-    "$target/edc-context"
-  for f in "${SKILLS[@]}"; do
-    rel=$(skill_rel "$f")
-    copy_from_source "$f" "$target/$rel"
-  done
-}
-
 install_public_edc_skills() {
   local target="$1"
   local f rel
@@ -374,7 +342,6 @@ install_public_edc_skills() {
 install_claude_runtime() {
   prepare_source_tree
   install_terminal_cli
-  install_edc_skills "$HOME/.edc/skills"
   echo "Installed EDC terminal CLI at $HOME/.edc/scripts/edc."
   echo "Installed EDC skill bundle at $HOME/.edc/skills/."
   echo
@@ -401,7 +368,6 @@ case "$AGENT" in
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Cursor..."
     install_public_edc_skills "$TARGET/skills"
-    install_edc_skills "$HOME/.edc/skills"
     install_terminal_cli
     write_cursor_commands "$TARGET"
     echo "Done. Public skills at $TARGET/skills/, commands at $TARGET/commands/, terminal CLI + private prompt bundle at $SCRIPTS_TARGET/ and $HOME/.edc/skills/"
@@ -415,7 +381,6 @@ case "$AGENT" in
     SCRIPTS_TARGET="$HOME/.edc/scripts"
     echo "Installing EDC public skills globally for Codex..."
     install_public_edc_skills "$TARGET"
-    install_edc_skills "$HOME/.edc/skills"
     install_terminal_cli
     write_codex_skills "$TARGET"
     echo "Done. Public skills at $TARGET/, terminal CLI + private prompt bundle at $SCRIPTS_TARGET/ and $HOME/.edc/skills/. Use \$edc-build, \$edc-update, \$edc-run-review, or \$edc-doctor."
@@ -435,7 +400,6 @@ case "$AGENT" in
       pi install "git:github.com/almogdepaz/edc"
     fi
     install_terminal_cli
-    install_edc_skills "$HOME/.edc/skills"
     echo "installed extension/source path: $SCRIPT_DIR/pi"
     echo "restart pi or run /reload in existing sessions to refresh menu labels."
     echo "Done. Run /edc inside pi for review/security review/delivery review/quality review/status/build/update/doctor. Toggle mode with 'edc mode advisory|inject'."

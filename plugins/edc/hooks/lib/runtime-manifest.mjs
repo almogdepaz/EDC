@@ -15,7 +15,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
@@ -69,6 +69,7 @@ export const RUNTIME_MANIFEST = Object.freeze({
     hook("pi-supervisor.mjs"),
     hook("platform.mjs", false),
     hook("route.mjs", false),
+    hook("runtime-bootstrap.mjs"),
     hook("runtime-manifest.mjs"),
     hook("stream-filter.mjs"),
     hook("termination-policy.mjs", false),
@@ -168,12 +169,11 @@ export function validateRuntimeManifest(manifest = RUNTIME_MANIFEST, sourceRoot 
   return true;
 }
 
-function sourcePathFor(sourceRoot, artifact) {
-  const pluginSource = join(sourceRoot, artifact.source);
-  if (existsSync(pluginSource)) return pluginSource;
-  const installedSource = join(sourceRoot, artifact.destination);
-  if (existsSync(installedSource)) return installedSource;
-  return pluginSource;
+export function sourcePathFor(sourceRoot, artifact) {
+  if (basename(resolve(sourceRoot)) === ".edc") {
+    return join(sourceRoot, artifact.destination.slice(".edc/".length));
+  }
+  return join(sourceRoot, artifact.source);
 }
 
 function hashFile(path) {
@@ -321,19 +321,24 @@ function validateInstalledTree(projectRoot, manifest = RUNTIME_MANIFEST, trusted
       throw fail(structured("runtime-validation-failed", "project-local EDC runtime contains invalid JavaScript", "reinstall EDC from a trusted package", { path: artifact.destination }));
     }
   }
-  workerManifestSmoke(projectRoot);
+  workerManifestSmoke(projectRoot, trustedSourceRoot, manifest);
   return structured("success", "runtime preflight passed", "", { fingerprint: metadata.fingerprint }, 0);
 }
 
-function workerManifestSmoke(projectRoot) {
+function workerManifestSmoke(projectRoot, trustedSourceRoot = "", manifest = RUNTIME_MANIFEST) {
   const smokeDir = mkdtempSync(join(tmpdir(), "edc-worker-manifest-smoke."));
   try {
     const tasks = join(smokeDir, "tasks.jsonl");
     const output = join(smokeDir, "manifest.json");
     writeFileSync(tasks, "");
-    execFileSync(process.execPath, [join(projectRoot, ".edc/hooks/lib/worker-manifest.mjs"), output, "runtime-smoke", smokeDir, "1", tasks], { stdio: "ignore", timeout: RUNTIME_VALIDATION_TIMEOUT_MS });
-    const manifest = JSON.parse(readFileSync(output, "utf8"));
-    if (manifest.schemaVersion !== 1 || manifest.runId !== "runtime-smoke" || !Array.isArray(manifest.tasks)) {
+    const artifact = manifest.artifacts.find((entry) => entry.destination === ".edc/hooks/lib/worker-manifest.mjs");
+    if (trustedSourceRoot && !artifact) throw new Error("trusted runtime manifest omits worker-manifest helper");
+    const helper = trustedSourceRoot
+      ? sourcePathFor(trustedSourceRoot, artifact)
+      : join(projectRoot, ".edc/hooks/lib/worker-manifest.mjs");
+    execFileSync(process.execPath, [helper, output, "runtime-smoke", smokeDir, "1", tasks], { stdio: "ignore", timeout: RUNTIME_VALIDATION_TIMEOUT_MS });
+    const smokeManifest = JSON.parse(readFileSync(output, "utf8"));
+    if (smokeManifest.schemaVersion !== 1 || smokeManifest.runId !== "runtime-smoke" || !Array.isArray(smokeManifest.tasks)) {
       throw new Error("worker manifest smoke produced invalid manifest");
     }
   } catch {
@@ -439,11 +444,16 @@ export function installRuntime(projectRoot, sourceRoot, manifest = RUNTIME_MANIF
   validateRuntimeManifest(manifest, source);
   const release = acquireInstallLock(root);
   const parent = root;
-  const stageRoot = mkdtempSync(join(parent, ".edc.stage."));
-  const stageEdcRoot = join(stageRoot, ".edc");
+  let stageRoot = "";
+  let stageEdcRoot = "";
   const backupRoot = join(parent, `.edc.backup.${process.pid}.${Date.now()}`);
   let promoted = false;
   try {
+    if (process.env.EDC_RUNTIME_FAIL_BEFORE_STAGE === "1") {
+      throw fail(structured("runtime-validation-failed", "simulated runtime install allocation failure before staging", "rerun the EDC installer", { stage: "before-stage" }));
+    }
+    stageRoot = mkdtempSync(join(parent, ".edc.stage."));
+    stageEdcRoot = join(stageRoot, ".edc");
     mkdirSync(stageEdcRoot, { recursive: true });
     for (const artifact of manifest.artifacts) copyArtifact(source, artifact, stageEdcRoot);
     copyPreservedFiles(join(root, ".edc"), stageEdcRoot, manifest);
@@ -467,7 +477,7 @@ export function installRuntime(projectRoot, sourceRoot, manifest = RUNTIME_MANIF
     return structured("success", "runtime installed", "", { fingerprint: metadata.fingerprint }, 0);
   } catch (error) {
     if (!promoted && existsSync(backupRoot) && !existsSync(join(root, ".edc"))) renameSync(backupRoot, join(root, ".edc"));
-    rmSync(stageRoot, { recursive: true, force: true });
+    if (stageRoot) rmSync(stageRoot, { recursive: true, force: true });
     throw error.result ? error : fail(structured("runtime-validation-failed", error.message || "runtime install failed", "rerun the EDC installer after fixing the reported runtime file"));
   } finally {
     release();

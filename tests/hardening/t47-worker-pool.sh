@@ -225,4 +225,101 @@ else
   cat "$production/out.log" "$production/err.log" "$production/pi.log" 2>/dev/null || true
 fi
 
+set_two_task_outputs() {
+  node -e '
+    const fs = require("fs");
+    const [path, firstOutput, secondOutput] = process.argv.slice(1);
+    const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+    manifest.tasks[0].outputs = [firstOutput];
+    manifest.tasks[1].outputs = [secondOutput];
+    fs.writeFileSync(path, JSON.stringify(manifest));
+  ' "$1/tasks.json" "$2" "$3"
+}
+
+check_output_collision_rejected() {
+  local run_dir="$1" description="$2" first_output="$3" second_output="$4"
+  set_two_task_outputs "$run_dir" "$first_output" "$second_output"
+  WORKER_STATE="$run_dir/state" node "$POOL" --runner "$RUNNER" "$run_dir/tasks.json" >"$run_dir/out.log" 2>"$run_dir/err.log"
+  local rc=$? launches=0
+  if [ -f "$run_dir/state/overlap.log" ]; then
+    launches=$(wc -l < "$run_dir/state/overlap.log" | tr -d ' ')
+  fi
+  if [ "$rc" -eq 2 ] \
+    && grep -Fq 'first' "$run_dir/err.log" \
+    && grep -Fq 'second' "$run_dir/err.log" \
+    && grep -Fq "$first_output" "$run_dir/err.log" \
+    && grep -Fq "$second_output" "$run_dir/err.log" \
+    && [ "$launches" -eq 0 ] \
+    && [ ! -e "$run_dir/stage-result.json" ]; then
+    check "$description" 1
+  else
+    check "$description" 0
+    cat "$run_dir/out.log" "$run_dir/err.log" 2>/dev/null || true
+    printf 'rc=%s launches=%s stage_result=%s\n' "$rc" "$launches" "$([ -e "$run_dir/stage-result.json" ] && echo yes || echo no)"
+  fi
+}
+
+# Output ownership is manifest-wide: aliases must fail validation before launch.
+exact_collision="$TMP/exact-collision"
+write_manifest "$exact_collision" 2 5 first second
+exact_output="$exact_collision/staged/shared.txt"
+check_output_collision_rejected "$exact_collision" "47.10: rejects exact cross-task output collisions before launch" "$exact_output" "$exact_output"
+
+normalized_collision="$TMP/normalized-collision"
+write_manifest "$normalized_collision" 2 5 first second
+normalized_output="$normalized_collision/staged/shared.txt"
+normalized_alias="$normalized_collision/staged/nested/../shared.txt"
+check_output_collision_rejected "$normalized_collision" "47.11: rejects normalized cross-task output aliases before launch" "$normalized_output" "$normalized_alias"
+
+symlink_collision="$TMP/symlink-collision"
+write_manifest "$symlink_collision" 2 5 first second
+ln -s staged "$symlink_collision/staged-alias"
+symlink_output="$symlink_collision/staged/shared.txt"
+symlink_alias="$symlink_collision/staged-alias/shared.txt"
+check_output_collision_rejected "$symlink_collision" "47.12: rejects in-run symlink-directory output aliases before launch" "$symlink_output" "$symlink_alias"
+
+case_behavior=$(node - "$TMP" <<'NODE'
+const { existsSync, mkdtempSync, rmSync, writeFileSync } = require("fs");
+const { join } = require("path");
+let probeDir;
+try {
+  probeDir = mkdtempSync(join(process.argv[2], "case-probe-"));
+  writeFileSync(join(probeDir, "lowercase"), "probe\n");
+  process.stdout.write(existsSync(join(probeDir, "LOWERCASE")) ? "insensitive" : "sensitive");
+} finally {
+  if (probeDir) rmSync(probeDir, { recursive: true });
+}
+NODE
+)
+case_probe_rc=$?
+case_collision="$TMP/case-collision"
+write_manifest "$case_collision" 2 5 first second
+lowercase_output="$case_collision/staged/shared.txt"
+uppercase_output="$case_collision/staged/SHARED.txt"
+if [ "$case_probe_rc" -ne 0 ]; then
+  check "47.13: applies output ownership case rules for the actual filesystem" 0
+  printf 'filesystem case probe failed with rc=%s\n' "$case_probe_rc"
+elif [ "$case_behavior" = "insensitive" ]; then
+  check_output_collision_rejected "$case_collision" "47.13: rejects case-aliased outputs on case-insensitive filesystems" "$lowercase_output" "$uppercase_output"
+else
+  set_two_task_outputs "$case_collision" "$lowercase_output" "$uppercase_output"
+  WORKER_STATE="$case_collision/state" node "$POOL" --runner "$RUNNER" "$case_collision/tasks.json" >"$case_collision/out.log" 2>"$case_collision/err.log"
+  case_rc=$?
+  case_launches=0
+  if [ -f "$case_collision/state/overlap.log" ]; then
+    case_launches=$(wc -l < "$case_collision/state/overlap.log" | tr -d ' ')
+  fi
+  if [ "$case_rc" -eq 0 ] \
+    && [ "$case_launches" -eq 2 ] \
+    && [ "$(cat "$lowercase_output" 2>/dev/null)" = "first" ] \
+    && [ "$(cat "$uppercase_output" 2>/dev/null)" = "second" ] \
+    && node -e 'const stage=require(process.argv[1]); process.exit(stage.status === "success" && stage.tasks.every((task) => task.status === "success") ? 0 : 1)' "$case_collision/stage-result.json"; then
+    check "47.13: allows case-distinct outputs on case-sensitive filesystems" 1
+  else
+    check "47.13: allows case-distinct outputs on case-sensitive filesystems" 0
+    cat "$case_collision/out.log" "$case_collision/err.log" "$case_collision/stage-result.json" 2>/dev/null || true
+    printf 'filesystem=%s rc=%s launches=%s\n' "$case_behavior" "$case_rc" "$case_launches"
+  fi
+fi
+
 check_summary "T47"

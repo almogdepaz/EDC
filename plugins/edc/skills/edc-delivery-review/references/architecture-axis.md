@@ -22,7 +22,7 @@ Use two-layer detection:
 
 Do not report architecture findings from path names, grep hits, or generic preferences alone.
 
-When Octocode is already installed and useful, prefer it to verify callers, public contracts, integration completeness, ownership evidence, and installed dependency behavior. Do not install or configure Octocode, widen assigned scope, treat unavailable semantic support as evidence of absence, or fail when Octocode is unavailable or unnecessary; existing Read, Grep, Glob, and Bash workflows remain valid fallbacks.
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries to verify callers, public contracts, integration completeness, ownership evidence, and installed dependency behavior.
 
 ## Architecture checks
 

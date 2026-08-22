@@ -57,9 +57,7 @@ Collect affected real modules from `context-module:*`. For changed `contextless:
 
 Also include any modules that `edc-context/modules/<name>.md` documents as coupled to an affected module (read the cross-module coupling sections).
 
-For changed public or high-risk symbols, when an Octocode CLI is already installed and useful, use definitions, references, callers, and importers as additional blast-radius evidence. Route every discovered repository path through the shared classifier before adding a real affected module; manifest routing remains authoritative.
-
-Do not infer business ownership from a call graph. Treat unavailable semantic support as unknown, not evidence that a relationship is absent. Do not install or configure Octocode, or fail when it or semantic support is unavailable; in all cases, documented coupling remains the ordinary fallback.
+For changed public or high-risk symbols, when the prompt says `OCTOCODE_STATUS: available`, use definitions, references, callers, and importers as additional blast-radius evidence. Route every discovered repository path through the shared classifier before adding a real affected module; manifest routing remains authoritative. Do not infer business ownership from a call graph.
 
 ### Step 3 — Re-analyze affected modules
 

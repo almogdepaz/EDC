@@ -10,5 +10,6 @@
     { "category": "security" },
     { "category": "spec delivery" }
   ],
-  "requiredEvidence": ["src/cache.ts", "memory.set"]
+  "requiredFiles": ["src/cache.ts"],
+  "requiredEvidence": ["memory.set"]
 }

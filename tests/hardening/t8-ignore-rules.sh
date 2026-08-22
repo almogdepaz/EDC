@@ -7,10 +7,12 @@ SCRIPT="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 TMPDIR_T8=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T8"' EXIT
+T8_BUILD_OUT="$TMPDIR_T8/build-out.txt"
 
 echo "=== T8: Ignore rules ==="
 
-cd "$TMPDIR_T8"
+mkdir "$TMPDIR_T8/repo"
+cd "$TMPDIR_T8/repo"
 export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 git init -q
@@ -30,7 +32,7 @@ printf 'two\n' > generated/skip.txt
 git add src/keep.txt generated/skip.txt
 git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
-node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T8" "$ORIG_DIR/plugins/edc" >/dev/null
+node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
 
 mkdir -p edc-context
 cat > edc-context/manifest.json <<EOF
@@ -39,7 +41,7 @@ EOF
 printf '## Module Map\n\n- root\n' > edc-context/index.md
 
 # ── 8a: .edcignore filters files when no --ignore flag is passed ──────────────
-bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > /tmp/t8-build-out.txt
+bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 > "$T8_BUILD_OUT"
 
 if grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json \
   && ! grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json; then
@@ -51,7 +53,7 @@ else
 fi
 
 # ── 8b: --ignore overrides .edcignore for the run ─────────────────────────────
-bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 --ignore src/** > /tmp/t8-build-out.txt
+bash "$ORIG_DIR/$SCRIPT" --build HEAD --base HEAD~1 --ignore src/** > "$T8_BUILD_OUT"
 
 if grep -q '"generated/skip.txt"' edc-context/review-tasks/manifest.json \
   && ! grep -q '"src/keep.txt"' edc-context/review-tasks/manifest.json; then

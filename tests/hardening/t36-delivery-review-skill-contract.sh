@@ -9,6 +9,7 @@ check_init
 SKILL_DIR="$ROOT/plugins/edc/skills/edc-delivery-review"
 SKILL="$SKILL_DIR/SKILL.md"
 ARCHITECTURE_AXIS="$SKILL_DIR/references/architecture-axis.md"
+RUNTIME_LIB="$ROOT/plugins/edc/scripts/edc-lib.sh"
 
 echo "=== T36: delivery review skill contract ==="
 
@@ -30,8 +31,8 @@ check "delivery review checks contracts and rollout" "$(has "API/error contract"
 check "delivery review includes review calibration gate" "$(has "Review Calibration" && has "real goal" && has "done evidence" && has "not the goal" && has "non-obvious invariants" && echo 1 || echo 0)"
 check "delivery review can report flawed plan or spec" "$(has "spec/plan issue" && has "do not force bad spec compliance" && echo 1 || echo 0)"
 check "delivery review requires candidate then verification" "$(has "candidate scan" && has "context verification" && echo 1 || echo 0)"
-check "delivery architecture reference uses optional Octocode for verification" "$(file_has "$ARCHITECTURE_AXIS" "already installed and useful" && file_has "$ARCHITECTURE_AXIS" "callers, public contracts, integration completeness, ownership evidence, and installed dependency behavior" && echo 1 || echo 0)"
-check "delivery architecture reference preserves scope, semantic uncertainty, and fallback" "$(file_has "$ARCHITECTURE_AXIS" "Do not install or configure Octocode" && file_has "$ARCHITECTURE_AXIS" "widen assigned scope" && file_has "$ARCHITECTURE_AXIS" "unavailable semantic support as evidence of absence" && file_has "$ARCHITECTURE_AXIS" "fail when Octocode is unavailable or unnecessary" && file_has "$ARCHITECTURE_AXIS" "existing Read, Grep, Glob, and Bash workflows remain valid fallbacks" && echo 1 || echo 0)"
+check "delivery architecture reference uses coordinator-approved Octocode for verification" "$(file_has "$ARCHITECTURE_AXIS" 'OCTOCODE_STATUS: available' && file_has "$ARCHITECTURE_AXIS" "callers, public contracts, integration completeness, ownership evidence, and installed dependency behavior" && echo 1 || echo 0)"
+check "delivery coordinator guidance preserves scope, semantic uncertainty, and fallback" "$(file_has "$RUNTIME_LIB" "Do not install or configure Octocode" && file_has "$RUNTIME_LIB" "widen scope" && file_has "$RUNTIME_LIB" "Treat unavailable semantic support as unknown" && file_has "$RUNTIME_LIB" "existing Read, Grep, Glob, and Bash tools" && echo 1 || echo 0)"
 check "delivery review checks ownership boundary specifics" "$(has "unit-of-work" && has "session/resource ownership" && has "orchestration depth" && has "client/adapter abstraction" && has "event publisher/subscriber" && echo 1 || echo 0)"
 check "delivery review findings include concrete action labels" "$(has "IMPLEMENT_REQUIREMENT" && has "REMOVE_SCOPE_CREEP" && has "MOVE_TO_OWNER" && has "CHOOSE_SOURCE_OF_TRUTH" && has "STANDARDIZE_CONTRACT" && has "ADD_MIGRATION_OR_ROLLOUT" && echo 1 || echo 0)"
 check "delivery review excludes code quality" "$(has "Use edc-audit for code quality" && echo 1 || echo 0)"

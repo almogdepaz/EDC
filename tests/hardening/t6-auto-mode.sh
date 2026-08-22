@@ -22,6 +22,7 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
 TMPDIR_T6=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T6/bin"
+export EDC_CONFIG_FILE="$TMPDIR_T6/missing-config"
 trap 'rm -rf "$TMPDIR_T6"' EXIT
 
 echo "=== T6: end-to-end auto_mode pipeline (mocked agent) ==="
@@ -147,7 +148,7 @@ echo "→ using mock claude at: $which_claude"
 # Run the full pipeline. The explicit review base must not replace the manifest
 # sourceCommit used for context recovery. Capture output for diagnostics.
 result=0
-out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
+out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"

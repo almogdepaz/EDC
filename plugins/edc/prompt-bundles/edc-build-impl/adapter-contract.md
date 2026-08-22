@@ -5,7 +5,7 @@ This document defines the runtime contract every EDC adapter must implement agai
 ## Shared Inputs
 
 - `AGENTS.md` or referenced `EDC_AGENTS.md`: short startup orientation for humans and runtimes.
-- `edc-context/index.md`: routing-first operational index loaded at session start or on demand; use it for path/task guidance, critical invariants, coupling/blast radius, compact architecture, and report links.
+- `edc-context/index.md`: routing-first operational index loaded at session start or on demand; use it for path/task guidance, critical invariants, coupling/blast radius, and compact architecture. Reports are discovered through `edc-context/manifest.json` or explicit review workflows, not the ordinary index read path.
 - `edc-context/manifest.json`: authoritative routing and policy contract.
 - `edc-context/modules/<name>.md`: deep per-module context selected by manifest routing.
 

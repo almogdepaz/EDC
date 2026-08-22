@@ -11,22 +11,24 @@ This module is the deterministic safety net for EDC's shell/JS/agent integration
 
 The current branch expands coverage for deterministic worker orchestration: build/security/quality workers use git-private run dirs, bounded concurrency, declared outputs, containment, validation-before-promotion, and structured task/stage results. It also tightens audit simplification contracts, Pi worker observability with `--no-extensions -e <EDC_PI_EXTENSION_PATH>`, project-local helper copying, build DAG prompts, and write-containment behavior.
 
+New regressions concentrate on process lifecycle and optional source research. Tests pin fallback-watchdog child reaping, atomic timer-PID publication, fail-closed timer errors, caller trap restoration, nested worker/background process-group deadline ordering, truthful Pi status after kill failure, and explicit available/unavailable Octocode prompt guidance without a hard dependency. Synthesis prompts are checked to ensure they do not receive source-research capability instructions.
+
 ## Test organization
 - `run-all.sh`: suite runner. It creates an isolated temporary HOME, copies public/private EDC skills into that HOME, snapshots repository status, runs every `tests/hardening/t*.sh` in order, and fails if the suite changes the checkout.
 - `lib/check.sh`: shared PASS/FAIL helpers, including file-backed counters for tests that execute assertions in subshells.
 - `t1-*` through `t9-*`: early tool lockdown, stream filtering, content validation, timeouts, install portability, auto mode, CLI entrypoint, ignore rules, routing, and Pi background-status persistence.
-- `t10-pi-extension.sh`: broad fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit/delivery, session/tool injection works, menu actions route to scripts, scope/default-base args are detected, context preflight prompts can be accepted/declined/bypassed, structured background status surfaces scope/outputs/failure fields, background UI pins only while running, and EDC Bash tool calls get longer timeouts.
+- `t10-pi-extension.sh`: broad fake Pi ExtensionAPI integration test. It asserts only `/edc` is registered, public skills are limited to review/audit/delivery, session/tool injection works, menu actions route to scripts, scope/default-base args are detected, context preflight prompts can be accepted/declined/bypassed, structured background status surfaces scope/outputs/failure fields, background UI pins only while running, and EDC Bash tool calls get longer timeouts. Its nested-kill fixture pauses a real worker pool across the child escalation deadline, then proves Pi's longer grace removes both process groups; mocked force-kill failure must preserve running status/UI.
 - `t11-audit-orchestrator.sh`: quality-review freshness/recovery, full and diff-scoped per-module worker fanout, staged synthesis, warning-on-validated-output semantics, canonical report promotion, and report validation behavior.
 - `t12-build-orchestrator.sh`: build route matrix and the coordinator-owned full-build DAG. It covers missing/healthy/force/partial/v1 routes, discovery/build-plan/module/cross/assembly/audit stages, staged context promotion, doctor/curator validation, ignore propagation, helper copying, and failure paths.
 - `t13-update-orchestrator.sh`: update preflight and validation paths.
-- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; also verifies audit prompt resolution embeds all audit reference files.
+- `t14-resolve-prompt-decoupled.sh`: prompt resolution independent of plugin dev paths; verifies audit prompt resolution embeds all audit reference files and checks optional Octocode detection for working, failing, hanging, and absent CLIs. Available prompts contain actionable batched queries; all failures quickly produce unavailable/native-tool fallback guidance.
 - `t15-review-routing.sh`: manifest-driven security review task routing, dirty tracked file inclusion, unexpected unmapped behavior, deterministic contextless/allowed-unmapped accounting through prewritten reports, ambiguity failure, ignore-context/no-context modes, write containment, plus `edc-review.sh -h` usage validation.
 - `t16-context-dir-source-of-truth.sh`: canonical path source-of-truth behavior, including delivery-review in source-list contracts.
 - `t17-route-js-parity.sh`: JS router parity with shell router and no shell exec on hot path.
 - `t18-pi-backend.sh`: Pi JSON backend spawn behavior, model propagation, subprocess no-extension guard, optional explicit observer extension path, retrying `agent_end` handling, stream parsing, worker provenance, and audit worker/synthesis prompt handling.
 - `t19-bash-alignment.sh`: verifies review auto-mode and worker paths run without `EDC_BASH` indirection.
 - `t20`-`t25`: Pi review status failure/report-validation/provider failure behavior and package compatibility/smoke tests, including delivery-review visibility.
-- `t27-index-context-contract.sh`: prompt/docs contract for routing-first `index.md`, distilled module-doc signal filter, build-plan task wording, and review methodology's use of the route table. Keep this aligned with runtime-embedded build/update prompts when index section order changes.
+- `t27-index-context-contract.sh`: prompt/docs contract for routing-first `index.md`, distilled module-doc signal filter, build-plan task wording, review methodology's use of the route table, and capability-guidance scope/fallback/uncertainty rules. It rejects wording that turns Octocode into a hard dependency.
 - `t30-review-contextless-policy.sh`: contextless/unmapped review accounting and policy behavior.
 - `t31`-`t33`: context curator contract, runtime curator step, and curator edit-mode behavior.
 - `t34-audit-skill-contract.sh`: pins audit as scoped, read-only code-quality analysis with reference-file methodology, simplification ladder/tags, repo-helper/stdlib/native/dependency ordering, accepted debt markers, root-cause and smallest-runnable-check heuristics, antipattern overlap terms, ranking/removal-estimate guidance, and terse no-finding output.
@@ -37,6 +39,7 @@ The current branch expands coverage for deterministic worker orchestration: buil
 - `t39-review-write-containment.sh` and `t45-review-phase-write-containment.sh`: ensure security/review phases do not let workers mutate canonical context/reports or other forbidden paths; the worker-pool staging model is part of this boundary.
 - `t41-review-all-orchestrator.sh`: combined review orchestrator runs security, delivery, and quality with correct arg projection, aggregates child `EDC_RESULT_FILE`s, preserves warnings, and identifies failed phases/child result files.
 - `t42-phase-result-contract.sh`: structured phase result contract for result JSON status/reason/output/scope/failed-phase fields consumed by Pi and review-all aggregation.
+- `t4-timeouts-pipe-guards.sh`: direct timeout and shell-pipeline contract, including native timeout status, Bash fallback timer publication, watchdog/command child reaping, fail-closed timer failures, race-safe outcome ownership, and exact restoration of caller TERM/INT traps.
 - `t47-worker-pool.sh`: direct worker-pool contract test. It validates manifest/output containment, bounded concurrency, deterministic result ordering, fail-fast cancellation of descendants and queued work, timeout process-group cleanup, continue policy, missing-output failures, symlink-escape rejection, and production `edc-worker.sh` delegation to `edc_spawn` with provenance plus explicit Pi observer extension.
 - `t48-runtime-robustness.sh`: canonical inventory, transactional install, token-owned lock behavior, stale/live lock handling, interruption rollback, no implicit repair, and valid-helper tamper rejection. It also proves task-only security planning, integrity-failure result writing, quality-review dependency loading, and delivery-review dependency loading do not execute rejected managed helpers.
 - `tests/unit/decomposition-modules.test.mjs`: direct characterization of extracted Pi argument/scope/background helpers and JSON result-command dispatch.
@@ -51,13 +54,15 @@ The current branch expands coverage for deterministic worker orchestration: buil
 ## Invariants
 - Tests run from repo root and isolate mutation in temporary dirs unless explicitly checking installed paths.
 - `run-all.sh` must provide skill fixtures in a temp HOME so tests do not depend on the developer's real `~/.edc`, and it must include public skill reference subdirectories.
-- Mock agents must key off unique prompt markers because full skill text can contain overlapping words; phase-result tests should assert durable JSON, not only process exit codes.
+- Mock agents must key off unique prompt markers because full skill text can contain overlapping words; phase-result tests should assert durable JSON, not only process exit codes. Source-research capability blocks belong only in prompts that inspect source, not in report synthesis prompts.
 - v2 context completeness includes the configured agent entrypoint; missing startup entrypoint makes a layout partial.
 - Manifest routing, not directory bucketing, determines review task modules and context coverage.
 - Ambiguous routing is a hard error; unmapped files are warned/allowed only according to manifest policy and allowed/contextless globs.
 - Shell and JS routing implementations must agree for exact/prefix/glob, priority, and ambiguity.
 - Bash 3.2 compatibility and absence of `EDC_BASH` indirection are part of the public runtime contract and must stay tested on macOS-like PATHs.
-- Worker-pool tests must validate real process behavior: bounded overlap, process-group termination, declared-output checks, path containment, and production runner provenance.
+- Worker-pool and wrapper tests must validate real process behavior: bounded overlap, process-group termination, ordered nested escalation windows, declared-output checks, path containment, and production runner provenance.
+- Timeout fallback tests must prove timer PID publication is atomic, timer/watchdog failures fail closed, spawned processes are reaped, and caller signal traps survive both success and error returns.
+- Optional research tests must cover available, broken, hanging, and absent capability states while proving no installation/hard dependency, immediate native fallback, assigned-scope limits, semantic uncertainty, and manifest authority.
 - Pi completed/failed job state is retrievable by status command but should not remain pinned in live UI status widgets.
 - Pi scope/default-branch detection tests should keep at least one non-`main` fixture branch so regressions do not collapse back to hard-coded `main` or skip custom/default scope argument rendering.
 - npm package contents and visible skills are part of the public contract and must be regression-tested when layout changes.
@@ -83,8 +88,8 @@ The current branch expands coverage for deterministic worker orchestration: buil
 
 ## Fragility points
 - Several tests rely on `sed`, `bash`, `jq`, `git`, `node`, `python3`, temp-file semantics, process groups, and process detachment; portability is a first-class concern.
-- `t10-pi-extension.sh` is broad and can fail from timing around detached review-all/background job completion; polling windows should stay conservative.
-- Worker-pool timing tests need enough slack to avoid flake but tight enough to catch missed process-group cancellation.
+- `t10-pi-extension.sh` is broad and now includes real nested process-group synchronization in addition to detached job completion; polling windows, cleanup handlers, and SIGSTOP/SIGCONT ordering must stay conservative.
+- Worker-pool, Pi kill, and watchdog timing tests need enough slack to avoid flake but tight enough to catch missed process-group cancellation or leaked fallback children. Shared termination constants are part of the fixture contract.
 - Default-branch expectations require carefully shaped fake repos; a missing/incorrect branch rename can make the test assert the fallback rather than intended detection.
 - Long mocked scripts are sensitive to exact prompt wording, structured result-file schemas, scope argument normalization, staged output paths, run-dir layout, and manifest schema evolution.
 - Prompt-contract tests trade semantic flexibility for regression protection; update tests and prompt docs together when intentionally renaming operational index concepts.

@@ -165,10 +165,10 @@
       }
     ]
   },
-  "generatedAt": "2026-08-13T21:23:42Z",
-  "sourceCommit": "57181079f05359d014da95efde5fdc16b79d9deb",
+  "generatedAt": "2026-08-19T14:49:05Z",
+  "sourceCommit": "35105747304e526b597aeaf7949f18b3e14bfc26",
   "coverage": {
-    "contextMappedFileCount": 200,
+    "contextMappedFileCount": 201,
     "contextlessFileCount": 18,
     "uncoveredFileCount": 0,
     "ambiguousPathCount": 0,
@@ -178,7 +178,7 @@
       "benchmark/curl/**",
       "benchmark/redis/**"
     ],
-    "mappedFileCount": 200,
+    "mappedFileCount": 201,
     "unmappedFileCount": 18
   }
 }

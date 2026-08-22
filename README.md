@@ -32,7 +32,7 @@ First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtim
 | PR bots | Convenient diff review | Remote, black-box, PR-only | Local inspectable context-aware review |
 | Semantic search / code search | Finds relevant code | Does not encode authority or invariants | Authored module docs with routing and guardrails |
 
-Workers may use an already-installed Octocode CLI for targeted source research. Octocode is optional; EDC does not install or require it.
+Before source-research workers run, EDC checks whether an already-installed Octocode CLI responds successfully and gives workers explicit available/unavailable guidance. Octocode remains optional: EDC never installs or requires it, and workers fall back immediately to their existing tools when it is absent or fails.
 
 ## What EDC Does
 
@@ -71,7 +71,7 @@ edc build  --agent codex --focus orchestrator
 edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
-# run all review lenses concurrently: security, delivery, and quality
+# run all review lenses (serial by default): security, delivery, and quality
 edc review full --agent claude
 edc review diff --agent pi          # diff vs detected default branch
 edc review diff main --agent pi     # diff vs explicit base
@@ -101,16 +101,18 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit concurrently. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit in order by default, or concurrently after explicit opt-in. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ### Worker concurrency and pi observability
 
-Build, security, and quality module work uses a coordinator-owned pool. Set `EDC_MAX_CONCURRENCY` to an integer from 1–64 (default `4`; use `1` for serial compatibility). Prompts, transcripts, task results, stderr, and staged outputs live under `.git/edc/runs/<run-id>/`. Canonical reports/context are written only after staged outputs validate as contained single-link regular files.
+All EDC orchestration is serial by default: combined review runs security, delivery, then quality, and worker manifests use `maxConcurrency: 1`. Set exact `EDC_PARALLEL=1` to enable concurrent review lenses and module-worker pools. Only after that opt-in does `EDC_MAX_CONCURRENCY` apply; it accepts an integer from 1–64 and defaults to `4`. Prompts, transcripts, task results, stderr, and staged outputs live under `.git/edc/runs/<run-id>/`. Canonical reports/context are written only after staged outputs validate as contained single-link regular files.
 
 Pi workers always use `--no-extensions`, so arbitrary global/project extension discovery remains disabled. To observe EDC workers, explicitly allow one prompt-neutral extension entrypoint:
 
 ```text
 # ~/.edc/config (environment variables override this file)
+EDC_PARALLEL=0
+# Used only when EDC_PARALLEL=1:
 EDC_MAX_CONCURRENCY=4
 EDC_PI_EXTENSION_PATH=/absolute/path/to/agent_observer/src/extension.ts
 ```

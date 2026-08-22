@@ -3,8 +3,7 @@
  *
  * Mirrors the Claude Code plugin:
  *   - registers one interactive /edc menu for user-facing workflows
- *   - on session_start: installs the orchestrator script into the project
- *     and surfaces edc-context/index.md (in inject mode)
+ *   - on session_start: surfaces edc-context/index.md (in inject mode)
  *   - on tool_call (bash|edit|write): injects the relevant module doc
  *     once per session (in inject mode)
  *   - exposes only human-facing skills (edc-review, edc-audit, edc-delivery-review)
@@ -24,7 +23,6 @@ import {
   buildSessionStartContent,
   buildToolCallInjection,
   getContextFreshness,
-  installOrchestratorScript,
 } from "../plugins/edc/hooks/lib/route.mjs";
 import { BACKGROUND_JOB_TERMINATION_GRACE_MS } from "../plugins/edc/hooks/lib/termination-policy.mjs";
 import { argTokens, renderArgs, renderShellArgs, shellQuote, tokenizeArgs } from "./lib/args.mjs";
@@ -196,14 +194,14 @@ async function selectReviewScope(ctx, options = {}) {
   }
 }
 
-function findEdcScript(cwd, scriptName) {
-  const localScript = join(cwd, ".edc", "scripts", scriptName);
-  if (existsSync(localScript)) return localScript;
+function findTrustedRuntimeBootstrap() {
+  const pluginBootstrap = join(PLUGIN_ROOT, "hooks", "lib", "runtime-bootstrap.mjs");
+  if (existsSync(pluginBootstrap)) return pluginBootstrap;
 
   const home = process.env.HOME || "";
   if (home) {
-    const homeScript = join(home, ".edc", "scripts", scriptName);
-    if (existsSync(homeScript)) return homeScript;
+    const homeBootstrap = join(home, ".edc", "hooks", "lib", "runtime-bootstrap.mjs");
+    if (existsSync(homeBootstrap)) return homeBootstrap;
   }
 
   return "";
@@ -222,13 +220,13 @@ function piSubprocessEnv(ctx) {
 }
 
 function runEdcScript(scriptName, args, ctx) {
-  const edcScript = findEdcScript(ctx.cwd, scriptName);
-  if (!edcScript) {
-    return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: install EDC orchestrator first\n" });
+  const bootstrap = findTrustedRuntimeBootstrap();
+  if (!bootstrap) {
+    return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC\n" });
   }
 
   return new Promise((resolve) => {
-    const child = spawn("bash", [edcScript, ...args], {
+    const child = spawn(process.execPath, [bootstrap, scriptName, ...args], {
       cwd: ctx.cwd,
       env: piSubprocessEnv(ctx),
       stdio: ["ignore", "pipe", "pipe"],
@@ -485,9 +483,9 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
     return { alreadyRunning: true, ...existing };
   }
 
-  const edcScript = findEdcScript(ctx.cwd, scriptName);
-  if (!edcScript) {
-    return { error: "SCRIPT_MISSING: install EDC orchestrator first" };
+  const bootstrap = findTrustedRuntimeBootstrap();
+  if (!bootstrap) {
+    return { error: "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC" };
   }
 
   const statusPath = backgroundStatusPath(ctx.cwd);
@@ -534,7 +532,7 @@ args_text="$(printf '%s ' "$@" | sed 's/ $//')"
 } > "$status_file"
 
 rm -f "$result_file"
-EDC_RESULT_FILE="$result_file" bash ${shellQuote(edcScript)} "$@" > "$log_file" 2>&1
+EDC_RESULT_FILE="$result_file" ${shellQuote(process.execPath)} ${shellQuote(bootstrap)} ${shellQuote(scriptName)} "$@" > "$log_file" 2>&1
 rc=$?
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 finished_head="$(git rev-parse HEAD 2>/dev/null || true)"
@@ -1168,11 +1166,6 @@ export default async function edcExtension(pi) {
   pi.registerCommand(EDC_COMMAND.name, {
     description: EDC_COMMAND.description,
     handler: async (args, ctx) => {
-      try {
-        installOrchestratorScript(ctx.cwd, PLUGIN_ROOT);
-      } catch {
-        // best effort; menu actions will surface missing runtime scripts if install fails
-      }
       await handleEdcMenu(pi, args, ctx);
     },
   });

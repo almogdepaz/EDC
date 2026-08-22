@@ -17,17 +17,17 @@ reviewing. Warn the user this can take several minutes.
 
 ```bash
 set -- $ARGUMENTS
-if [ -f ".edc/scripts/edc-review-all.sh" ]; then
-  review_script=".edc/scripts/edc-review-all.sh"
-elif [ -f "$HOME/.edc/scripts/edc-review-all.sh" ]; then
-  review_script="$HOME/.edc/scripts/edc-review-all.sh"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "$CLAUDE_PLUGIN_ROOT/hooks/lib/runtime-bootstrap.mjs" ]; then
+  bootstrap="$CLAUDE_PLUGIN_ROOT/hooks/lib/runtime-bootstrap.mjs"
+elif [ -f "$HOME/.edc/hooks/lib/runtime-bootstrap.mjs" ]; then
+  bootstrap="$HOME/.edc/hooks/lib/runtime-bootstrap.mjs"
 else
-  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  echo "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC"
   exit 1
 fi
 
 echo "WARNING: if EDC context is missing or stale, review may first build/update context and can take several minutes."
-bash "$review_script" "$@"
+node "$bootstrap" edc-review-all.sh "$@"
 ```
 
 If the script exits non-zero, surface its error message verbatim and stop. Do not retry.

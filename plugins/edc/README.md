@@ -106,7 +106,7 @@ spawns subprocesses:
 - `codex`  → `codex exec`
 - `pi`     → `pi --mode json`
 
-`scripts/edc-lib.sh` centralizes per-agent dispatch, prompt resolution, pi JSON supervision, worker task manifests, and codex-home isolation. `EDC_MAX_CONCURRENCY` defaults to `4` (`1` is serial fallback).
+`scripts/edc-lib.sh` centralizes per-agent dispatch, prompt resolution, pi JSON supervision, worker task manifests, and codex-home isolation. Orchestration is serial by default. Exact `EDC_PARALLEL=1` enables concurrent review lenses and module workers; only then does `EDC_MAX_CONCURRENCY` apply (integer 1–64, default `4`).
 
 Pi worker discovery is always disabled with `--no-extensions`. Operators may load exactly one approved prompt-neutral extension by setting `EDC_PI_EXTENSION_PATH` to an absolute readable entrypoint. For agent-observer, point it at the installed/built `extension.ts` or JavaScript entrypoint. Workers receive structured run/task/phase/module environment provenance.
 
@@ -138,7 +138,7 @@ edc-review.sh https://github.com/...   # lower-level security PR by URL (uses gh
 edc-review.sh path/to/diff.patch       # lower-level security diff file
 ```
 
-Dirty differential review requires `--include-working-tree` or `--committed-only`; clean trees need neither. Include mode creates one immutable synthetic commit shared by the parallel security, delivery, and quality lenses. It includes staged, unstaged, deleted, and non-ignored untracked files, recursively snapshots dirty initialized submodules, and does not change HEAD, refs, or any real index. Combined review prepares context once, launches all lenses concurrently, waits for every lens even after a sibling failure, then promotes validated reports.
+Dirty differential review requires `--include-working-tree` or `--committed-only`; clean trees need neither. Include mode creates one immutable synthetic commit shared by the security, delivery, and quality lenses. It includes staged, unstaged, deleted, and non-ignored untracked files, recursively snapshots dirty initialized submodules, and does not change HEAD, refs, or any real index. Combined review prepares context once, runs the lenses serially in that order by default, continues after a failed lens, then promotes validated reports. Exact `EDC_PARALLEL=1` retains the concurrent launch/wait behavior.
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.
 Use `--ignore-context` for a pure direct review with no context build/update and

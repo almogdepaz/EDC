@@ -10,10 +10,10 @@ Usage:
 import argparse
 import json
 import statistics
+import sys
 from pathlib import Path
 
-
-VERDICT_SCORE = {"exact": 1.0, "partial": 0.5, "missed": 0.0, "error": 0.0}
+from scoring_helpers import UnresolvedVerdictError, verdict_to_score
 
 
 def load_results(path: Path):
@@ -68,6 +68,8 @@ def main():
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
+    out_path = Path(args.out)
+
     runs = []
     for p in args.pairs:
         label, res_path, met_path = p.split(":", 2)
@@ -85,25 +87,43 @@ def main():
     all_turns = []
     all_score = []
 
-    for run in runs:
-        n = len(run["results"])
-        run_score = sum(VERDICT_SCORE.get(r.get("verdict", r.get("found", "")), 0) for r in run["results"]) / n if n else 0
-        per_run_score.append(run_score)
-        for r in run["results"]:
-            verdict = VERDICT_SCORE.get(r.get("verdict", r.get("found", "")), 0)
-            all_score.append(verdict)
-            m = run["metrics"].get(r["cve"], {})
-            if m:
-                try:
-                    all_dur.append(float(m.get("duration_s", 0)))
-                    all_in.append(int(m.get("input_tokens", 0)))
-                    all_out.append(int(m.get("output_tokens", 0)))
-                    all_cache_read.append(int(m.get("cache_read", 0)))
-                    all_cache_create.append(int(m.get("cache_create", 0)))
-                    all_cost.append(float(m.get("total_cost", 0)))
-                    all_turns.append(int(m.get("num_turns", 0)))
-                except (ValueError, TypeError):
-                    pass
+    try:
+        for run in runs:
+            scores = []
+            for r in run["results"]:
+                score = verdict_to_score(
+                    r.get("verdict", r.get("found", "")),
+                    context=f"{run['label']} {r.get('cve', '<unknown-cve>')}",
+                )
+                scores.append(score)
+                all_score.append(score)
+                m = run["metrics"].get(r["cve"], {})
+                if m:
+                    try:
+                        all_dur.append(float(m.get("duration_s", 0)))
+                        all_in.append(int(m.get("input_tokens", 0)))
+                        all_out.append(int(m.get("output_tokens", 0)))
+                        all_cache_read.append(int(m.get("cache_read", 0)))
+                        all_cache_create.append(int(m.get("cache_create", 0)))
+                        all_cost.append(float(m.get("total_cost", 0)))
+                        all_turns.append(int(m.get("num_turns", 0)))
+                    except (ValueError, TypeError):
+                        pass
+            n = len(scores)
+            run_score = sum(scores) / n if n else 0
+            per_run_score.append(run_score)
+    except UnresolvedVerdictError as exc:
+        if out_path.exists():
+            if not out_path.is_file():
+                print(f"ERROR: unresolved benchmark verdict and output path is not a regular file: {out_path}", file=sys.stderr)
+                raise SystemExit(1)
+            try:
+                out_path.unlink()
+            except OSError as cleanup_exc:
+                print(f"ERROR: unresolved benchmark verdict and failed to remove stale output {out_path}: {cleanup_exc}", file=sys.stderr)
+                raise SystemExit(1)
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
 
     total_tokens = [i + o for i, o in zip(all_in, all_out)]
 
@@ -126,7 +146,7 @@ def main():
         },
     }
 
-    Path(args.out).write_text(json.dumps(out, indent=2))
+    out_path.write_text(json.dumps(out, indent=2))
     print(f"Wrote {args.out}")
     print(f"  model={args.model} n_runs={out['n_runs']}")
     print(f"  score:  mean={out['aggregate']['score']['mean']:.3f}  std={out['aggregate']['score']['std']:.3f}")
@@ -139,4 +159,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except UnresolvedVerdictError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)

@@ -11,5 +11,6 @@
     { "category": "security" },
     { "category": "possible smell" }
   ],
-  "requiredEvidence": ["spec.md", "src/settings.ts", "No behavior or config changes"]
+  "requiredFiles": ["spec.md", "src/settings.ts"],
+  "requiredEvidence": ["No behavior or config changes"]
 }

@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -417,16 +418,18 @@ def print_summary():
         print("No results yet.")
         return
 
-    lines = RESULTS_FILE.read_text().strip().split("\n")
-    if len(lines) <= 1:
+    with open(RESULTS_FILE, newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    if not rows:
         print("No results yet.")
         return
 
-    total = len(lines) - 1
-    exact = sum(1 for l in lines[1:] if "\texact\t" in l)
-    partial = sum(1 for l in lines[1:] if "\tpartial\t" in l)
-    missed = sum(1 for l in lines[1:] if "\tmissed\t" in l)
-    judge_errors = sum(1 for l in lines[1:] if "\tjudge_error\t" in l)
+    total = len(rows)
+    verdicts = [(row.get("verdict") or row.get("found") or "") for row in rows]
+    exact = sum(1 for verdict in verdicts if verdict == "exact")
+    partial = sum(1 for verdict in verdicts if verdict == "partial")
+    missed = sum(1 for verdict in verdicts if verdict == "missed")
+    judge_errors = sum(1 for verdict in verdicts if verdict == "judge_error")
     other = total - exact - partial - missed - judge_errors
 
     # judge_error rows are excluded from recall — they need human resolution.
@@ -448,16 +451,14 @@ def print_summary():
 
     # Per-category
     categories: dict[str, dict] = {}
-    for line in lines[1:]:
-        parts = line.split("\t")
-        if len(parts) >= 5:
-            cat = parts[2]
-            v = parts[4]
+    for row, verdict in zip(rows, verdicts):
+        cat = row.get("category")
+        if cat:
             if cat not in categories:
                 categories[cat] = {"exact": 0, "partial": 0, "missed": 0, "total": 0}
             categories[cat]["total"] += 1
-            if v in ("exact", "partial", "missed"):
-                categories[cat][v] += 1
+            if verdict in ("exact", "partial", "missed"):
+                categories[cat][verdict] += 1
 
     if categories:
         print(f"\nPer-category:")

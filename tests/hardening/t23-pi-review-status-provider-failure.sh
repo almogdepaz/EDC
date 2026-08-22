@@ -2,18 +2,36 @@
 # Pi review status should classify provider websocket failures from nested pi subprocesses.
 set -euo pipefail
 
-node --input-type=module <<'NODE'
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+TRUSTED_PACKAGE="$TMP/trusted-package"
+mkdir -p "$TRUSTED_PACKAGE/plugins"
+cp -R "$ROOT/pi" "$TRUSTED_PACKAGE/pi"
+cp -R "$ROOT/plugins/edc" "$TRUSTED_PACKAGE/plugins/edc"
+cat >"$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "ERROR: pi subprocess: WebSocket closed 1006" >&2
+echo "ERROR: edc-update invocation failed" >&2
+exit 1
+EOF
+chmod +x "$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh"
+
+EDC_TEST_EXTENSION="$TRUSTED_PACKAGE/pi/index.mjs" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import edcExtension from "./pi/index.mjs";
+import { pathToFileURL } from "node:url";
+
+const { default: edcExtension } = await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href);
 
 delete process.env.EDC_PI_SUBPROCESS;
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-async function waitFor(predicate, timeoutMs = 3000) {
+async function waitFor(predicate, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
@@ -26,17 +44,6 @@ const cwd = mkdtempSync(join(tmpdir(), "edc-pi-provider-failure-"));
 let childPid = 0;
 try {
   execFileSync("git", ["init", "-q"], { cwd });
-  const scriptsDir = join(cwd, ".edc", "scripts");
-  mkdirSync(scriptsDir, { recursive: true });
-  const reviewScript = join(scriptsDir, "edc-review.sh");
-  writeFileSync(reviewScript, `#!/usr/bin/env bash
-set -euo pipefail
-echo "ERROR: pi subprocess: WebSocket closed 1006" >&2
-echo "ERROR: edc-update invocation failed" >&2
-exit 1
-`);
-  chmodSync(reviewScript, 0o755);
-  mkdirSync(join(cwd, ".edc.install.lock"), { recursive: true });
 
   const messages = [];
   let handler;
@@ -62,7 +69,7 @@ exit 1
   const statusPath = join(cwd, ".git", "edc", "status");
   const pidMatch = readFileSync(statusPath, "utf-8").match(/^pid=(\d+)$/m);
   childPid = pidMatch ? Number(pidMatch[1]) : 0;
-  assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")), 3000));
+  assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8"))));
 
   await handler("", ctx);
   const status = messages.filter((message) => message.customType === "edc-job-status").at(-1);

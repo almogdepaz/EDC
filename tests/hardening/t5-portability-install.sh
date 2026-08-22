@@ -145,10 +145,34 @@ if [ -f "$PLUGIN_SCRIPT" ] \
   && [ -f "plugins/edc/scripts/edc-review-all.sh" ] \
   && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/json-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/runtime-bootstrap.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/stream-filter.mjs" ]; then
-  echo "PASS: plugin runtime includes review/review-all + node helper CLIs"
+  echo "PASS: plugin runtime includes review/review-all + trusted node bootstrap/helper CLIs"
 else
-  echo "FAIL: plugin runtime missing review/review-all/node helper CLI — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/review-all/trusted node bootstrap/helper CLI — install hook cannot copy"
+  exit 1
+fi
+
+# User-facing wrappers must enter through trusted package/global bootstrap code;
+# project-local scripts are execution targets only after trusted preflight.
+if grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-build.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-update.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-run-review.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-doctor.md \
+  && ! grep -R -E 'bash ("?\.edc/scripts|"?\$HOME/\.edc/scripts)' plugins/edc/commands >"$TMPDIR_T5/direct-command-runtime.txt"; then
+  echo "PASS: static slash wrappers never invoke project-local runtime directly"
+else
+  echo "FAIL: static slash wrappers bypass trusted runtime bootstrap"
+  cat "$TMPDIR_T5/direct-command-runtime.txt" 2>/dev/null || true
+  exit 1
+fi
+
+if grep -q '\$HOME/.edc/hooks/lib/runtime-bootstrap.mjs' install.sh \
+  && ! grep -E 'if \[ -f "?\.edc/scripts/edc-\$script\.sh"? \]' install.sh >"$TMPDIR_T5/direct-generated-runtime.txt"; then
+  echo "PASS: generated Cursor/Codex wrappers use trusted HOME bootstrap only"
+else
+  echo "FAIL: generated Cursor/Codex wrappers can invoke project-local runtime directly"
+  cat "$TMPDIR_T5/direct-generated-runtime.txt" 2>/dev/null || true
   exit 1
 fi
 
@@ -221,12 +245,14 @@ else
 fi
 rm -rf "$REMOTE_TMP"
 
-# ── 5f: session-start is inert; explicit Pi command installs runtime ────────
+# ── 5f: passive/help Pi paths are inert; execution uses trusted bootstrap ──
 if ! grep -q 'installOrchestratorScript' "$HOOK" \
-  && grep -q 'installOrchestratorScript(ctx.cwd, PLUGIN_ROOT)' pi/index.mjs; then
-  echo "PASS: session-start avoids project cache writes; explicit Pi command installs runtime"
+  && ! grep -q 'installOrchestratorScript' plugins/edc/hooks/lib/route.mjs \
+  && ! grep -q 'installOrchestratorScript(ctx.cwd, PLUGIN_ROOT)' pi/index.mjs \
+  && grep -q 'runtime-bootstrap.mjs' pi/index.mjs; then
+  echo "PASS: session/help paths avoid project cache writes; Pi execution uses trusted bootstrap"
 else
-  echo "FAIL: session-start/explicit install contract regressed"
+  echo "FAIL: passive Pi path or trusted execution bootstrap contract regressed"
   exit 1
 fi
 
@@ -247,6 +273,7 @@ if bash -n install.sh \
   && grep -q 'worker-pool.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'worker-manifest.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'build-dag.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'edc-worker.sh' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
   echo "PASS: terminal runtime install derives copy/chmod from canonical manifest"
@@ -255,20 +282,29 @@ else
   exit 1
 fi
 
-# ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
+# ── 5g: pi install path relies on runtime manifest for private subprocess skills ─
+install_terminal_fn=$(awk '/^install_terminal_cli\(\) \{/,/^}/' install.sh)
+install_public_skills_fn=$(awk '/^install_public_edc_skills\(\) \{/,/^}/' install.sh)
 pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
-if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
-  && grep -q 'edc-context-curator-impl/SKILL.md' install.sh \
-  && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
-  && grep -q 'edc-audit/references/quality-checks.md' install.sh \
-  && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
+if ! grep -q 'remove_legacy_edc_skills' install.sh \
+  && ! echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-review-impl"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-audit-impl"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-context"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-review-impl"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-audit-impl"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-context"' \
+  && grep -q 'edc-context-curator-impl/SKILL.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-context-curator-edit-impl/SKILL.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-audit/references/quality-checks.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-delivery-review/references/architecture-axis.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'classify-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'json-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'pi-supervisor.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'stream-filter.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs; then
-  echo "PASS: pi installer copies private skills and node runtime helpers for spawned subprocesses"
+  echo "PASS: installer centralizes legacy cleanup and uses runtime manifest for private skills/helpers"
 else
-  echo "FAIL: pi installer does not copy private skills/node runtime helpers"
+  echo "FAIL: installer legacy cleanup shape or private runtime helper contract regressed"
   exit 1
 fi
 

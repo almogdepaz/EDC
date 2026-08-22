@@ -58,7 +58,7 @@ If one issue is found, run a variant sweep for that pattern class across the cha
 
 ## Phase 1: changed-code security analysis
 
-When Octocode is already installed and useful, prefer it for targeted reachability, blast-radius, dependency-source, and permitted history research. Remote history remains allowed only when the assigned workflow already permits it. Do not install or configure Octocode, widen assigned scope, treat unavailable semantic support as evidence of absence, or fail when Octocode is unavailable or unnecessary; existing Read, Grep, Glob, and Bash workflows remain valid fallbacks.
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries for targeted reachability, blast-radius, dependency-source, and permitted history research. Remote history remains allowed only when the assigned workflow already permits it.
 
 For each security-relevant diff region:
 

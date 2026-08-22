@@ -4,10 +4,12 @@ import {
   closeSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -66,6 +68,38 @@ function nearestExistingPath(path) {
   return current;
 }
 
+function canonicalOwnershipPath(path, caseInsensitive) {
+  const existing = nearestExistingPath(path);
+  const unresolvedSuffix = relative(existing, path);
+  const canonicalPath = resolve(realpathSync(existing), unresolvedSuffix);
+  return caseInsensitive ? canonicalPath.normalize("NFC").toLowerCase() : canonicalPath;
+}
+
+function runDirIsCaseInsensitive(runDir) {
+  let probeDir = "";
+  let probeError = null;
+  let cleanupError = null;
+  let caseInsensitive = false;
+  try {
+    probeDir = mkdtempSync(join(runDir, ".edc-case-probe-"));
+    writeFileSync(join(probeDir, "lowercase"), "probe\n");
+    caseInsensitive = existsSync(join(probeDir, "LOWERCASE"));
+  } catch (error) {
+    probeError = error;
+  } finally {
+    if (probeDir) {
+      try {
+        rmSync(probeDir, { recursive: true });
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+  }
+  if (cleanupError) fail(`could not clean up runDir filesystem case probe: ${cleanupError.message}`);
+  if (probeError) fail(`could not probe runDir filesystem case sensitivity: ${probeError.message}`);
+  return caseInsensitive;
+}
+
 function validateRunPath(path, runDir, runDirReal, label, mustExist) {
   if (typeof path !== "string" || !isAbsolute(path)) fail(`${label} must be an absolute path`);
   if (path.includes("\n") || path.includes("\r")) fail(`${label} must not contain newlines`);
@@ -91,8 +125,10 @@ function validateManifest(input) {
     fail("manifest maxConcurrency must be an integer from 1 to 64");
   }
   if (!Array.isArray(input.tasks) || input.tasks.length === 0) fail("manifest tasks must be a non-empty array");
+  const caseInsensitive = runDirIsCaseInsensitive(runDir);
 
   const ids = new Set();
+  const outputOwners = new Map();
   const tasks = input.tasks.map((task, index) => {
     const label = `tasks[${index}]`;
     if (!task || typeof task !== "object" || Array.isArray(task)) fail(`${label} must be an object`);
@@ -111,6 +147,18 @@ function validateManifest(input) {
     const promptFile = validateRunPath(task.promptFile, runDir, runDirReal, `${label}.promptFile`, true);
     const outputs = task.outputs.map((path, outputIndex) => validateRunPath(path, runDir, runDirReal, `${label}.outputs[${outputIndex}]`, false));
     if (new Set(outputs).size !== outputs.length) fail(`${label}.outputs contains duplicates`);
+    outputs.forEach((output, outputIndex) => {
+      const ownershipPath = canonicalOwnershipPath(output, caseInsensitive);
+      const owner = outputOwners.get(ownershipPath);
+      const declaredOutput = task.outputs[outputIndex];
+      if (owner?.taskId === task.id) {
+        fail(`${label}.outputs contains duplicates: ${owner.output} and ${declaredOutput}`);
+      }
+      if (owner) {
+        fail(`output '${declaredOutput}' for task '${task.id}' conflicts with output '${owner.output}' for task '${owner.taskId}'`);
+      }
+      outputOwners.set(ownershipPath, { taskId: task.id, output: declaredOutput });
+    });
     return { ...task, failurePolicy, promptFile, outputs };
   });
 

@@ -13,6 +13,7 @@ TMP="$(mktemp -d)"
 LOG_DIR="$(mktemp -d)"
 PI_CALLS_LOG="$LOG_DIR/pi-calls.log"
 export PI_CALLS_LOG
+export EDC_CONFIG_FILE="$TMP/missing-config"
 trap 'rm -rf "$TMP" "$LOG_DIR"; check_cleanup' EXIT
 
 setup_repo() {
@@ -288,6 +289,51 @@ else
   check "18.7: pi backend forwards EDC_PI_MODEL fallback" 0
   cat "$LOG_DIR/fallback-update.out" "$LOG_DIR/fallback-update.err"
   cat "$PI_CALLS_LOG" 2>/dev/null || true
+fi
+
+config_file="$TMP/edc-config"
+cat > "$config_file" <<'EOF'
+EDC_BUILD_MODEL=openai-codex/gpt-configured
+EDC_REVIEW_MODEL=openai-codex/gpt-configured
+EOF
+config_calls_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+env -u EDC_BUILD_MODEL -u EDC_REVIEW_MODEL \
+  PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_CONFIG_FILE="$config_file" EDC_PI_MODEL=t18-config-fallback \
+  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/config-update.out" 2>"$LOG_DIR/config-update.err"
+rc=$?
+config_calls=$(tail -n +$((config_calls_before + 1)) "$PI_CALLS_LOG")
+if [ "$rc" -eq 0 ] \
+  && grep -q 'Update OK' "$LOG_DIR/config-update.out" \
+  && printf '%s\n' "$config_calls" | grep -q -- '--model openai-codex/gpt-configured' \
+  && ! printf '%s\n' "$config_calls" | grep -q -- '--model t18-config-fallback'; then
+  check "18.7a: raw pi orchestrator prefers configured phase model over Pi fallback" 1
+else
+  check "18.7a: raw pi orchestrator prefers configured phase model over Pi fallback" 0
+  cat "$LOG_DIR/config-update.out" "$LOG_DIR/config-update.err"
+  printf 'config calls:\n%s\n' "$config_calls"
+fi
+
+cat > "$config_file" <<'EOF'
+EDC_BUILD_MODEL=openai-codex/gpt-build-configured
+EDC_REVIEW_MODEL=openai-codex/gpt-review-configured
+EOF
+audit_config_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+env -u EDC_BUILD_MODEL -u EDC_REVIEW_MODEL \
+  PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_CONFIG_FILE="$config_file" EDC_PI_MODEL=t18-audit-config-fallback \
+  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-audit.sh" >"$LOG_DIR/config-audit.out" 2>"$LOG_DIR/config-audit.err"
+rc=$?
+audit_config_calls=$(tail -n +$((audit_config_before + 1)) "$PI_CALLS_LOG")
+audit_config_call_count=$(printf '%s\n' "$audit_config_calls" | sed '/^$/d' | wc -l | tr -d ' ')
+audit_config_review_count=$(printf '%s\n' "$audit_config_calls" | grep -c -- '--model openai-codex/gpt-review-configured' || true)
+if [ "$rc" -eq 0 ] \
+  && grep -q 'Audit reports:' "$LOG_DIR/config-audit.out" \
+  && [ "$audit_config_call_count" -gt 0 ] \
+  && [ "$audit_config_review_count" -eq "$audit_config_call_count" ]; then
+  check "18.7b: raw pi audit orchestrator uses configured review model for workers and synthesis" 1
+else
+  check "18.7b: raw pi audit orchestrator uses configured review model for workers and synthesis" 0
+  cat "$LOG_DIR/config-audit.out" "$LOG_DIR/config-audit.err"
+  printf 'audit config calls:\n%s\n' "$audit_config_calls"
 fi
 
 alias_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)

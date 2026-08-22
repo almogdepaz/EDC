@@ -10,5 +10,6 @@
     { "category": "scope creep" },
     { "evidence": "createReportAdapter" }
   ],
-  "requiredEvidence": ["src/reporting.ts", "renderReport"]
+  "requiredFiles": ["src/reporting.ts"],
+  "requiredEvidence": ["renderReport"]
 }

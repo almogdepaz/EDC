@@ -18,6 +18,8 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-audit.sh"
 TMPDIR_T11=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T11/bin"
+export EDC_CONFIG_FILE="$TMPDIR_T11/missing-config"
+unset EDC_PARALLEL
 trap 'rm -rf "$TMPDIR_T11"' EXIT
 
 echo "=== T11: audit orchestrator (mocked agent) ==="
@@ -71,6 +73,10 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
 fi
 
 if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
+  if [[ "\$prompt" == *"OCTOCODE_STATUS:"* ]]; then
+    echo "MOCK ERROR: synthesis prompt received source-research capability guidance" >&2
+    exit 31
+  fi
   printf 'synthesis\n' >> "\$LOG_FILE"
   complexity_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
   issues_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
@@ -339,7 +345,7 @@ rm -rf "$TMPDIR_T11/active"
 rm -f "$TMPDIR_T11/overlap"
 echo "valid" > "$TMPDIR_T11/scenario"
 result=0
-out=$(AUDIT_PARALLEL_PROBE=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+out=$(AUDIT_PARALLEL_PROBE=1 EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
 max_overlap=$(sort -nr "$TMPDIR_T11/overlap" 2>/dev/null | head -1 || echo 0)
 run_reports=0
 if [ -d .git/edc/runs ]; then

@@ -62,7 +62,7 @@ fi
 
 REPO1="$TMP/source-install"
 make_repo "$REPO1"
-if node -e "import { installOrchestratorScript } from '$PLUGIN_ROOT/hooks/lib/route.mjs'; installOrchestratorScript('$REPO1', '$PLUGIN_ROOT');" \
+if node "$RUNTIME_CLI" install "$REPO1" "$PLUGIN_ROOT" >/dev/null \
   && [ -x "$REPO1/.edc/scripts/edc-review.sh" ] \
   && [ -f "$REPO1/.edc/hooks/lib/worker-manifest.mjs" ] \
   && [ -f "$REPO1/.edc/runtime-metadata.json" ]; then
@@ -85,7 +85,7 @@ fi
 
 REPO2="$TMP/missing-helper"
 make_repo "$REPO2"
-node -e "import { installOrchestratorScript } from '$PLUGIN_ROOT/hooks/lib/route.mjs'; installOrchestratorScript('$REPO2', '$PLUGIN_ROOT');"
+node "$RUNTIME_CLI" install "$REPO2" "$PLUGIN_ROOT" >/dev/null
 rm -f "$REPO2/.edc/hooks/lib/worker-manifest.mjs"
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/claude" <<'EOF'
@@ -118,7 +118,7 @@ fi
 
 REPO2B="$TMP/no-implicit-repair"
 make_repo "$REPO2B"
-node -e "import { installOrchestratorScript } from '$PLUGIN_ROOT/hooks/lib/route.mjs'; installOrchestratorScript('$REPO2B', '$PLUGIN_ROOT');"
+node "$RUNTIME_CLI" install "$REPO2B" "$PLUGIN_ROOT" >/dev/null
 rm -f "$REPO2B/.edc/hooks/lib/worker-manifest.mjs" "$TMP/model-called"
 set +e
 (
@@ -139,7 +139,7 @@ fi
 
 REPO3="$TMP/corrupt-helper"
 make_repo "$REPO3"
-node -e "import { installOrchestratorScript } from '$PLUGIN_ROOT/hooks/lib/route.mjs'; installOrchestratorScript('$REPO3', '$PLUGIN_ROOT');"
+node "$RUNTIME_CLI" install "$REPO3" "$PLUGIN_ROOT" >/dev/null
 printf 'export const = broken\n' >"$REPO3/.edc/hooks/lib/worker-manifest.mjs"
 if ! node "$RUNTIME_CLI" preflight "$REPO3" >/"$TMP/corrupt.out" 2>&1 \
   && grep -q 'runtime-integrity-mismatch' "$TMP/corrupt.out"; then
@@ -313,6 +313,27 @@ else
   cat "$TMP/interrupted.out"
 fi
 
+REPO4B="$TMP/pre-stage-allocation-failure"
+make_repo "$REPO4B"
+set +e
+EDC_RUNTIME_FAIL_BEFORE_STAGE=1 node "$RUNTIME_CLI" install "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-fail.out" 2>&1
+pre_stage_rc=$?
+node "$RUNTIME_CLI" install "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-retry.out" 2>&1
+pre_stage_retry_rc=$?
+set -e
+if [ "$pre_stage_rc" -ne 0 ] \
+  && node -e 'const fs=require("node:fs"); const j=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(j.status === "failed" && j.reasonCode === "runtime-validation-failed" && j.details?.stage === "before-stage" ? 0 : 1)' "$TMP/pre-stage-fail.out" \
+  && [ ! -e "$REPO4B/.edc.install.lock" ] \
+  && [ "$pre_stage_retry_rc" -eq 0 ] \
+  && [ -x "$REPO4B/.edc/scripts/edc" ]; then
+  check "pre-stage install failure releases lock and immediate retry succeeds" "1"
+else
+  check "pre-stage install failure releases lock and immediate retry succeeds" "0"
+  printf 'pre_stage_rc=%s retry_rc=%s lock=%s\n' \
+    "$pre_stage_rc" "$pre_stage_retry_rc" "$([ -e "$REPO4B/.edc.install.lock" ] && echo present || echo absent)"
+  cat "$TMP/pre-stage-fail.out" "$TMP/pre-stage-retry.out"
+fi
+
 REPO5="$TMP/locked"
 make_repo "$REPO5"
 node "$RUNTIME_CLI" install "$REPO5" "$PLUGIN_ROOT" >/dev/null
@@ -387,6 +408,300 @@ if node "$RUNTIME_CLI" preflight "$REPO6" >/"$TMP/smoke.out" 2>&1 \
 else
   check "runtime doctor performs worker-manifest smoke" "0"
   cat "$TMP/smoke.out"
+fi
+
+extract_bash_block() {
+  awk '/^```bash$/{capture=1; next} /^```$/{if (capture) exit} capture' "$1" >"$2"
+}
+
+write_malicious_local_build() {
+  local repo="$1"
+  mkdir -p "$repo/.edc/scripts"
+  cat >"$repo/.edc/scripts/edc-build.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'local\n' >"${LOCAL_MARKER:?}"
+EOF
+  chmod +x "$repo/.edc/scripts/edc-build.sh"
+}
+
+WRAPPER_PLUGIN="$TMP/trusted-wrapper-plugin"
+cp -R "$PLUGIN_ROOT" "$WRAPPER_PLUGIN"
+cat >"$WRAPPER_PLUGIN/scripts/edc-build.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/edc-lib.sh"
+printf '%s\n%s\n%s\n%s\n' "$0" "$*" "$PWD" "${TRUSTED_ENV_VALUE:-}" >"${TRUSTED_MARKER:?}"
+EOF
+chmod +x "$WRAPPER_PLUGIN/scripts/edc-build.sh"
+WRAPPER_PLUGIN_PHYSICAL=$(cd "$WRAPPER_PLUGIN" && pwd -P)
+mkdir -p "$WRAPPER_PLUGIN/.edc/scripts"
+cat >"$WRAPPER_PLUGIN/.edc/scripts/edc-build.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'plugin-local-decoy\n' >"${PLUGIN_DECOY_MARKER:?}"
+EOF
+chmod +x "$WRAPPER_PLUGIN/.edc/scripts/edc-build.sh"
+worker_helper="$WRAPPER_PLUGIN/hooks/lib/worker-manifest.mjs"
+{
+  head -1 "$worker_helper"
+  cat <<'EOF'
+import { existsSync as raceExists, writeFileSync as raceWrite } from "node:fs";
+if (process.env.EDC_RACE_READY && process.env.EDC_RACE_RELEASE) {
+  raceWrite(process.env.EDC_RACE_READY, "ready\n");
+  while (!raceExists(process.env.EDC_RACE_RELEASE)) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+EOF
+  tail -n +2 "$worker_helper"
+} >"$TMP/race-worker-manifest.mjs"
+mv "$TMP/race-worker-manifest.mjs" "$worker_helper"
+chmod +x "$worker_helper"
+
+RACE_REPO="$TMP/runtime-use-race"
+make_repo "$RACE_REPO"
+node "$WRAPPER_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$RACE_REPO" "$WRAPPER_PLUGIN" >/dev/null
+set +e
+(
+  cd "$RACE_REPO"
+  EDC_RACE_READY="$TMP/race-ready" \
+    EDC_RACE_RELEASE="$TMP/race-release" \
+    TRUSTED_ENV_VALUE="trusted-env" \
+    TRUSTED_MARKER="$TMP/race-trusted-marker" \
+    node "$WRAPPER_PLUGIN/hooks/lib/runtime-bootstrap.mjs" edc-build.sh --race-arg
+) >"$TMP/race-bootstrap.out" 2>&1 &
+race_bootstrap_pid=$!
+set -e
+for _ in $(seq 1 500); do
+  [ -f "$TMP/race-ready" ] && break
+  sleep 0.01
+done
+cat >"$RACE_REPO/.edc/scripts/edc-lib.sh" <<EOF
+printf 'raced-local-helper\n' >"$TMP/race-local-helper-marker"
+EOF
+cat >"$RACE_REPO/.edc/scripts/edc-build.sh" <<EOF
+#!/usr/bin/env bash
+. "\$(dirname "\${BASH_SOURCE[0]}")/edc-lib.sh"
+printf 'raced-local-top\n' >"$TMP/race-local-top-marker"
+EOF
+chmod +x "$RACE_REPO/.edc/scripts/edc-build.sh"
+touch "$TMP/race-release"
+set +e
+wait "$race_bootstrap_pid"
+race_bootstrap_rc=$?
+set -e
+if [ "$race_bootstrap_rc" -eq 0 ] \
+  && [ -f "$TMP/race-trusted-marker" ] \
+  && [ ! -e "$TMP/race-local-top-marker" ] \
+  && [ ! -e "$TMP/race-local-helper-marker" ] \
+  && [ "$(sed -n '1p' "$TMP/race-trusted-marker")" = "$WRAPPER_PLUGIN_PHYSICAL/scripts/edc-build.sh" ] \
+  && [ "$(sed -n '2p' "$TMP/race-trusted-marker")" = "--race-arg" ] \
+  && [ "$(sed -n '3p' "$TMP/race-trusted-marker")" = "$RACE_REPO" ] \
+  && [ "$(sed -n '4p' "$TMP/race-trusted-marker")" = "trusted-env" ]; then
+  check "trusted bootstrap resists post-validation top-level and sourced-helper swaps" "1"
+else
+  check "trusted bootstrap resists post-validation top-level and sourced-helper swaps" "0"
+  printf 'race rc=%s local_top=%s local_helper=%s trusted=%s\n' \
+    "$race_bootstrap_rc" "$([ -e "$TMP/race-local-top-marker" ] && echo yes || echo no)" \
+    "$([ -e "$TMP/race-local-helper-marker" ] && echo yes || echo no)" \
+    "$([ -e "$TMP/race-trusted-marker" ] && tr '\n' '|' <"$TMP/race-trusted-marker" || echo missing)"
+  cat "$TMP/race-bootstrap.out"
+fi
+
+CANCEL_PLUGIN="$TMP/trusted-cancel-plugin"
+cp -R "$WRAPPER_PLUGIN" "$CANCEL_PLUGIN"
+cat >"$CANCEL_PLUGIN/scripts/edc-build.sh" <<'EOF'
+#!/usr/bin/env bash
+exec node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.CANCEL_STARTED, "started\n"); setTimeout(() => fs.writeFileSync(process.env.CANCEL_SURVIVED, "survived\n"), 1500);'
+EOF
+chmod +x "$CANCEL_PLUGIN/scripts/edc-build.sh"
+CANCEL_REPO="$TMP/bootstrap-cancel"
+make_repo "$CANCEL_REPO"
+node "$CANCEL_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$CANCEL_REPO" "$CANCEL_PLUGIN" >/dev/null
+
+run_cancel_case() {
+  local signal="$1" expected_rc="$2" suffix
+  suffix=$(printf '%s' "$signal" | tr '[:upper:]' '[:lower:]')
+  local started="$TMP/cancel-$suffix-started"
+  local survived="$TMP/cancel-$suffix-survived"
+  local output="$TMP/cancel-$suffix-bootstrap.out"
+  set +e
+  (
+    cd "$CANCEL_REPO"
+    CANCEL_STARTED="$started" \
+      CANCEL_SURVIVED="$survived" \
+      exec node "$CANCEL_PLUGIN/hooks/lib/runtime-bootstrap.mjs" edc-build.sh
+  ) >"$output" 2>&1 &
+  cancel_bootstrap_pid=$!
+  set -e
+  for _ in $(seq 1 500); do
+    [ -f "$started" ] && break
+    sleep 0.01
+  done
+  kill -"$signal" "$cancel_bootstrap_pid"
+  set +e
+  wait "$cancel_bootstrap_pid"
+  cancel_bootstrap_rc=$?
+  set -e
+  sleep 2
+  if [ "$cancel_bootstrap_rc" -eq "$expected_rc" ] \
+    && [ -f "$started" ] \
+    && [ ! -e "$survived" ]; then
+    check "trusted bootstrap forwards $signal and preserves signal exit $expected_rc" "1"
+  else
+    check "trusted bootstrap forwards $signal and preserves signal exit $expected_rc" "0"
+    printf 'cancel signal=%s rc=%s started=%s survived=%s\n' \
+      "$signal" "$cancel_bootstrap_rc" "$([ -e "$started" ] && echo yes || echo no)" \
+      "$([ -e "$survived" ] && echo yes || echo no)"
+    cat "$output"
+  fi
+}
+
+run_cancel_case TERM 143
+run_cancel_case INT 130
+run_cancel_case HUP 129
+
+STATIC_REPO="$TMP/static-wrapper"
+make_repo "$STATIC_REPO"
+write_malicious_local_build "$STATIC_REPO"
+extract_bash_block "$ROOT/plugins/edc/commands/edc-build.md" "$TMP/static-wrapper.sh"
+set +e
+(
+  cd "$STATIC_REPO"
+  ARGUMENTS='--force' \
+    CLAUDE_PLUGIN_ROOT="$WRAPPER_PLUGIN" \
+    LOCAL_MARKER="$TMP/static-local-marker" \
+    PLUGIN_DECOY_MARKER="$TMP/static-plugin-decoy-marker" \
+    TRUSTED_ENV_VALUE="static-env" \
+    TRUSTED_MARKER="$TMP/static-trusted-marker" \
+    bash "$TMP/static-wrapper.sh"
+) >"$TMP/static-wrapper.out" 2>&1
+static_wrapper_rc=$?
+set -e
+if [ "$static_wrapper_rc" -eq 0 ] \
+  && [ -f "$TMP/static-trusted-marker" ] \
+  && [ ! -e "$TMP/static-local-marker" ] \
+  && [ ! -e "$TMP/static-plugin-decoy-marker" ] \
+  && [ "$(sed -n '1p' "$TMP/static-trusted-marker")" = "$WRAPPER_PLUGIN_PHYSICAL/scripts/edc-build.sh" ] \
+  && [ "$(sed -n '2p' "$TMP/static-trusted-marker")" = "--force" ] \
+  && [ "$(sed -n '3p' "$TMP/static-trusted-marker")" = "$STATIC_REPO" ] \
+  && [ "$(sed -n '4p' "$TMP/static-trusted-marker")" = "static-env" ]; then
+  check "static Claude wrapper validates through trusted plugin bootstrap before local execution" "1"
+else
+  check "static Claude wrapper validates through trusted plugin bootstrap before local execution" "0"
+  cat "$TMP/static-wrapper.out"
+fi
+
+GENERATED_HOME="$TMP/generated-home"
+mkdir -p "$GENERATED_HOME"
+GENERATED_HOME_PHYSICAL=$(cd "$GENERATED_HOME" && pwd -P)
+HOME="$GENERATED_HOME" CI=1 SHELL=/bin/zsh bash "$ROOT/install.sh" --agent cursor --no-path >"$TMP/generated-cursor-install.out" 2>&1
+HOME="$GENERATED_HOME" CI=1 SHELL=/bin/zsh bash "$ROOT/install.sh" --agent codex --no-path >"$TMP/generated-codex-install.out" 2>&1
+node "$WRAPPER_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$GENERATED_HOME" "$WRAPPER_PLUGIN" >/dev/null
+installed_shell_source_root=$(
+  cd "$TMP"
+  HOME="$GENERATED_HOME" EDC_SCRIPTS_DIR="$GENERATED_HOME/.edc/scripts" bash -c '. "$EDC_SCRIPTS_DIR/edc-lib.sh"; edc_runtime_source_root'
+)
+if [ "$installed_shell_source_root" = "$GENERATED_HOME_PHYSICAL/.edc" ]; then
+  check "installed edc-lib reports the deterministic .edc source root" "1"
+else
+  check "installed edc-lib reports the deterministic .edc source root" "0"
+  printf 'installed shell source root=%s\n' "$installed_shell_source_root"
+fi
+mkdir -p "$GENERATED_HOME/scripts" "$GENERATED_HOME/hooks/lib"
+cat >"$GENERATED_HOME/scripts/edc-build.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'installed-decoy\n' >"${INSTALLED_DECOY_MARKER:?}"
+EOF
+chmod +x "$GENERATED_HOME/scripts/edc-build.sh"
+cat >"$GENERATED_HOME/hooks/lib/worker-manifest.mjs" <<'EOF'
+#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+writeFileSync(process.env.INSTALLED_HELPER_DECOY_MARKER, "installed-helper-decoy\n");
+const child = spawnSync(process.execPath, [process.env.INSTALLED_REAL_WORKER, ...process.argv.slice(2)], { env: process.env, stdio: "inherit" });
+process.exit(typeof child.status === "number" ? child.status : 1);
+EOF
+chmod +x "$GENERATED_HOME/hooks/lib/worker-manifest.mjs"
+
+plugin_fingerprint=$(node "$WRAPPER_PLUGIN/hooks/lib/runtime-manifest.mjs" inventory-check "$WRAPPER_PLUGIN" | node -e 'let s=""; process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).fingerprint));')
+set +e
+installed_fingerprint=$(node "$GENERATED_HOME/.edc/hooks/lib/runtime-manifest.mjs" inventory-check "$GENERATED_HOME/.edc" 2>"$TMP/installed-fingerprint.err" | node -e 'let s=""; process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s).fingerprint));')
+installed_fingerprint_rc=$?
+set -e
+if [ "$installed_fingerprint_rc" -eq 0 ] && [ "$plugin_fingerprint" = "$installed_fingerprint" ]; then
+  check "plugin and installed runtime layouts have fingerprint parity" "1"
+else
+  check "plugin and installed runtime layouts have fingerprint parity" "0"
+  cat "$TMP/installed-fingerprint.err"
+fi
+
+CURSOR_REPO="$TMP/cursor-wrapper"
+make_repo "$CURSOR_REPO"
+write_malicious_local_build "$CURSOR_REPO"
+extract_bash_block "$GENERATED_HOME/.cursor/commands/edc-build.md" "$TMP/cursor-wrapper.sh"
+set +e
+(
+  cd "$CURSOR_REPO"
+  HOME="$GENERATED_HOME" \
+    ARGUMENTS='--cursor-arg' \
+    LOCAL_MARKER="$TMP/cursor-local-marker" \
+    INSTALLED_DECOY_MARKER="$TMP/cursor-installed-decoy-marker" \
+    INSTALLED_HELPER_DECOY_MARKER="$TMP/cursor-installed-helper-decoy-marker" \
+    INSTALLED_REAL_WORKER="$GENERATED_HOME/.edc/hooks/lib/worker-manifest.mjs" \
+    TRUSTED_ENV_VALUE="cursor-env" \
+    TRUSTED_MARKER="$TMP/cursor-trusted-marker" \
+    bash "$TMP/cursor-wrapper.sh"
+) >"$TMP/cursor-wrapper.out" 2>&1
+cursor_wrapper_rc=$?
+set -e
+if [ "$cursor_wrapper_rc" -eq 0 ] \
+  && [ -f "$TMP/cursor-trusted-marker" ] \
+  && [ ! -e "$TMP/cursor-local-marker" ] \
+  && [ ! -e "$TMP/cursor-installed-decoy-marker" ] \
+  && [ ! -e "$TMP/cursor-installed-helper-decoy-marker" ] \
+  && [ "$(sed -n '1p' "$TMP/cursor-trusted-marker")" = "$GENERATED_HOME_PHYSICAL/.edc/scripts/edc-build.sh" ] \
+  && [ "$(sed -n '2p' "$TMP/cursor-trusted-marker")" = "--cursor-arg" ] \
+  && [ "$(sed -n '3p' "$TMP/cursor-trusted-marker")" = "$CURSOR_REPO" ] \
+  && [ "$(sed -n '4p' "$TMP/cursor-trusted-marker")" = "cursor-env" ]; then
+  check "generated Cursor wrapper uses trusted HOME bootstrap before local execution" "1"
+else
+  check "generated Cursor wrapper uses trusted HOME bootstrap before local execution" "0"
+  cat "$TMP/cursor-wrapper.out"
+fi
+
+CODEX_REPO="$TMP/codex-wrapper"
+make_repo "$CODEX_REPO"
+rm -f "$TMP/cursor-installed-decoy-marker" "$TMP/cursor-installed-helper-decoy-marker"
+write_malicious_local_build "$CODEX_REPO"
+extract_bash_block "$GENERATED_HOME/.codex/skills/edc-build/SKILL.md" "$TMP/codex-wrapper.sh"
+set +e
+(
+  cd "$CODEX_REPO"
+  HOME="$GENERATED_HOME" \
+    LOCAL_MARKER="$TMP/codex-local-marker" \
+    INSTALLED_DECOY_MARKER="$TMP/codex-installed-decoy-marker" \
+    INSTALLED_HELPER_DECOY_MARKER="$TMP/codex-installed-helper-decoy-marker" \
+    INSTALLED_REAL_WORKER="$GENERATED_HOME/.edc/hooks/lib/worker-manifest.mjs" \
+    TRUSTED_ENV_VALUE="codex-env" \
+    TRUSTED_MARKER="$TMP/codex-trusted-marker" \
+    bash "$TMP/codex-wrapper.sh" --codex-arg
+) >"$TMP/codex-wrapper.out" 2>&1
+codex_wrapper_rc=$?
+set -e
+if [ "$codex_wrapper_rc" -eq 0 ] \
+  && [ -f "$TMP/codex-trusted-marker" ] \
+  && [ ! -e "$TMP/codex-local-marker" ] \
+  && [ ! -e "$TMP/codex-installed-decoy-marker" ] \
+  && [ ! -e "$TMP/codex-installed-helper-decoy-marker" ] \
+  && [ "$(sed -n '1p' "$TMP/codex-trusted-marker")" = "$GENERATED_HOME_PHYSICAL/.edc/scripts/edc-build.sh" ] \
+  && [ "$(sed -n '2p' "$TMP/codex-trusted-marker")" = "--codex-arg" ] \
+  && [ "$(sed -n '3p' "$TMP/codex-trusted-marker")" = "$CODEX_REPO" ] \
+  && [ "$(sed -n '4p' "$TMP/codex-trusted-marker")" = "codex-env" ]; then
+  check "generated Codex wrapper uses trusted HOME bootstrap before local execution" "1"
+else
+  check "generated Codex wrapper uses trusted HOME bootstrap before local execution" "0"
+  cat "$TMP/codex-wrapper.out"
 fi
 
 check_summary "T48"

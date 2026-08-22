@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# edc-review-all orchestrator: run security, delivery, and quality concurrently.
+# edc-review-all orchestrator: run security, delivery, and quality in one coordinated review.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,7 +27,8 @@ usage() {
 Usage: edc-review-all.sh [target] [--base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
        edc-review-all.sh --full [--ignore <glob>]... [--context-mode advisory|inject]
 
-Runs security, delivery/architecture, and quality review concurrently.
+Runs security, delivery/architecture, and quality review serially by default.
+Set EDC_PARALLEL=1 to run the three lenses concurrently.
 
 Dirty differential reviews require one explicit policy:
   --include-working-tree  review staged, unstaged, deleted, and non-ignored untracked files
@@ -136,6 +137,17 @@ wait_for_phases() {
   done
 }
 
+run_phase() {
+  local phase_name="$1" script="$2" result_file="$3" phase_rc=0
+  shift 3
+  echo "→ review-all: starting $phase_name"
+  EDC_RESULT_FILE="$result_file" EDC_REVIEW_CONTEXT_PREPARED=1 bash "$script" "$@" || phase_rc=$?
+  PHASE_NAMES+=("$phase_name")
+  PHASE_RESULTS+=("$result_file")
+  PHASE_RCS+=("$phase_rc")
+  PHASE_RESULT_SPECS+=("$phase_name" "$result_file" "$phase_rc")
+}
+
 promote_phase_output() {
   local phase="$1" result_file="$2" child_rc="$3" source="$4" destination="$5" kind="$6"
   local status
@@ -178,7 +190,7 @@ prepare_context_once() {
   # shellcheck source=edc-recover-context.sh
   . "$SCRIPT_DIR/edc-recover-context.sh"
   recover_context_if_needed "$@" \
-    || { edc_result_failure 1 context-recovery-failed "context recovery failed before parallel review" "inspect the recovery output above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; return 1; }
+    || { edc_result_failure 1 context-recovery-failed "context recovery failed before combined review" "inspect the recovery output above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; return 1; }
 }
 
 main() {
@@ -190,7 +202,15 @@ main() {
   local candidate_target="" security_script delivery_script audit_script
   local security_public delivery_public parallel_run_dir parallel_run_id
   local security_result delivery_result quality_result
+  local parallel_mode=0 mode_rc=0
   local -a review_args audit_args
+
+  if edc_parallel_enabled; then
+    parallel_mode=1
+  else
+    mode_rc=$?
+    [ "$mode_rc" -eq 1 ] || exit "$mode_rc"
+  fi
 
   if [ "$FULL_SCOPE" -eq 1 ]; then
     # shellcheck source=edc-review-candidate.sh
@@ -243,10 +263,16 @@ main() {
   export EDC_AUDIT_COMPLEXITY_OUTPUT="$parallel_run_dir/staged/complexity.md"
   export EDC_AUDIT_ISSUES_OUTPUT="$parallel_run_dir/staged/issues.md"
 
-  start_phase security "$security_script" "$security_result" ${review_args[@]+"${review_args[@]}"}
-  start_phase delivery "$delivery_script" "$delivery_result" ${review_args[@]+"${review_args[@]}"}
-  start_phase quality "$audit_script" "$quality_result" ${audit_args[@]+"${audit_args[@]}"}
-  wait_for_phases
+  if [ "$parallel_mode" -eq 1 ]; then
+    start_phase security "$security_script" "$security_result" ${review_args[@]+"${review_args[@]}"}
+    start_phase delivery "$delivery_script" "$delivery_result" ${review_args[@]+"${review_args[@]}"}
+    start_phase quality "$audit_script" "$quality_result" ${audit_args[@]+"${audit_args[@]}"}
+    wait_for_phases
+  else
+    run_phase security "$security_script" "$security_result" ${review_args[@]+"${review_args[@]}"}
+    run_phase delivery "$delivery_script" "$delivery_result" ${review_args[@]+"${review_args[@]}"}
+    run_phase quality "$audit_script" "$quality_result" ${audit_args[@]+"${audit_args[@]}"}
+  fi
 
   local promotion_rc=0
   promote_phase_output security "$security_result" "${PHASE_RCS[0]}" "$EDC_REVIEW_PROMOTION_OUTPUT" "$security_public" review || promotion_rc=1

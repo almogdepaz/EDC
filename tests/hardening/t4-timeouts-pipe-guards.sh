@@ -7,6 +7,9 @@ SCRIPT="plugins/edc/scripts/edc-review.sh"
 ROOT="$(pwd)"
 TMPDIR_T4=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_T4"' EXIT
+T4_TIMEOUT_ERR="$TMPDIR_T4/timeout-err.txt"
+T4_FALLBACK_TIMEOUT_ERR="$TMPDIR_T4/fallback-timeout-err.txt"
+T4_PIPE_ERR="$TMPDIR_T4/pipe-err.txt"
 # Per-phase run_with_timeout wraps now live in edc-lib.sh (SPAWN section); the build/update
 # spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
 SPAWN="plugins/edc/scripts/edc-lib.sh"
@@ -28,7 +31,7 @@ fi
 # ── 4b: agent spawns wrapped with run_with_timeout ──────────────────────────────
 # All stream-json backends route through one shared helper that wraps the actual
 # agent command with run_with_timeout.
-wrapped=$(grep -cE '^\s+run_with_timeout' "$SPAWN")
+wrapped=$(grep -cE '^\s+run_with_timeout "\$timeout_secs" "\$phase" "\$@"' "$SPAWN")
 if [ "$wrapped" -eq 1 ] && grep -q '^edc_run_filtered_stream()' "$SPAWN"; then
   echo "PASS: agent spawns wrapped with shared run_with_timeout helper"
 else
@@ -354,25 +357,25 @@ echo "PASS: fallback timer PID publication fails closed without unsafe signaling
 
 # ── 4e: run_with_timeout fires on exceeded time ───────────────────────────────
 timeout_rc=0
-run_with_timeout 1 "slow-test" sleep 5 2>/tmp/t4-timeout-err.txt || timeout_rc=$?
-if [ "$timeout_rc" -eq 124 ] && grep -q 'timed out' /tmp/t4-timeout-err.txt; then
+run_with_timeout 1 "slow-test" sleep 5 2>"$T4_TIMEOUT_ERR" || timeout_rc=$?
+if [ "$timeout_rc" -eq 124 ] && grep -q 'timed out' "$T4_TIMEOUT_ERR"; then
   echo "PASS: run_with_timeout preserves distinct timeout status"
 else
   echo "FAIL: run_with_timeout did not return timeout status 124 (exit: $timeout_rc)"
-  cat /tmp/t4-timeout-err.txt
+  cat "$T4_TIMEOUT_ERR"
   exit 1
 fi
 
 native_timeout_bin="$TIMEOUT_BIN"
 TIMEOUT_BIN=""
 fallback_timeout_rc=0
-run_with_timeout 1 "fallback-slow-test" sleep 5 2>/tmp/t4-fallback-timeout-err.txt || fallback_timeout_rc=$?
+run_with_timeout 1 "fallback-slow-test" sleep 5 2>"$T4_FALLBACK_TIMEOUT_ERR" || fallback_timeout_rc=$?
 TIMEOUT_BIN="$native_timeout_bin"
-if [ "$fallback_timeout_rc" -eq 124 ] && grep -q 'timed out' /tmp/t4-fallback-timeout-err.txt; then
+if [ "$fallback_timeout_rc" -eq 124 ] && grep -q 'timed out' "$T4_FALLBACK_TIMEOUT_ERR"; then
   echo "PASS: fallback watchdog preserves distinct timeout status"
 else
   echo "FAIL: fallback watchdog did not return timeout status 124 (exit: $fallback_timeout_rc)"
-  cat /tmp/t4-fallback-timeout-err.txt
+  cat "$T4_FALLBACK_TIMEOUT_ERR"
   exit 1
 fi
 
@@ -392,12 +395,12 @@ mkdir -p edc-context
 printf '{"schemaVersion":2,"modules":[]}' > edc-context/manifest.json
 
 result=0
-bash "$ROOT/$SCRIPT" --check-context 2>/tmp/t4-pipe-err.txt || result=$?
-if [ "$result" -ne 0 ] && grep -qi 'sourcecommit\|sourceCommit\|context' /tmp/t4-pipe-err.txt; then
+bash "$ROOT/$SCRIPT" --check-context 2>"$T4_PIPE_ERR" || result=$?
+if [ "$result" -ne 0 ] && grep -qi 'sourcecommit\|sourceCommit\|context' "$T4_PIPE_ERR"; then
   echo "PASS: malformed manifest.json causes clear error (not silent empty-string comparison)"
 else
   echo "FAIL: expected error on malformed manifest.json, got exit $result"
-  cat /tmp/t4-pipe-err.txt
+  cat "$T4_PIPE_ERR"
   exit 1
 fi
 

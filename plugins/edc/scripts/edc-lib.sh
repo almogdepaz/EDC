@@ -116,7 +116,7 @@ edc_runtime_source_root() {
   esac
   if [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ]; then
     case "$EDC_SCRIPTS_DIR" in
-      "$HOME/.edc/scripts") printf '%s\n' "$HOME" ;;
+      "$HOME/.edc/scripts") printf '%s\n' "$HOME/.edc" ;;
       *) printf '%s\n' "$(cd "$EDC_SCRIPTS_DIR/.." && pwd)" ;;
     esac
     return 0
@@ -633,6 +633,9 @@ stream_filter() {
 # over the file (resolution order: CLI flag → env → ~/.edc/config → unset).
 
 edc_load_config() {
+  [ "${_EDC_CONFIG_LOADED:-0}" = "1" ] && return 0
+  _EDC_CONFIG_LOADED=1
+
   local cfg="${EDC_CONFIG_FILE:-$HOME/.edc/config}"
   [ -f "$cfg" ] || return 0
   # Only export keys we recognize. Refuse to source arbitrary shell.
@@ -648,7 +651,7 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_PARALLEL|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
         # Only set if not already exported by the caller.
         if [ -z "${!key:-}" ]; then
           export "$key=$val"
@@ -658,15 +661,17 @@ edc_load_config() {
   done < "$cfg"
 }
 
+edc_load_config
+
 # resolve_model_for_phase <phase> <out-var-name>
-# Phases starting with "edc-review" → EDC_REVIEW_MODEL, everything else →
-# EDC_BUILD_MODEL. Writes the resolved slug (possibly empty) to the named
-# variable. Empty means "no --model flag" → backend default.
+# Review-lens phases (security, delivery, audit) → EDC_REVIEW_MODEL; all
+# other phases → EDC_BUILD_MODEL. Writes the resolved slug (possibly empty) to
+# the named variable. Empty means "no --model flag" → backend default.
 resolve_model_for_phase() {
   local __phase="$1" __outvar="$2" __resolved=""
   case "$__phase" in
-    edc-review*|edc-delivery-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
-    *)                                __resolved="${EDC_BUILD_MODEL:-}" ;;
+    edc-review*|edc-delivery-review*|edc-audit*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
+    *)                                           __resolved="${EDC_BUILD_MODEL:-}" ;;
   esac
   if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
     __resolved="${EDC_PI_MODEL:-}"
@@ -689,8 +694,30 @@ EDC_WORKER_POOL_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-pool.mjs"
 EDC_WORKER_MANIFEST_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-manifest.mjs"
 EDC_WORKER_RUNNER="$EDC_SCRIPTS_DIR/edc-worker.sh"
 
+# edc_parallel_enabled
+# Return success only for the exact concurrency opt-in. Unset/0 is serial;
+# other values are configuration errors.
+edc_parallel_enabled() {
+  case "${EDC_PARALLEL:-0}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    *)
+      echo "ERROR: EDC_PARALLEL must be 0 or 1" >&2
+      return 2
+      ;;
+  esac
+}
+
 edc_worker_max_concurrency() {
-  local value="${EDC_MAX_CONCURRENCY:-4}"
+  local mode_rc value
+  if edc_parallel_enabled; then
+    value="${EDC_MAX_CONCURRENCY:-4}"
+  else
+    mode_rc=$?
+    [ "$mode_rc" -eq 1 ] || return "$mode_rc"
+    echo 1
+    return 0
+  fi
   case "$value" in
     ''|*[!0-9]*)
       echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
@@ -805,15 +832,6 @@ _edc_log_spawn_metrics() {
     cat /tmp/edc-spawn-metrics-warn.$$ >&2
   fi
   rm -f /tmp/edc-spawn-metrics-warn.$$ 2>/dev/null || true
-}
-
-edc_kill_process_tree() {
-  local pid="$1" child
-  [ -n "$pid" ] || return 0
-  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-    edc_kill_process_tree "$child"
-  done
-  kill "$pid" 2>/dev/null || true
 }
 
 edc_stream_pipeline_rc() {
@@ -994,6 +1012,46 @@ _find_skill_for_agent() {
   esac
 }
 
+EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
+
+# _octocode_is_available
+# Capability probe used only by coordinators before source-research prompts.
+_octocode_is_available() {
+  command -v octocode >/dev/null 2>&1 || return 1
+  run_with_timeout "$EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS" "Octocode capability probe" \
+    octocode --version >/dev/null 2>&1
+}
+
+# _emit_octocode_research_guidance
+# Emit explicit per-run capability state without making Octocode a dependency.
+_emit_octocode_research_guidance() {
+  if _octocode_is_available; then
+    cat <<'EOF'
+================================================================================
+OCTOCODE RESEARCH CAPABILITY
+================================================================================
+OCTOCODE_STATUS: available
+
+The coordinator verified a working Octocode CLI for this run. For non-trivial source research, prefer a small number of batched Octocode queries before native exact reads when structure or search evidence is needed:
+- `octocode tools localViewStructure --queries '{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}' --compact --no-color`
+- `octocode tools localSearchCode --queries '{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}' --compact --no-color`
+
+Keep every query within the assigned target and existing evidence permissions. Do not spend turns discovering CLI help or schemas. Verify important evidence with native exact reads. If an Octocode query fails or semantic support is unavailable, treat that evidence as unknown and immediately continue with existing Read, Grep, Glob, and Bash tools. Do not install or configure Octocode, widen scope, or let search results override EDC routing or manifest authority.
+
+EOF
+  else
+    cat <<'EOF'
+================================================================================
+OCTOCODE RESEARCH CAPABILITY
+================================================================================
+OCTOCODE_STATUS: unavailable
+
+Do not install or configure Octocode. Continue immediately with existing Read, Grep, Glob, and Bash tools. Treat unavailable semantic support as unknown rather than evidence that a symbol or relationship is absent. Keep research within the assigned target and existing evidence permissions; EDC routing and manifest authority are unchanged.
+
+EOF
+  fi
+}
+
 # _emit_scripts_dir_preamble
 # Emitted at the top of every skill prompt. The installed skill markdown
 # references `plugins/edc/scripts/<name>.sh` — a path that only exists inside
@@ -1066,6 +1124,9 @@ EOF
     printf 'CLI ARGUMENTS: %s\n\n' "$args_string"
   fi
   _emit_scripts_dir_preamble
+  if [ "$skill_name" = "edc-update-impl" ]; then
+    _emit_octocode_research_guidance
+  fi
   cat "$skill"
 }
 
@@ -1087,8 +1148,9 @@ _emit_audit_prompt() {
     fi
   done
 
+  _emit_scripts_dir_preamble
+  _emit_octocode_research_guidance
   cat <<EOF
-$(_emit_scripts_dir_preamble)
 Follow the instructions below EXACTLY. Do not improvise, do not substitute
 another audit methodology, and do not skip the referenced checks. The audit
 scope/standards, smell baseline, quality checks, and reporting contract are
@@ -1118,6 +1180,27 @@ $(cat "$skill_dir/references/quality-checks.md")
 SKILL: edc-audit/references/reporting.md
 ================================================================================
 $(cat "$skill_dir/references/reporting.md")
+EOF
+}
+
+# _emit_audit_reporting_prompt
+# Emit only the reporting contract for synthesis workers, which consume staged
+# reports and must not receive source-research methodology or capability state.
+_emit_audit_reporting_prompt() {
+  local skill_path skill_dir reporting
+  skill_path=$(_find_skill_for_agent "edc-audit") || return 1
+  skill_dir=$(dirname "$skill_path")
+  reporting="$skill_dir/references/reporting.md"
+  if [ ! -f "$reporting" ]; then
+    echo "ERROR: audit reporting contract missing — $reporting" >&2
+    return 1
+  fi
+
+  cat <<EOF
+================================================================================
+SKILL: edc-audit/references/reporting.md
+================================================================================
+$(cat "$reporting")
 EOF
 }
 
@@ -1152,6 +1235,7 @@ _emit_review_prompt() {
 
   cat <<EOF
 $(_emit_scripts_dir_preamble)
+$(_emit_octocode_research_guidance)
 Follow the instructions below EXACTLY. Do not improvise, do not substitute
 your own methodology, do not skip steps. The methodology, adversarial
 checks, reporting format, and patterns are all embedded below — read them

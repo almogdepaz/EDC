@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { constants } from "node:os";
+import { SUBPROCESS_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 const SUCCESS_STOP_REASONS = new Set(["stop"]);
 const cmd = process.argv.slice(2);
@@ -14,6 +16,9 @@ let child = spawn(cmd[0], cmd.slice(1), {
   stdio: ["ignore", "pipe", "pipe"],
 });
 let exiting = false;
+let requestedExitCode = null;
+let escalationTimer = null;
+let exited = false;
 
 function errorText(value) {
   if (typeof value === "string") return value;
@@ -61,28 +66,42 @@ function plaintextFatalReason(text) {
   return "";
 }
 
-function stopChild() {
-  if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }, 5000).unref();
+function signalExitCode(signal) {
+  const signalNumber = signal ? constants.signals[signal] : 0;
+  return signalNumber ? 128 + signalNumber : 1;
 }
 
-function finish(code) {
-  if (exiting) return;
-  exiting = true;
-  stopChild();
+function childIsRunning() {
+  return Boolean(child?.pid) && child.exitCode === null && child.signalCode === null;
+}
+
+function exitOnce(code) {
+  if (exited) return;
+  exited = true;
+  if (escalationTimer) clearTimeout(escalationTimer);
+  escalationTimer = null;
   process.exit(code);
 }
 
-function handleSignal(signal) {
-  stopChild();
-  process.exit(128 + signal);
+function stopChild(signal) {
+  if (!childIsRunning()) return false;
+  child.kill(signal);
+  escalationTimer = setTimeout(() => {
+    if (childIsRunning()) child.kill("SIGKILL");
+  }, SUBPROCESS_TERMINATION_GRACE_MS);
+  return true;
 }
 
-process.on("SIGTERM", () => handleSignal(15));
-process.on("SIGINT", () => handleSignal(2));
+function finish(code, signal = "SIGTERM") {
+  if (exiting) return;
+  exiting = true;
+  requestedExitCode = code;
+  if (!stopChild(signal)) exitOnce(code);
+}
+
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(signal, () => finish(signalExitCode(signal), signal));
+}
 
 child.stderr.on("data", (chunk) => {
   const text = chunk.toString();
@@ -136,12 +155,30 @@ lines.on("line", (line) => {
 
 child.on("error", (error) => {
   process.stderr.write(`ERROR: pi subprocess: ${error.message}\n`);
-  finish(1);
+  if (!exiting) finish(1);
+  else if (!childIsRunning()) exitOnce(requestedExitCode ?? 1);
 });
 
-child.on("close", (code) => {
-  if (exiting) return;
-  if (code && code !== 0) process.exit(code);
+child.on("exit", () => {
+  if (exiting) {
+    child.stdout.destroy();
+    child.stderr.destroy();
+  }
+});
+
+child.on("close", (code, signal) => {
+  if (exiting) {
+    exitOnce(requestedExitCode ?? 1);
+    return;
+  }
+  if (typeof code === "number" && code !== 0) {
+    exitOnce(code);
+    return;
+  }
+  if (signal) {
+    exitOnce(signalExitCode(signal));
+    return;
+  }
   process.stderr.write("ERROR: pi subprocess ended without successful agent_end\n");
-  process.exit(1);
+  exitOnce(1);
 });

@@ -12,6 +12,7 @@ METHODOLOGY="$SKILL_DIR/methodology.md"
 REPORTING="$SKILL_DIR/reporting.md"
 ADVERSARIAL="$SKILL_DIR/adversarial.md"
 PATTERNS="$SKILL_DIR/patterns.md"
+RUNTIME_LIB="$ROOT/plugins/edc/scripts/edc-lib.sh"
 
 echo "=== T35: security review skill contract ==="
 
@@ -32,8 +33,8 @@ check "review keeps context routing guidance" "$(main_has "routing/coupling/blas
 check "review requires concrete attack path for findings" "$(has "concrete attack path" && echo 1 || echo 0)"
 check "review allows no-security-findings reports" "$(has "No security findings" && echo 1 || echo 0)"
 check "review methodology is security-titled" "$(file_has "$METHODOLOGY" "Security Review Methodology" && echo 1 || echo 0)"
-check "review uses optional Octocode for targeted security evidence" "$(file_has "$METHODOLOGY" "already installed and useful" && file_has "$METHODOLOGY" "reachability, blast-radius, dependency-source, and permitted history research" && echo 1 || echo 0)"
-check "review methodology preserves scope, semantic uncertainty, and fallback" "$(file_has "$METHODOLOGY" "Do not install or configure Octocode" && file_has "$METHODOLOGY" "widen assigned scope" && file_has "$METHODOLOGY" "unavailable semantic support as evidence of absence" && file_has "$METHODOLOGY" "fail when Octocode is unavailable or unnecessary" && file_has "$METHODOLOGY" "existing Read, Grep, Glob, and Bash workflows remain valid fallbacks" && echo 1 || echo 0)"
+check "review uses coordinator-approved Octocode for targeted security evidence" "$(file_has "$METHODOLOGY" 'OCTOCODE_STATUS: available' && file_has "$METHODOLOGY" "reachability, blast-radius, dependency-source, and permitted history research" && echo 1 || echo 0)"
+check "review coordinator guidance preserves scope, semantic uncertainty, and fallback" "$(file_has "$RUNTIME_LIB" "Do not install or configure Octocode" && file_has "$RUNTIME_LIB" "widen scope" && file_has "$RUNTIME_LIB" "Treat unavailable semantic support as unknown" && file_has "$RUNTIME_LIB" "existing Read, Grep, Glob, and Bash tools" && echo 1 || echo 0)"
 check "reporting is security-titled" "$(file_has "$REPORTING" "Security Report" && echo 1 || echo 0)"
 check "reporting requires exact Findings heading" "$(file_has "$REPORTING" "exact heading \`## Findings\`" && file_has "$REPORTING" "Do not replace" && echo 1 || echo 0)"
 check "adversarial reference remains present" "$(file_has "$ADVERSARIAL" "Attacker Model" && echo 1 || echo 0)"

@@ -51,6 +51,21 @@ echo "TASK_CONTENT_MARKER" > "$TASK_FILE"
 WORK="$TMP/work"
 mkdir -p "$WORK"
 
+OCTOCODE_BIN="$TMP/octocode-bin"
+mkdir -p "$OCTOCODE_BIN"
+cat > "$OCTOCODE_BIN/octocode" <<'MOCK'
+#!/usr/bin/env bash
+if [ "${OCTOCODE_FAKE_FAIL:-0}" = "1" ]; then
+  exit 1
+fi
+if [ "${OCTOCODE_FAKE_HANG:-0}" = "1" ]; then
+  while :; do :; done
+fi
+[ "${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$OCTOCODE_BIN/octocode"
+
 # Override HOME so find_*_skill resolves into our hermetic tree.
 # All three agents look at $HOME/.<runtime>/skills (claude also at .edc/skills)
 # or $HOME/.edc/skills. Symlink each into our temp tree.
@@ -187,7 +202,71 @@ for agent in cursor codex; do
   check "$agent review: embeds full skill bundle (6 markers)" "$all_present"
 done
 
-# ── 14.7: missing skill produces clear error ────────────────────────────────
+# ── 14.7: coordinator emits actionable Octocode capability state ────────────
+for action in update audit; do
+  out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude "$action")
+  available_contract=1
+  for marker in "OCTOCODE_STATUS: available" \
+                'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
+                'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color' \
+                "existing Read, Grep, Glob, and Bash tools"; do
+    echo "$out" | grep -qF "$marker" || available_contract=0
+  done
+  echo "$out" | grep -qF 'octocode --help' && available_contract=0
+  echo "$out" | grep -qF -- '--scheme' && available_contract=0
+  check "claude $action: emits actionable available Octocode state" "$available_contract"
+done
+
+out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude review "$TASK_FILE")
+review_available=1
+for marker in "OCTOCODE_STATUS: available" \
+              'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
+              'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color'; do
+  echo "$out" | grep -qF "$marker" || review_available=0
+done
+check "claude review: emits actionable available Octocode state" "$review_available"
+
+out=$(OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+unavailable_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || unavailable_contract=0
+done
+if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
+  unavailable_contract=0
+fi
+check "broken Octocode CLI emits unavailable fallback state" "$unavailable_contract"
+
+SECONDS=0
+out=$(OCTOCODE_FAKE_HANG=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+hanging_duration=$SECONDS
+hanging_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || hanging_contract=0
+done
+[ "$hanging_duration" -lt 5 ] || hanging_contract=0
+check "hanging Octocode CLI promptly emits unavailable fallback state" "$hanging_contract"
+
+NO_OCTOCODE_PATH="$TMP/no-octocode-bin"
+mkdir -p "$NO_OCTOCODE_PATH"
+out=$(EDC_AGENT_CLI=claude bash -c '
+  . "$1"
+  cat() { /bin/cat "$@"; }
+  PATH="$2"
+  _emit_octocode_research_guidance
+' bash "$SCRIPT_ABS" "$NO_OCTOCODE_PATH")
+absent_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || absent_contract=0
+done
+check "absent Octocode command emits unavailable fallback state" "$absent_contract"
+
+# ── 14.8: missing skill produces clear error ────────────────────────────────
 rm "$SKILLS_DIR/edc-build-impl/SKILL.md"
 out=$(run_resolve claude build 2>&1 || true)
 if echo "$out" | grep -q "skill 'edc-build-impl' not found"; then
@@ -196,7 +275,7 @@ else
   check "claude build: missing skill produces clear error" 0
 fi
 
-# ── 14.8: missing review supporting file produces clear error ───────────────
+# ── 14.9: missing review supporting file produces clear error ───────────────
 echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"  # restore
 echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"   # restore
 rm "$SKILLS_DIR/edc-review/methodology.md"

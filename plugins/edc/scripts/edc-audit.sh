@@ -135,7 +135,7 @@ Rules:
 5. Preserve module names and evidence from worker reports so findings remain traceable.
 6. Use the embedded edc-audit reporting contract below.
 
-$(_emit_audit_prompt)
+$(_emit_audit_reporting_prompt)
 EOF
 }
 

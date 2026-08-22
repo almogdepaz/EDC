@@ -14,6 +14,7 @@ Deterministic scorer/regression unit tests run in normal CI, while live model/CV
 ## Key files and flows
 - `benchmark/run.sh`: legacy per-CVE runner. It clones/reuses target repos, checks out vulnerable revisions, prompts Claude over affected files, writes/falls back to `edc-context/reports/issues.md`, then invokes `score.py`.
 - `benchmark/score.py`: two-phase scorer. Literal category keywords and explicitly declared category regexes are evaluated separately; empty affected-file entries cannot match everything. Keyword prefilter gates an LLM judge; judge refusals/parse failures become explicit `judge_error` rows rather than silent misses. Supports dual build/review scoring and combined-score weighting.
+- `benchmark/scoring_helpers.py`: shared verdict normalization and stale-output cleanup used by deterministic scoring paths; unresolved verdicts fail closed.
 - `benchmark/audit.py`: audits regression TSVs for suspicious miss/error rows where transcripts still contain CVE/file evidence.
 - `benchmark/transcript_utils.py`: reconstructs `issues.md` from Claude JSONL transcripts by replaying Write/Edit/MultiEdit/Bash heredoc events.
 - `benchmark/autoresearch.sh`: autonomous loop that lets an agent edit skill files, hashes attempts, commits, benchmarks fast CVEs, validates regressions, and reverts failed prompt mutations.

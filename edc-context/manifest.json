@@ -115,6 +115,7 @@
           "benchmark/results.tsv",
           "benchmark/run.sh",
           "benchmark/score.py",
+          "benchmark/scoring_helpers.py",
           "benchmark/transcript_utils.py",
           "benchmark/tried-hashes.tsv"
         ],
@@ -178,7 +179,7 @@
       "benchmark/curl/**",
       "benchmark/redis/**"
     ],
-    "mappedFileCount": 201,
+    "mappedFileCount": 202,
     "unmappedFileCount": 18
   }
 }

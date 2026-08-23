@@ -279,7 +279,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   await edcCmd.opts.handler("", { ...menuCtx("build context"), cwd: tamperedRuntimeDir });
   const tamperedStartMessage = calls.messages.slice(tamperedMessagesBefore).at(-1)?.content || "";
   const tamperedStatusFile = `${tamperedRuntimeDir}/.git/edc/status`;
-  for (let i = 0; i < 100; i++) {
+  // CI observed terminal status projection at ~3.4s after repeated result-field
+  // node startups; keep the condition-driven poll but give it a 10s hang guard.
+  for (let i = 0; i < 400; i++) {
     const status = fs.existsSync(tamperedStatusFile) ? fs.readFileSync(tamperedStatusFile, "utf-8") : "";
     if (/^status=(?:failed|success|success-with-warning|cancelled)$/m.test(status)) break;
     await new Promise(resolve => setTimeout(resolve, 25));

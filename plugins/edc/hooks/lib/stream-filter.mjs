@@ -268,6 +268,11 @@ function runCommand() {
   }
 
   childToKill = spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+  childToKill.stdin.on("error", (error) => {
+    if (error?.code === "EPIPE") return;
+    console.error(`ERROR: stdin: ${error.message}`);
+    if (!exiting) finish(1);
+  });
   const stdinText = process.env.EDC_STREAM_STDIN_FILE ? readFileSync(process.env.EDC_STREAM_STDIN_FILE, "utf8") : (process.env.EDC_STREAM_STDIN || "");
   childToKill.stdin.end(stdinText);
   commandTimer = setTimeout(() => {

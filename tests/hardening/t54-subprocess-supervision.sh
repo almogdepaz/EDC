@@ -44,17 +44,21 @@ if (mode === "resistant") {
 }
 NODE
 
+node -e 'process.stdout.write("x".repeat(1024 * 1024))' >"$TMP/stdin-payload.txt"
+
 for spec in TERM:143 INT:130 HUP:129; do
   signal=${spec%%:*}
   expected=${spec##*:}
   set +e
-  node "$STREAM_FILTER" --run 30 self-signal -- bash -c "kill -$signal \$\$" >"$TMP/self-$signal.out" 2>&1
+  EDC_STREAM_STDIN_FILE="$TMP/stdin-payload.txt" \
+    node "$STREAM_FILTER" --run 30 self-signal -- bash -c "kill -$signal \$\$" >"$TMP/self-$signal.out" 2>&1
   rc=$?
   set -e
   if [ "$rc" -eq "$expected" ]; then
     pass "stream-filter maps spontaneous SIG$signal child exit to $expected"
   else
     fail "stream-filter spontaneous SIG$signal returned $rc, expected $expected"
+    cat "$TMP/self-$signal.out" >&2
   fi
 done
 

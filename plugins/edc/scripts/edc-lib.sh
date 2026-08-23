@@ -1075,7 +1075,7 @@ Whenever the skill tells you to invoke or reference a script under
   you run:     bash $EDC_SCRIPTS_DIR/edc-manifest.sh
 
 The scripts to substitute include (at least):
-edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-clean-slate.sh,
+edc-manifest.sh, edc-doctor.sh, edc-clean-slate.sh,
 edc-assert-fresh.sh, edc-recover-context.sh. Path classification uses
 $EDC_SCRIPTS_DIR/../hooks/lib/classify-cli.mjs.
 

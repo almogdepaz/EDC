@@ -43,7 +43,7 @@ Before prompts that perform source research, the coordinator probes an already-i
 ### Coordinator-owned full build DAG
 1. Shell decides route using `edc-clean-slate.sh --check`; v1 is refused and partial layouts are wiped only by the orchestrator.
 2. Build inventory reads tracked file metadata with ignore rules, then a discovery worker writes a structured module plan without reading source bodies.
-3. `edc-build-plan.sh` validates module names/paths and emits module-context prompts. `build-dag.mjs` writes module and build-audit task manifests.
+3. `json-cli.mjs build-plan` validates module names/paths and emits module-context prompts. `build-dag.mjs` writes module and build-audit task manifests.
 4. `worker-pool.mjs` runs module-context workers; each writes exactly one staged module doc under `.git/edc/runs/<run-id>/staged/edc-context/modules/`.
 5. Cross-module and assembly workers consume staged module docs/metadata, not source bodies, to write staged index, partial manifest, build metadata, and agent entrypoint.
 6. Build-time audit workers and synthesis produce staged issues/complexity reports.

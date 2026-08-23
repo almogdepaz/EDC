@@ -13,7 +13,6 @@ MODULE_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md
 MODULE_OUTPUT_REQUIREMENTS="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
 MANIFEST_SCHEMA="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
 ADAPTER_CONTRACT="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
-BUILD_PLAN="$ROOT/plugins/edc/scripts/edc-build-plan.sh"
 JSON_CLI="$ROOT/plugins/edc/hooks/lib/json-cli.mjs"
 REVIEW_SKILL="$ROOT/plugins/edc/skills/edc-review/SKILL.md"
 REVIEW_METHODOLOGY="$ROOT/plugins/edc/skills/edc-review/methodology.md"
@@ -115,7 +114,7 @@ check_no_octocode_hard_dependency "audit scope reference" "$AUDIT_SCOPE"
 check_no_octocode_hard_dependency "delivery architecture reference" "$DELIVERY_ARCHITECTURE"
 check_no_octocode_hard_dependency "coordinator guidance" "$RUNTIME_LIB"
 check "build-plan task asks subagents for distilled docs" \
-  "$(contains "$BUILD_PLAN" "Write distilled high-signal context" && echo 1 || echo 0)"
+  "$(contains "$JSON_CLI" "Write distilled high-signal context" && echo 1 || echo 0)"
 check "generated module task prompt forbids sibling source bodies" \
   "$(contains "$JSON_CLI" "do not read sibling source bodies" && not_contains "$JSON_CLI" "You may read sibling-module source" && echo 1 || echo 0)"
 check "module output requirements define private scratch, not final docs" \

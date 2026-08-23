@@ -206,7 +206,7 @@ function command() {
       return;
     }
     case "build-plan": {
-      const [modulesDir, changedFilter = ""] = args;
+      const [modulesDir] = args;
       const input = parseJsonText(readStdin(), "input");
       if (!hasOwn(input, "modules")) buildPlanReject("missing required field: modules");
       if (!Array.isArray(input.modules) || input.modules.length === 0) buildPlanReject("modules must be a non-empty array");
@@ -223,11 +223,8 @@ function command() {
         seen.add(module.name);
       }
       if (duplicates.length > 0) buildPlanReject(`duplicate module names: ${duplicates.join("\n")}`);
-      const allowed = changedFilter ? changedFilter.split(",") : [];
-      for (const name of allowed) if (!seen.has(name)) buildPlanReject(`--changed references unknown module: ${name}`);
-      const modules = allowed.length > 0 ? input.modules.filter((module) => allowed.includes(module.name)) : input.modules;
       writeJson({
-        tasks: modules.map((module) => ({
+        tasks: input.modules.map((module) => ({
           kind: "module-context",
           module: module.name,
           paths: module.paths,

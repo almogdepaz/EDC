@@ -291,7 +291,7 @@ EOF
   edc_worker_run_single "$run_dir" "$run_id" build-discovery edc-build/discovery "" "$discovery_prompt" "${EDC_BUILD_TIMEOUT:-3600}" fail-fast "$discovery" || return 1
 
   local build_plan="$run_dir/build-plan.json"
-  bash "$SCRIPT_DIR/edc-build-plan.sh" --modules-dir "$staged_modules" < "$discovery" > "$build_plan" || return 1
+  node "$EDC_JSON_CLI" build-plan "$staged_modules" < "$discovery" > "$build_plan" || return 1
 
   local module_skill module_bundle="$run_dir/module-bundle.md" audit_bundle="$run_dir/audit-bundle.md"
   module_skill=$(_find_skill_for_agent "edc-module-context-impl") || return 1

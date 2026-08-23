@@ -73,7 +73,7 @@ try {
   await edcExtension(pi);
   assert.equal(typeof handler, "function", "extension should register /edc handler");
 
-  const selections = ["security review", "changed files vs default branch", "job status"];
+  const selections = ["changes vs default branch", "security review", "job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -169,7 +169,7 @@ try {
   };
   await edcExtension(pi);
 
-  const selections = ["security review", "changed files vs default branch"];
+  const selections = ["changes vs default branch", "security review"];
   const ctx = {
     cwd: worktree,
     hasUI: true,

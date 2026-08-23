@@ -46,7 +46,7 @@ plugins/edc/
 
     edc-manifest.sh                    # manifest stdin/stdout filter
     ../hooks/lib/classify-cli.mjs      # batch path classifier used by shell orchestrators
-    edc-build-plan.sh                  # deterministic per-module task planner (jq)
+    ../hooks/lib/json-cli.mjs          # deterministic JSON helpers, including build-plan generation
 
   skills/                              # user-facing methodology skills
     edc-review/                        # security/adversarial review methodology + patterns

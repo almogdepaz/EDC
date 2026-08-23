@@ -54,7 +54,7 @@ try {
   };
   await edcExtension(pi);
 
-  const selections = ["security review", "changed files vs default branch", "job status"];
+  const selections = ["changes vs default branch", "security review", "job status"];
   const ctx = {
     cwd,
     hasUI: true,

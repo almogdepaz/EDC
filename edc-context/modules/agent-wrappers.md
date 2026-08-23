@@ -25,7 +25,7 @@ Background kill is now an asynchronous verified state transition rather than a f
 - `VISIBLE_SKILLS`: exposes only `edc-review`, `edc-audit`, and `edc-delivery-review` through Pi resource discovery; private implementation bundles remain hidden.
 - `handleEdcMenu`: interactive dispatcher for review all, security review, delivery review, quality review, status/kill, build, update, and doctor.
 - `pi/lib/args.mjs` and `pi/lib/review-scope.mjs`: own argument quoting/token rendering, default-base detection, freshness summaries/prompts, explicit full-vs-diff command guidance, and review-scope helpers. These are UX sugar only; shell orchestrators still own validation, freshness recovery, and failure reporting.
-- `runScopedReview`: asks for scope, optionally prompts before context refresh for security-style reviews, then starts the selected review job. `--no-context-refresh` and `--ignore-context` bypass the prompt for explicit direct security-review modes.
+- `runReviewFromMenuScope`: maps the already-selected scope to the chosen lens, optionally prompts before context refresh, then starts the selected review job.
 - `runBackgroundAction`: starts non-preflight background jobs such as build and update.
 - `startBackgroundJob`: resolves `.edc/scripts/edc-<kind>.sh`, writes `.git/edc/status`, detaches a `bash` subprocess with `EDC_RESULT_FILE=.git/edc/result.json`, writes `.git/edc/<kind>.log`, classifies failures, records `repo_changed`, handles spawn failures, and projects structured result fields into status (`scope`, `base`, `target`, dirty/untracked inclusion, outputs, failed phase, child result, reason, hint, final review).
 - `pi/lib/background-result.mjs`: owns elapsed/footer formatting and background start/already-running messages, keeping result projection display logic outside the extension entrypoint.
@@ -51,10 +51,8 @@ Background kill is now an asynchronous verified state transition rather than a f
 4. Send a display message plus hidden/full module context when injection is active and not deduped.
 
 ### Interactive menu
-- **Review all changes:** scope menu chooses changed/default-branch or custom refs, then runs detached `edc-review-all.sh` so security, delivery, and quality phases produce one aggregate status.
-- **Security review:** same scope menu, freshness prompt, and direct-review bypasses as the terminal security pipeline, then runs detached `edc-review.sh`.
-- **Delivery review:** scope menu supports changed/default-branch, custom refs, and `--full` current-repo review, then runs detached `edc-delivery-review.sh`.
-- **Quality review:** scope menu supports changed/default-branch/custom refs or full audit of all modules with explicit scope metadata, then runs detached `edc-audit.sh`.
+- **Review scope:** choose full repo, changes vs default branch, or changes vs custom base first; diff scopes apply the dirty-review policy before any job starts.
+- **Review lens:** after scope selection, choose combined/security/delivery/quality; Pi dispatches to detached `edc-review-all.sh`, `edc-review.sh`, `edc-delivery-review.sh`, or `edc-audit.sh` with the selected scope args.
 - **Update context from default branch:** computes the same base ref and starts detached `edc-update.sh --base <detected>`.
 - **Job status / kill:** reads or terminates the current `.git/edc/status` slot. Kill waits for process/group death before writing cancellation; failed force-kill leaves running status and live UI intact. Completed status is visible on demand but not pinned in the Pi footer/widget.
 - **Build / Doctor:** build starts a background `bash` job; doctor runs foreground and streams a summarized result back to Pi.

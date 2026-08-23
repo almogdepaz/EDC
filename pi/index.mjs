@@ -68,13 +68,6 @@ const EDC_LENS_MENU = {
   CANCEL: "cancel",
 };
 
-const EDC_SCOPE_MENU = {
-  CHANGED_DEFAULT: "changes vs default branch",
-  FULL_CURRENT: "full repo review",
-  CUSTOM_REFS: "changes vs custom base",
-  CANCEL: "cancel",
-};
-
 const VISIBLE_SKILLS = ["edc-review", "edc-audit", "edc-delivery-review"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
@@ -152,45 +145,6 @@ function extendEdcBashTimeout(event) {
   const currentTimeout = Number(event.input.timeout || 0);
   if (!Number.isFinite(currentTimeout) || currentTimeout < EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS) {
     event.input.timeout = EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS;
-  }
-}
-
-async function selectReviewScope(ctx, options = {}) {
-  const supportsFull = options.supportsFull === true;
-  const commandName = options.commandName || "review";
-  const choice = await ctx.ui.select("what do you want to review?", [
-    EDC_SCOPE_MENU.CHANGED_DEFAULT,
-    EDC_SCOPE_MENU.FULL_CURRENT,
-    EDC_SCOPE_MENU.CUSTOM_REFS,
-    EDC_SCOPE_MENU.CANCEL,
-  ]);
-
-  switch (choice) {
-    case EDC_SCOPE_MENU.CHANGED_DEFAULT:
-    case "changed files vs default branch": {
-      const policy = await applyDirtyReviewPolicy(defaultBaseReviewArgs(ctx.cwd), ctx);
-      return policy.cancelled ? policy : { scope: "diff", args: policy.args };
-    }
-    case EDC_SCOPE_MENU.FULL_CURRENT:
-    case "full current repo":
-      if (!supportsFull) {
-        return { error: `full current repo scope is not supported for edc ${commandName} yet; use changed files or custom refs.` };
-      }
-      return { scope: "full", args: options.fullArgs || ["--full"] };
-    case EDC_SCOPE_MENU.CUSTOM_REFS:
-    case "custom refs": {
-      if (typeof ctx.ui.input !== "function") {
-        return { error: `custom refs require CLI for now: edc ${commandName} --agent pi --diff <base>...<target>` };
-      }
-      const base = await ctx.ui.input("base ref", { placeholder: "origin/main" });
-      if (!base) return { cancelled: true };
-      const target = await ctx.ui.input("target ref", { placeholder: "HEAD" });
-      if (!target) return { cancelled: true };
-      const policy = await applyDirtyReviewPolicy([String(target), "--base", String(base)], ctx);
-      return policy.cancelled ? policy : { scope: "diff", args: policy.args };
-    }
-    default:
-      return { cancelled: true };
   }
 }
 
@@ -926,16 +880,6 @@ async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "re
   }
 }
 
-async function runScopedReview(pi, ctx, kind, scriptName, options = {}) {
-  const scope = await selectReviewScope(ctx, options);
-  if (scope.cancelled) return;
-  if (scope.error) {
-    sendInfo(pi, "edc-review-scope", scope.error);
-    return;
-  }
-  await startReviewJob(pi, ctx, kind, scriptName, scope.args || [], options.commandName || "review", scope.scope || "");
-}
-
 function reviewConfigForLens(lens, isFullScope) {
   switch (lens) {
     case EDC_LENS_MENU.COMBINED:
@@ -1060,15 +1004,6 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.DIFF_CUSTOM:
       await runReviewFromMenuScope(pi, ctx, choice);
       break;
-    case "review all changes":
-      await runScopedReview(pi, ctx, "review-all", "edc-review-all.sh", { commandName: "review" });
-      break;
-    case EDC_LENS_MENU.SECURITY:
-      await runScopedReview(pi, ctx, "review", "edc-review.sh", { commandName: "security" });
-      break;
-    case EDC_LENS_MENU.DELIVERY:
-      await runScopedReview(pi, ctx, "delivery-review", "edc-delivery-review.sh", { commandName: "delivery", supportsFull: true });
-      break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);
       sendInfo(pi, "edc-job-status", renderBackgroundJobStatus("", ctx.cwd));
@@ -1081,9 +1016,6 @@ async function handleEdcMenu(pi, args, ctx) {
       break;
     case EDC_MENU.UPDATE_DEFAULT:
       runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
-      break;
-    case EDC_LENS_MENU.QUALITY:
-      await runScopedReview(pi, ctx, "audit", "edc-audit.sh", { commandName: "quality", supportsFull: true, fullArgs: [] });
       break;
     case EDC_MENU.DOCTOR:
       await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");

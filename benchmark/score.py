@@ -26,6 +26,23 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from scoring_helpers import (
+        CANONICAL_RESULT_FIELDS,
+        UnresolvedVerdictError,
+        review_verdict,
+        review_verdict_field,
+        verdict_to_score,
+    )
+except ModuleNotFoundError:
+    from benchmark.scoring_helpers import (
+        CANONICAL_RESULT_FIELDS,
+        UnresolvedVerdictError,
+        review_verdict,
+        review_verdict_field,
+        verdict_to_score,
+    )
+
 RESULTS_FILE = Path(os.environ.get("EDC_RESULTS_FILE", Path(__file__).parent / "results.tsv"))
 KEYWORD_THRESHOLD = 0.3  # minimum keyword score to trigger LLM judge
 
@@ -363,6 +380,13 @@ def score_cve(issues_text: str, cve_id: str, bug_pattern: str,
     return verdict, confidence, f"judge: {explanation}; keywords({kw_notes})"
 
 
+def initialize_results_file(path: Path) -> None:
+    """Create an empty canonical results TSV without replacing existing data."""
+    if path.exists() and path.stat().st_size > 0:
+        return
+    path.write_text("\t".join(CANONICAL_RESULT_FIELDS) + "\n")
+
+
 def append_result(cve_id: str, category: str, severity: str,
                   verdict: str, confidence: float, duration: int, notes: str,
                   build_verdict: str = "", build_confidence: float = 0.0,
@@ -376,16 +400,7 @@ def append_result(cve_id: str, category: str, severity: str,
     """
     timestamp = datetime.now().isoformat(timespec="seconds")
 
-    # Header. Always write the extended 12-column header for new files.
-    # Old TSVs created before this change will keep their 8-column layout; the
-    # new columns are appended cleanly when older rows are mixed with newer.
-    if not RESULTS_FILE.exists() or RESULTS_FILE.stat().st_size == 0:
-        with open(RESULTS_FILE, "w") as f:
-            f.write(
-                "timestamp\tcve\tcategory\tseverity\t"
-                "verdict\tconfidence\tduration\tnotes\t"
-                "build_verdict\tbuild_confidence\tcombined_score\tbuild_notes\n"
-            )
+    initialize_results_file(RESULTS_FILE)
 
     # combined_score = -1 sentinel means "single-phase row, use verdict mapping".
     # judge_error is excluded from aggregates and gets a sentinel score of -1.0
@@ -396,13 +411,29 @@ def append_result(cve_id: str, category: str, severity: str,
         else:
             combined_score = {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(verdict, 0.0)
 
-    line = (
-        f"{timestamp}\t{cve_id}\t{category}\t{severity}\t"
-        f"{verdict}\t{confidence}\t{duration}\t{notes}\t"
-        f"{build_verdict}\t{build_confidence}\t{combined_score}\t{build_notes}\n"
-    )
-    with open(RESULTS_FILE, "a") as f:
-        f.write(line)
+    with RESULTS_FILE.open(newline="") as handle:
+        fieldnames = next(csv.reader(handle, delimiter="\t"), [])
+    verdict_field = review_verdict_field(fieldnames)
+    row = {
+        "timestamp": timestamp,
+        "cve": cve_id,
+        "category": category,
+        "severity": severity,
+        verdict_field: verdict,
+        "confidence": confidence,
+        "duration": duration,
+        "notes": notes,
+        "build_verdict": build_verdict,
+        "build_confidence": build_confidence,
+        "combined_score": combined_score,
+        "build_notes": build_notes,
+    }
+    with RESULTS_FILE.open("a", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=fieldnames, delimiter="\t",
+            lineterminator="\n", extrasaction="ignore",
+        )
+        writer.writerow(row)
 
     icon = {"exact": "HIT", "partial": "PARTIAL", "missed": "MISS",
             "judge_error": "JUDGE_ERR"}.get(verdict, "???")
@@ -410,6 +441,24 @@ def append_result(cve_id: str, category: str, severity: str,
         print(f"    [{icon}] {cve_id} review={verdict} build={build_verdict} combined={combined_score:.2f} — {notes}")
     else:
         print(f"    [{icon}] {cve_id} ({verdict}, confidence={confidence}) — {notes}")
+
+
+def mean_result_score(results_path: Path, expected_count=None) -> float:
+    """Return the weighted mean for a fully resolved benchmark results TSV."""
+    with results_path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    if not rows:
+        raise UnresolvedVerdictError(f"no benchmark result rows in {results_path}")
+    if expected_count is not None and len(rows) != expected_count:
+        raise UnresolvedVerdictError(
+            f"expected {expected_count} benchmark result rows in {results_path}, found {len(rows)}"
+        )
+    scores = []
+    for line_number, row in enumerate(rows, start=2):
+        verdict = review_verdict(row)
+        context = f"{results_path}:{line_number} {row.get('cve') or '<unknown-cve>'}"
+        scores.append(verdict_to_score(verdict, context=context))
+    return sum(scores) / len(scores)
 
 
 def print_summary():
@@ -425,7 +474,7 @@ def print_summary():
         return
 
     total = len(rows)
-    verdicts = [(row.get("verdict") or row.get("found") or "") for row in rows]
+    verdicts = [review_verdict(row) for row in rows]
     exact = sum(1 for verdict in verdicts if verdict == "exact")
     partial = sum(1 for verdict in verdicts if verdict == "partial")
     missed = sum(1 for verdict in verdicts if verdict == "missed")
@@ -512,7 +561,29 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Analysis duration in seconds")
     parser.add_argument("--skip-judge", action="store_true", help="Skip LLM judge, keyword-only")
     parser.add_argument("--summary", action="store_true", help="Print results summary")
+    parser.add_argument("--score-results", type=Path, help="Print the weighted mean for a resolved results TSV")
+    parser.add_argument("--expected-count", type=int, help="Require this many result rows when scoring a TSV")
+    parser.add_argument("--init-results", type=Path, help="Initialize a canonical results TSV if empty or absent")
     args = parser.parse_args()
+
+    if args.expected_count is not None and args.expected_count < 0:
+        parser.error("--expected-count must be non-negative")
+    if args.expected_count is not None and not args.score_results:
+        parser.error("--expected-count requires --score-results")
+
+    if args.init_results:
+        try:
+            initialize_results_file(args.init_results)
+        except OSError as exc:
+            parser.exit(1, f"ERROR: {exc}\n")
+        return
+
+    if args.score_results:
+        try:
+            print(f"{mean_result_score(args.score_results, args.expected_count):.3f}")
+        except (OSError, UnresolvedVerdictError) as exc:
+            parser.exit(1, f"ERROR: {exc}\n")
+        return
 
     if args.summary:
         print_summary()

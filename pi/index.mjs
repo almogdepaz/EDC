@@ -70,6 +70,7 @@ const EDC_LENS_MENU = {
 
 const VISIBLE_SKILLS = ["edc-review", "edc-audit", "edc-delivery-review"];
 const EDC_ORCHESTRATOR_BASH_TIMEOUT_SECONDS = 7200;
+const EDC_FOREGROUND_COMMAND_TIMEOUT_MS = 60 * 1000;
 const MAX_COMMAND_OUTPUT_CHARS = 12000;
 const EDC_BACKGROUND_STATUS_GIT_PATH = "edc/status";
 const EDC_BACKGROUND_STALE_MS = 12 * 60 * 60 * 1000;
@@ -173,15 +174,22 @@ function piSubprocessEnv(ctx) {
   return env;
 }
 
+function appendCapturedOutput(current, chunk) {
+  return tailText(`${current}${chunk}`);
+}
+
 function runEdcScript(scriptName, args, ctx) {
   const bootstrap = findTrustedRuntimeBootstrap();
   if (!bootstrap) {
     return Promise.resolve({ code: 127, stdout: "", stderr: "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC\n" });
   }
 
+  const configuredTimeoutMs = Number(process.env.EDC_FOREGROUND_COMMAND_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : EDC_FOREGROUND_COMMAND_TIMEOUT_MS;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [bootstrap, scriptName, ...args], {
       cwd: ctx.cwd,
+      detached: true,
       env: piSubprocessEnv(ctx),
       stdio: ["ignore", "pipe", "pipe"],
       signal: ctx.signal,
@@ -189,18 +197,55 @@ function runEdcScript(scriptName, args, ctx) {
 
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf-8");
-    child.stderr.setEncoding("utf-8");
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => {
-      resolve({ code: 1, stdout, stderr: `${stderr}${error.message}\n` });
-    });
-    child.on("close", (code, signal) => {
+    let settled = false;
+    let timedOut = false;
+    let timeoutTimer = null;
+    const onStdout = (chunk) => { stdout = appendCapturedOutput(stdout, chunk); };
+    const onStderr = (chunk) => { stderr = appendCapturedOutput(stderr, chunk); };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("error", onError);
+      child.off("close", onClose);
+      resolve(result);
+    };
+    const onError = (error) => {
+      finish({ code: 1, stdout, stderr: appendCapturedOutput(stderr, `${error.message}\n`) });
+    };
+    const onClose = async (code, signal) => {
+      if (timedOut) {
+        let processGroupExited = false;
+        try {
+          processGroupExited = await waitForSignalTargetExit(child.pid, true);
+        } catch {
+          // Negative process-group signaling is unavailable on some platforms.
+        }
+        const cleanupText = processGroupExited ? "" : "; process group did not exit";
+        finish({ code: 124, stdout, stderr: appendCapturedOutput(stderr, `ERROR: foreground EDC command timed out${cleanupText}\n`) });
+        return;
+      }
       const exitCode = typeof code === "number" ? code : 1;
       const signalText = signal ? `terminated by ${signal}\n` : "";
-      resolve({ code: exitCode, stdout, stderr: `${stderr}${signalText}` });
-    });
+      finish({ code: exitCode, stdout, stderr: appendCapturedOutput(stderr, signalText) });
+    };
+
+    child.stdout.setEncoding("utf-8");
+    child.stderr.setEncoding("utf-8");
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.on("error", onError);
+    child.on("close", onClose);
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error?.code !== "ESRCH") child.kill("SIGKILL");
+      }
+    }, timeoutMs);
   });
 }
 
@@ -272,7 +317,7 @@ function isStartingPidStale(status) {
 function serializeStatus(fields) {
   return Object.entries(fields)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${key}=${String(value).replace(/[\x00-\x1f\x7f]+/g, " ")}`)
     .join("\n") + "\n";
 }
 
@@ -474,15 +519,22 @@ mkdir -p "$status_dir"
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_head="$(git rev-parse HEAD 2>/dev/null || true)"
 args_text="$(printf '%s ' "$@" | sed 's/ $//')"
+status_line() {
+  local LC_ALL=C status_key="$1" status_value="\${2-}"
+  while [[ "$status_value" =~ [[:cntrl:]]+ ]]; do
+    status_value="\${status_value/"\${BASH_REMATCH[0]}"/ }"
+  done
+  printf '%s=%s\n' "$status_key" "$status_value"
+}
 {
-  echo "kind=${kind}"
-  echo "status=running"
-  echo "started_at=$started_at"
-  echo "run_id=${runId}"
-  echo "pid=$$"
-  echo "args=$args_text"
-  echo "log=$log_display"
-  [ -n "$started_head" ] && echo "started_head=$started_head"
+  status_line "kind" "${kind}"
+  status_line "status" "running"
+  status_line "started_at" "$started_at"
+  status_line "run_id" "${runId}"
+  status_line "pid" "$$"
+  status_line "args" "$args_text"
+  status_line "log" "$log_display"
+  [ -n "$started_head" ] && status_line "started_head" "$started_head"
 } > "$status_file"
 
 rm -f "$result_file"
@@ -517,7 +569,7 @@ read_result_field() {
     else if (key === "finalReview") value = json.finalReview || "";
     else if (key === "outputs") value = Array.isArray(json.outputs) ? json.outputs.join(", ") : "";
     else if (key === "details") value = json.details ? JSON.stringify(json.details) : "";
-    process.stdout.write(String(value || "").replace(/[\\r\\n]+/g, " "));
+    process.stdout.write(String(value || "").replace(/[\\x00-\\x1f\\x7f]+/g, " "));
   ' "$result_file" "$1" 2>/dev/null || true
 }
 structured_status="$(read_result_field status)"
@@ -551,33 +603,33 @@ if [ -z "$status_value" ]; then
   if [ "$rc" -eq 0 ]; then status_value="success"; else status_value="failed"; fi
 fi
 {
-  echo "kind=${kind}"
-  echo "status=$status_value"
-  echo "exit_code=$rc"
-  echo "started_at=$started_at"
-  echo "finished_at=$finished_at"
-  echo "run_id=${runId}"
-  echo "pid=$$"
-  echo "args=$args_text"
-  echo "log=$log_display"
-  [ -n "$started_head" ] && echo "started_head=$started_head"
-  [ -n "$finished_head" ] && echo "finished_head=$finished_head"
-  [ -n "$repo_changed" ] && echo "repo_changed=$repo_changed"
-  [ -n "$structured_reason_code" ] && echo "reason_code=$structured_reason_code"
-  [ -n "$structured_failed_phase" ] && echo "failed_phase=$structured_failed_phase"
-  [ -n "$structured_child_result" ] && echo "child_result=$structured_child_result"
-  [ -n "$structured_scope" ] && echo "scope=$structured_scope"
-  [ -n "$structured_base" ] && echo "base=$structured_base"
-  [ -n "$structured_target" ] && echo "target=$structured_target"
-  [ -n "$structured_candidate_kind" ] && echo "candidate_kind=$structured_candidate_kind"
-  [ -n "$structured_candidate_commit" ] && echo "candidate_commit=$structured_candidate_commit"
-  [ -n "$structured_dirty_tracked" ] && echo "dirty_tracked_files=$structured_dirty_tracked"
-  [ -n "$structured_untracked" ] && echo "untracked_files=$structured_untracked"
-  [ -n "$structured_outputs" ] && echo "outputs=$structured_outputs"
-  [ -n "$structured_details" ] && echo "details=$structured_details"
-  [ -n "$failure_reason" ] && echo "failure_reason=$failure_reason"
-  [ -n "$failure_hint" ] && echo "failure_hint=$failure_hint"
-  [ -n "$final_review" ] && echo "final_review=$final_review"
+  status_line "kind" "${kind}"
+  status_line "status" "$status_value"
+  status_line "exit_code" "$rc"
+  status_line "started_at" "$started_at"
+  status_line "finished_at" "$finished_at"
+  status_line "run_id" "${runId}"
+  status_line "pid" "$$"
+  status_line "args" "$args_text"
+  status_line "log" "$log_display"
+  [ -n "$started_head" ] && status_line "started_head" "$started_head"
+  [ -n "$finished_head" ] && status_line "finished_head" "$finished_head"
+  [ -n "$repo_changed" ] && status_line "repo_changed" "$repo_changed"
+  [ -n "$structured_reason_code" ] && status_line "reason_code" "$structured_reason_code"
+  [ -n "$structured_failed_phase" ] && status_line "failed_phase" "$structured_failed_phase"
+  [ -n "$structured_child_result" ] && status_line "child_result" "$structured_child_result"
+  [ -n "$structured_scope" ] && status_line "scope" "$structured_scope"
+  [ -n "$structured_base" ] && status_line "base" "$structured_base"
+  [ -n "$structured_target" ] && status_line "target" "$structured_target"
+  [ -n "$structured_candidate_kind" ] && status_line "candidate_kind" "$structured_candidate_kind"
+  [ -n "$structured_candidate_commit" ] && status_line "candidate_commit" "$structured_candidate_commit"
+  [ -n "$structured_dirty_tracked" ] && status_line "dirty_tracked_files" "$structured_dirty_tracked"
+  [ -n "$structured_untracked" ] && status_line "untracked_files" "$structured_untracked"
+  [ -n "$structured_outputs" ] && status_line "outputs" "$structured_outputs"
+  [ -n "$structured_details" ] && status_line "details" "$structured_details"
+  [ -n "$failure_reason" ] && status_line "failure_reason" "$failure_reason"
+  [ -n "$failure_hint" ] && status_line "failure_hint" "$failure_hint"
+  [ -n "$final_review" ] && status_line "final_review" "$final_review"
 } > "$status_file"
 `;
 

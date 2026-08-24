@@ -117,10 +117,7 @@ SCORE_TSV="$OUT_DIR/review-results.tsv"
 
 [[ -f "$BUILD_TSV" ]] || printf 'repo\tcommit\tattempt\tduration_s\tnum_turns\tin_tokens\tout_tokens\tcache_read\tcache_create\ttotal_cost_usd\tmodule_count\tindex_lines\tstatus\n' > "$BUILD_TSV"
 [[ -f "$REVIEW_TSV" ]] || printf 'repo\tcommit\tcve\tattempt\tduration_s\tnum_turns\tin_tokens\tout_tokens\tcache_read\tcache_create\ttotal_cost_usd\tstatus\n' > "$REVIEW_TSV"
-# Extended schema: appends 4 columns for dual-phase scoring (build_verdict,
-# build_confidence, combined_score, build_notes). Legacy 8-column readers
-# still work — the extra columns are ignored at the tail.
-[[ -f "$SCORE_TSV" ]] || printf 'timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes\tbuild_verdict\tbuild_confidence\tcombined_score\tbuild_notes\n' > "$SCORE_TSV"
+python3 "$BENCH_DIR/score.py" --init-results "$SCORE_TSV"
 
 log() {
   local m="[$(date '+%H:%M:%S')] $*"

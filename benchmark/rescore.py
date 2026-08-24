@@ -12,7 +12,7 @@ This tool walks an existing TSV row-by-row:
      transcript reconstructed via transcript_utils)
   2. re-invoke the LLM judge via score.score_cve
   3. write a NEW TSV at <input>.rescored.tsv with the same schema plus an
-     `original_found` column so old vs new can be diffed
+     `original_<verdict-field>` column so old vs new can be diffed
 
 Costs money: each row spawns one `claude -p` (default model = $EDC_JUDGE_MODEL).
 Use `--dry-run` to print the worklist without paying. Use `--cve` to scope to
@@ -33,6 +33,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from scoring_helpers import review_verdict, review_verdict_field
 from transcript_utils import (
     find_issues_for_row,
     find_transcript_for_row,
@@ -126,10 +127,11 @@ def main() -> int:
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
 
-    if "original_found" not in fieldnames:
-        # Insert original_found right after `found` so diffs are easy to read.
-        idx = fieldnames.index("found")
-        fieldnames.insert(idx + 1, "original_found")
+    verdict_field = review_verdict_field(fieldnames)
+    original_verdict_field = f"original_{verdict_field}"
+    if original_verdict_field not in fieldnames:
+        fieldnames.insert(fieldnames.index(verdict_field) + 1, original_verdict_field)
+    if "rescored_at" not in fieldnames:
         fieldnames.append("rescored_at")
 
     out_path = args.out or args.tsv.with_suffix(".rescored.tsv")
@@ -169,7 +171,7 @@ def main() -> int:
 
         print(f"[{i}/{len(rows)}] {cve}: {len(text)} chars from {source}")
         if args.dry_run:
-            print(f"             (dry-run) original={row.get('found')}")
+            print(f"             (dry-run) original={review_verdict(row)}")
             new_rows.append(row)
             continue
 
@@ -177,11 +179,11 @@ def main() -> int:
             text, cve, info["bug_pattern"], info["category"],
             info["description"], info["affected_files"],
         )
-        print(f"             rescored: {row.get('found')} → {verdict} ({confidence})")
+        print(f"             rescored: {review_verdict(row)} → {verdict} ({confidence})")
 
         new_row = dict(row)
-        new_row["original_found"] = row.get("found", "")
-        new_row["found"] = verdict
+        new_row[original_verdict_field] = review_verdict(row)
+        new_row[verdict_field] = verdict
         new_row["confidence"] = str(confidence)
         new_row["notes"] = notes
         new_row["rescored_at"] = datetime.now().isoformat(timespec="seconds")

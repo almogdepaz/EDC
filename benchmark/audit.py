@@ -28,6 +28,7 @@ import sys
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
+from scoring_helpers import review_verdict
 from transcript_utils import (
     find_issues_for_row,
     find_transcript_for_row,
@@ -62,7 +63,7 @@ REFUSAL_RE = re.compile(
 def classify(row: dict, transcript_text: str, affected_files: list[str],
              cve: str) -> tuple[str, bool, bool]:
     """Return (failure_class, transcript_has_cve, transcript_has_file)."""
-    verdict = row.get("found", "")
+    verdict = review_verdict(row)
     notes = row.get("notes", "")
     cve_id_short = cve.replace("CVE-", "")
     has_cve = bool(transcript_text) and (
@@ -167,7 +168,7 @@ def audit_tsv(tsv_path: Path) -> list[RowVerdict]:
         out.append(RowVerdict(
             tsv=str(tsv_path.relative_to(REPO_ROOT)),
             cve=cve,
-            recorded=row.get("found", ""),
+            recorded=review_verdict(row),
             notes=(row.get("notes", "") or "")[:240],
             failure_class=cls,
             transcript_has_cve=has_cve,

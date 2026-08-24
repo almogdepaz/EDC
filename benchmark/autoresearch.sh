@@ -464,16 +464,7 @@ Write ALL findings to edc-context/reports/issues.md with:
 }
 
 calc_score() {
-    local results_file="$1"
-    EDC_SCORE_FILE="$results_file" python3 -c "
-import os, sys
-lines = open(os.environ['EDC_SCORE_FILE']).read().strip().split('\n')
-if len(lines) <= 1: print('0.000'); sys.exit()
-total = len(lines) - 1
-exact  = sum(1 for l in lines[1:] if '\texact\t'   in l)
-partial= sum(1 for l in lines[1:] if '\tpartial\t' in l)
-print(f'{(exact + partial * 0.5) / total:.3f}')
-"
+    python3 "$SCRIPT_DIR/score.py" --score-results "$1" --expected-count "$2"
 }
 
 # ── Parallel benchmark ──────────────────────────────────────────────────────
@@ -484,7 +475,8 @@ run_benchmark() {
     local cves=("$@")
 
     local results_file="$SCOPE_DIR/results-${label}.tsv"
-    echo -e "timestamp\tcve\tcategory\tseverity\tfound\tconfidence\tduration\tnotes" > "$results_file"
+    rm -f "$results_file"
+    python3 "$SCRIPT_DIR/score.py" --init-results "$results_file"
 
     local metrics_file="$SCOPE_DIR/metrics-${label}.tsv"
     echo -e "cve\tduration_s\tnum_turns\tinput_tokens\toutput_tokens\tcache_read\tcache_create\ttotal_cost" > "$metrics_file"
@@ -528,7 +520,7 @@ run_benchmark() {
     done
 
     local score
-    score=$(calc_score "$results_file")
+    score=$(calc_score "$results_file" "${#cves[@]}")
     log "Score [$label]: $score"
     echo "$score" > "$SCOPE_DIR/.score-${label}.tmp"
 }

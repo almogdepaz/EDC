@@ -26,10 +26,13 @@ if [[ "\$prompt" == *"DELIVERY REVIEW TASK"* ]]; then
   report_path=\$(printf '%s\n' "\$prompt" | grep '^DELIVERY_REPORT_PATH: ' | head -1 | sed 's/^DELIVERY_REPORT_PATH: //')
   case "\$scenario" in
     valid|valid-exit-fail)
-      printf '# Delivery / Architecture Review\n\n## Summary\n**Delivery verdict:** delivered\n**Architecture fit:** fits\n' > "\$report_path"
+      printf 'delivery review completed without canonical headings\n' > "\$report_path"
       ;;
     missing-report)
       :
+      ;;
+    symlink-report)
+      ln -s src/app.ts "\$report_path"
       ;;
   esac
   if [ "\$scenario" = "valid-exit-fail" ]; then
@@ -204,7 +207,7 @@ echo valid-exit-fail > "$TMPDIR_T38/scenario"
 result=0
 out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
 if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
-  && grep -q 'delivery-review subprocess reported failure, but report validation passed' <<<"$out" \
+  && grep -q 'delivery-review subprocess reported failure, but its substantive report was preserved' <<<"$out" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: delivery-review accepts valid report after failed agent rc with warning"
 else
@@ -217,11 +220,27 @@ setup_repo
 echo missing-report > "$TMPDIR_T38/scenario"
 result=0
 out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
-if [ "$result" -ne 0 ] && grep -q 'delivery review report missing' <<<"$out" \
-  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 1 && j.reasonCode === "delivery-report-validation" ? 0 : 1)'; then
-  echo "PASS: missing delivery report rejected"
+if [ "$result" -eq 0 ] \
+  && grep -q 'Delivery review unavailable' delivery-review-HEAD.md \
+  && grep -q '^CONDITIONAL$' delivery-review-HEAD.md \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: missing delivery report becomes explicit unavailable coverage"
 else
-  echo "FAIL: expected missing report rejection. exit=$result"
+  echo "FAIL: missing delivery report aborted or hid incomplete coverage. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+setup_repo
+echo symlink-report > "$TMPDIR_T38/scenario"
+result=0
+out=$(bash "$SCRIPT" HEAD --base HEAD~1 2>&1) || result=$?
+if [ "$result" -ne 0 ] \
+  && [ -L delivery-review-HEAD.md ] \
+  && [ "$(cat src/app.ts)" = "two" ]; then
+  echo "PASS: invalid delivery report path fails without following or replacing the symlink"
+else
+  echo "FAIL: delivery review downgraded or followed an invalid report path. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi

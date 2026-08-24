@@ -322,4 +322,20 @@ else
   fi
 fi
 
+# Concurrent spawn errors remain failed even when fail-fast stop marks siblings.
+start_failure_runner="$TMP/start-failure-worker.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$start_failure_runner"
+chmod 600 "$start_failure_runner"
+start_failure="$TMP/start-failure"
+write_manifest "$start_failure" 2 5 first second
+node -e 'const fs=require("fs"); const p=process.argv[1]; const j=JSON.parse(fs.readFileSync(p,"utf8")); j.tasks[0].failurePolicy="continue"; fs.writeFileSync(p,JSON.stringify(j));' "$start_failure/tasks.json"
+node "$POOL" --runner "$start_failure_runner" "$start_failure/tasks.json" >"$start_failure/out.log" 2>"$start_failure/err.log"
+start_failure_rc=$?
+if [ "$start_failure_rc" -ne 0 ] && node -e 'const j=require(process.argv[1]); process.exit(j.tasks.length === 2 && j.tasks.every((task) => task.status === "failed") && /could not start/.test(j.reason) ? 0 : 1)' "$start_failure/stage-result.json"; then
+  check "47.14: concurrent start failures remain failed" 1
+else
+  check "47.14: concurrent start failures remain failed" 0
+  cat "$start_failure/out.log" "$start_failure/err.log" "$start_failure/stage-result.json" 2>/dev/null || true
+fi
+
 check_summary "T47"

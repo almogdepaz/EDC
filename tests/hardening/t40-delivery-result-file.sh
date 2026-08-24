@@ -64,22 +64,16 @@ NODE
 echo "PASS: delivery-review writes structured success result"
 
 setup_repo
-set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_T40_MISSING_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$TMP/bad.out" 2>"$TMP/bad.err"
-rc=$?
-set -e
-if [ "$rc" -ne 0 ]; then
-  node --input-type=module <<'NODE'
+node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
 assert.equal(result.kind, 'delivery-review');
-assert.equal(result.exitCode, 1);
-assert.equal(result.reasonCode, 'delivery-report-validation');
+assert.equal(result.status, 'success-with-warning');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success-with-warning');
+assert.equal(result.finalReview, 'delivery-review-HEAD.md');
+assert.match(readFileSync('delivery-review-HEAD.md', 'utf8'), /Delivery review unavailable/);
 NODE
-  echo "PASS: delivery-review writes structured failure result"
-else
-  echo "FAIL: delivery-review missing report should fail"
-  cat "$TMP/bad.out" "$TMP/bad.err"
-  exit 1
-fi
+echo "PASS: delivery-review writes structured warning result for missing coverage"

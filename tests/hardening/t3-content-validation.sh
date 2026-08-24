@@ -39,7 +39,7 @@ else
   exit 1
 fi
 
-# ── 3b: consolidate rejects report without ## headings ────────────────────────
+# ── 3b: consolidate rejects an empty intermediate report ─────────────────────
 printf '## Module Map\nlegit context\n' > edc-context/index.md
 
 mkdir -p edc-context/review-tasks
@@ -55,46 +55,32 @@ cat > edc-context/review-tasks/manifest.json <<'MANIFEST'
 MANIFEST
 sed -i.bak "s/\"head\": \"HEAD\"/\"head\": \"$HEAD\"/" edc-context/review-tasks/manifest.json
 
-printf 'just plain text with zero markdown structure\n' > edc-context/review-tasks/report-foo.md
+printf '   \n\n' > edc-context/review-tasks/report-foo.md
 
 result=0
 bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
-if [ "$result" -ne 0 ] && grep -q "no '## ' headings" "$TMPDIR_T3/stderr.txt"; then
-  echo "PASS: --consolidate rejects report without ## headings with descriptive error"
+if [ "$result" -ne 0 ] && grep -q "has no substantive content" "$TMPDIR_T3/stderr.txt"; then
+  echo "PASS: --consolidate rejects an empty intermediate report"
 else
-  echo "FAIL: expected --consolidate to reject report without headings, got exit $result"
+  echo "FAIL: expected --consolidate to reject an empty report, got exit $result"
   cat "$TMPDIR_T3/stderr.txt"
   exit 1
 fi
 
-# ── 3c: consolidate rejects report with headings but no Findings ─────────────
-printf '## Summary\n\nstructured but no findings section\n' > edc-context/review-tasks/report-foo.md
+# ── 3c: consolidate accepts substantive prose without canonical headings ─────
+printf 'reviewed the assigned scope; no security findings were identified.\n' > edc-context/review-tasks/report-foo.md
 
 result=0
 bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
-if [ "$result" -ne 0 ] && grep -q "missing required section: ## Findings" "$TMPDIR_T3/stderr.txt"; then
-  echo "PASS: --consolidate rejects report without ## Findings"
+if [ "$result" -eq 0 ] && grep -Fqx "## Module: \`foo\`" review-HEAD.md; then
+  echo "PASS: --consolidate accepts substantive noncanonical module prose"
 else
-  echo "FAIL: expected --consolidate to reject report without ## Findings, got exit $result"
+  echo "FAIL: expected --consolidate to accept substantive prose, got exit $result"
   cat "$TMPDIR_T3/stderr.txt"
   exit 1
 fi
 
-# ── 3d: consolidate normalizes common Critical Findings heading drift ────────
-printf '## What Changed\n\nscoped diff\n\n## Critical Findings\n\nNo security findings.\n' > edc-context/review-tasks/report-foo.md
-
-result=0
-bash "$ORIG_DIR/$SCRIPT" --consolidate 2>"$TMPDIR_T3/stderr.txt" || result=$?
-if [ "$result" -eq 0 ] && grep -q '^## Findings$' edc-context/review-tasks/report-foo.md; then
-  echo "PASS: --consolidate normalizes ## Critical Findings to ## Findings"
-else
-  echo "FAIL: expected --consolidate to normalize ## Critical Findings, got exit $result"
-  cat "$TMPDIR_T3/stderr.txt"
-  cat edc-context/review-tasks/report-foo.md
-  exit 1
-fi
-
-# ── 3e: valid report passes consolidate ───────────────────────────────────────
+# ── 3d: valid report passes consolidate ───────────────────────────────────────
 printf '## Findings\n\nfindings here\n' > edc-context/review-tasks/report-foo.md
 
 result=0
@@ -107,7 +93,7 @@ else
   exit 1
 fi
 
-# ── 3f: manifest declares v2 schema ───────────────────────────────────────────
+# ── 3e: manifest declares v2 schema ───────────────────────────────────────────
 if jq -e '.schemaVersion == 2' edc-context/manifest.json > /dev/null; then
   echo "PASS: edc-context/manifest.json schemaVersion == 2"
 else

@@ -113,6 +113,13 @@ set -euo pipefail
 if [ -f "$PWD/worker-run/tasks.json" ]; then
   exec node "$PWD/.edc/hooks/lib/worker-pool.mjs" --runner "$PWD/term-resistant-worker.sh" "$PWD/worker-run/tasks.json"
 fi
+if [ -n "${EDC_TEST_REVIEW_ARGS_FILE:-}" ]; then
+  : > "$EDC_TEST_REVIEW_ARGS_FILE"
+  for arg in "$@"; do printf '%s\0' "$arg" >> "$EDC_TEST_REVIEW_ARGS_FILE"; done
+fi
+if [ -n "${EDC_TEST_STRUCTURED_STATUS_VALUE:-}" ]; then
+  node -e 'const fs=require("fs"); const value=process.env.EDC_TEST_STRUCTURED_STATUS_VALUE; fs.writeFileSync(process.env.EDC_RESULT_FILE, JSON.stringify({status:"success", reasonCode:value, message:value, outputs:[value]}));'
+fi
 sleep 0.2
 echo "agent=$EDC_AGENT_CLI model=${EDC_PI_MODEL:-}"
 echo "review args: $*"
@@ -151,6 +158,19 @@ EOF
 cat >"$TRUSTED_PACKAGE/plugins/edc/scripts/edc-doctor.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+case "${EDC_TEST_FOREGROUND_MODE:-}" in
+  oversized)
+    printf 'output-start%050000doutput-end\n' 0
+    exit 0
+    ;;
+  hang)
+    printf '%s\n' "$$" > "${EDC_TEST_FOREGROUND_PID_FILE:?}"
+    sleep 30 &
+    child=$!
+    printf '%s\n' "$child" > "${EDC_TEST_FOREGROUND_CHILD_PID_FILE:?}"
+    wait "$child"
+    ;;
+esac
 echo "doctor args: $* agent=$EDC_AGENT_CLI"
 EOF
 chmod +x "$TRUSTED_PACKAGE/plugins/edc/scripts/edc-"*.sh
@@ -406,6 +426,82 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   }
   if (fs.existsSync(maliciousPwned)) {
     console.log("MALICIOUS_REF_EXECUTED_FAIL:" + maliciousPwned);
+    process.exit(1);
+  }
+
+  // 3a3. Status values sanitize controls without changing literal child argv.
+  for (let i = 0; i < 100; i++) {
+    if (fs.readFileSync(maliciousStatusFile, "utf-8").includes("status=success")) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (!fs.readFileSync(maliciousStatusFile, "utf-8").includes("status=success")) {
+    console.log("CONTROL_PREVIOUS_JOB_TIMEOUT_FAIL:" + JSON.stringify(fs.readFileSync(maliciousStatusFile, "utf-8")));
+    process.exit(1);
+  }
+  const controlMarker = `/tmp/edc-control-pwned-t10-${process.pid}`;
+  const controlTarget = `HEAD\ninjected_key=owned\tsegment\u0001tail$(touch\${IFS}${controlMarker})`;
+  const controlBase = `origin/base\tpart\nsecond_key=owned\u007fend$()`;
+  const structuredStatusValue = `structured\ninjected_structured=owned\tvalue\u0002tail`;
+  const controlArgsFile = `${maliciousDir}/control-argv.bin`;
+  const controlReleaseFile = `${maliciousDir}/control-bash-release`;
+  const controlFakeBin = `${maliciousDir}/control-fake-bin`;
+  const controlRealBash = childProcess.execFileSync("sh", ["-c", "command -v bash"], { encoding: "utf-8" }).trim();
+  try { fs.unlinkSync(controlMarker); } catch {}
+  fs.appendFileSync(`${maliciousDir}/.git/info/exclude`, "control-fake-bin/\ncontrol-argv.bin\ncontrol-bash-release\n");
+  fs.mkdirSync(controlFakeBin, { recursive: true });
+  fs.writeFileSync(`${controlFakeBin}/bash`, `#!/bin/sh\nwhile [ ! -f ${JSON.stringify(controlReleaseFile)} ]; do sleep 0.01; done\nexec ${JSON.stringify(controlRealBash)} "$@"\n`);
+  fs.chmodSync(`${controlFakeBin}/bash`, 0o755);
+  const controlPreviousPath = process.env.PATH;
+  process.env.PATH = `${controlFakeBin}:${controlPreviousPath}`;
+  process.env.EDC_TEST_REVIEW_ARGS_FILE = controlArgsFile;
+  process.env.EDC_TEST_STRUCTURED_STATUS_VALUE = structuredStatusValue;
+  const controlInputs = [controlBase, controlTarget];
+  try {
+    await edcCmd.opts.handler("", {
+      ...menuCtx(["changes vs custom base", "security review"], { input: async () => controlInputs.shift() }),
+      cwd: maliciousDir,
+    });
+  } finally {
+    process.env.PATH = controlPreviousPath;
+  }
+  const sanitizeStatusValue = (value) => value.replace(/[\x00-\x1f\x7f]+/g, " ");
+  const assertStatusValues = (status, phase) => {
+    const lines = status.split("\n").filter(Boolean);
+    const parsed = Object.fromEntries(lines.map((line) => {
+      const separator = line.indexOf("=");
+      if (separator <= 0) throw new Error(`invalid status line during ${phase}: ${JSON.stringify(line)}`);
+      return [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    if (/[\x00-\x09\x0b-\x1f\x7f]/.test(status.replace(/\n/g, "")) || parsed.injected_key || parsed.second_key || parsed.injected_structured) {
+      console.log("CONTROL_STATUS_PROTOCOL_FAIL:" + JSON.stringify({ phase, status }));
+      process.exit(1);
+    }
+    return parsed;
+  };
+  const initialControlStatus = fs.readFileSync(maliciousStatusFile, "utf-8");
+  const initialControlFields = assertStatusValues(initialControlStatus, "initial");
+  const expectedControlArgs = `${sanitizeStatusValue(controlTarget)} --base ${sanitizeStatusValue(controlBase)}`;
+  if (initialControlFields.args !== expectedControlArgs || !initialControlFields.args.includes(`$(touch\${IFS}${controlMarker})`) || !initialControlFields.args.includes("$()")) {
+    console.log("CONTROL_INITIAL_STATUS_FAIL:" + JSON.stringify({ fields: initialControlFields, messages: calls.messages.slice(-3), selections: calls.selections.slice(-5), remainingInputs: controlInputs }));
+    process.exit(1);
+  }
+  fs.writeFileSync(controlReleaseFile, "go");
+  for (let i = 0; i < 100; i++) {
+    if (fs.readFileSync(maliciousStatusFile, "utf-8").includes("status=success")) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  delete process.env.EDC_TEST_REVIEW_ARGS_FILE;
+  delete process.env.EDC_TEST_STRUCTURED_STATUS_VALUE;
+  const finalControlStatus = fs.readFileSync(maliciousStatusFile, "utf-8");
+  const finalControlFields = assertStatusValues(finalControlStatus, "final");
+  const expectedStructuredStatusValue = sanitizeStatusValue(structuredStatusValue);
+  const expectedControlArgv = Buffer.concat([
+    Buffer.from(controlTarget), Buffer.from([0]),
+    Buffer.from("--base"), Buffer.from([0]),
+    Buffer.from(controlBase), Buffer.from([0]),
+  ]);
+  if (finalControlFields.status !== "success" || finalControlFields.args !== expectedControlArgs || finalControlFields.reason_code !== expectedStructuredStatusValue || finalControlFields.failure_reason !== expectedStructuredStatusValue || finalControlFields.outputs !== expectedStructuredStatusValue || !fs.readFileSync(controlArgsFile).equals(expectedControlArgv) || fs.existsSync(controlMarker)) {
+    console.log("CONTROL_FINAL_STATUS_FAIL:" + JSON.stringify({ fields: finalControlFields, argv: fs.readFileSync(controlArgsFile).toString("hex"), expectedArgv: expectedControlArgv.toString("hex"), marker: fs.existsSync(controlMarker) }));
     process.exit(1);
   }
 
@@ -746,6 +842,39 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   await edcCmd.opts.handler("", menuCtx("doctor / validate context"));
   if (!calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
     console.log("DOCTOR_DIRECT_FAIL:" + JSON.stringify(calls.messages.at(-1)));
+    process.exit(1);
+  }
+
+  process.env.EDC_TEST_FOREGROUND_MODE = "oversized";
+  await edcCmd.opts.handler("", menuCtx("doctor / validate context"));
+  delete process.env.EDC_TEST_FOREGROUND_MODE;
+  const oversizedForeground = calls.messages.at(-1)?.content || "";
+  if (oversizedForeground.length > 14000 || !oversizedForeground.includes("output-start") || !oversizedForeground.includes("output-end")) {
+    console.log("FOREGROUND_OUTPUT_BOUND_FAIL:" + JSON.stringify({ length: oversizedForeground.length, start: oversizedForeground.includes("output-start"), end: oversizedForeground.includes("output-end") }));
+    process.exit(1);
+  }
+
+  const foregroundHangPidFile = `${cwd}/foreground-hang.pid`;
+  const foregroundHangChildPidFile = `${cwd}/foreground-hang-child.pid`;
+  process.env.EDC_TEST_FOREGROUND_MODE = "hang";
+  process.env.EDC_TEST_FOREGROUND_PID_FILE = foregroundHangPidFile;
+  process.env.EDC_TEST_FOREGROUND_CHILD_PID_FILE = foregroundHangChildPidFile;
+  process.env.EDC_FOREGROUND_COMMAND_TIMEOUT_MS = "1000";
+  const foregroundHangStarted = Date.now();
+  await edcCmd.opts.handler("", menuCtx("doctor / validate context"));
+  const foregroundHangDuration = Date.now() - foregroundHangStarted;
+  delete process.env.EDC_TEST_FOREGROUND_MODE;
+  delete process.env.EDC_TEST_FOREGROUND_PID_FILE;
+  delete process.env.EDC_TEST_FOREGROUND_CHILD_PID_FILE;
+  delete process.env.EDC_FOREGROUND_COMMAND_TIMEOUT_MS;
+  const foregroundHangResult = calls.messages.at(-1)?.content || "";
+  const foregroundHangPids = [foregroundHangPidFile, foregroundHangChildPidFile]
+    .map((path) => Number(fs.readFileSync(path, "utf-8").trim()));
+  const foregroundHangAlive = foregroundHangPids.filter((pid) => {
+    try { process.kill(pid, 0); return true; } catch (error) { if (error?.code === "ESRCH") return false; throw error; }
+  });
+  if (foregroundHangDuration > 3000 || foregroundHangAlive.length > 0 || !foregroundHangResult.includes("edc doctor failed with exit code 124") || !foregroundHangResult.includes("foreground EDC command timed out")) {
+    console.log("FOREGROUND_TIMEOUT_FAIL:" + JSON.stringify({ duration: foregroundHangDuration, alive: foregroundHangAlive, result: foregroundHangResult }));
     process.exit(1);
   }
 

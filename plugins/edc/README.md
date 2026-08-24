@@ -88,7 +88,7 @@ Each subprocess is a fresh context with one declared task and output set. Models
 - `adversarial.md` — attacker modeling methodology
 - `reporting.md` — security report contract
 
-`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting. Runtime result JSON uses `success`, `failed`, or `success-with-warning`; the warning state means durable reports/context validated despite transport/provider oddities.
+`skills/edc-audit/` contains the quality-review bundle. Its main `SKILL.md` is intentionally small and points to `references/` for scope, smell baseline, quality checks, and reporting. Runtime result JSON uses `success`, `failed`, or `success-with-warning`; warning results preserve substantive review prose and explicitly mark unavailable coverage after transport/provider or missing-output failures.
 
 `skills/edc-delivery-review/` contains the delivery/architecture review bundle. It keeps goal/spec delivery and architecture fit as separate axes.
 

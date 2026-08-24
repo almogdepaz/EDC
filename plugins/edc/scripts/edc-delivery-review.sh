@@ -172,12 +172,8 @@ repo_is_clean_main() {
 
 assert_delivery_report_valid() {
   local report_path="$1"
-  if [ ! -f "$report_path" ]; then
-    echo "ERROR: delivery review report missing: $report_path" >&2
-    return 1
-  fi
-  if ! grep -q '^##' "$report_path"; then
-    echo "ERROR: $report_path has no '## ' headings — expected a structured delivery review report" >&2
+  if ! edc_file_has_substantive_content "$report_path"; then
+    echo "ERROR: delivery review report has no substantive content: $report_path" >&2
     return 1
   fi
 }
@@ -313,11 +309,21 @@ delivery_main() {
     exit 1
   fi
 
-  assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log; the report is missing or incomplete" "" "$public_report_path"; exit 1; }
-  if [ "$spawn_rc" -ne 0 ]; then
-    echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but report validation passed." >&2
-    echo "HINT: treating the validated report as success; inspect the agent log for transport/provider diagnostics." >&2
-    edc_result_success_with_warning "delivery review validated report after subprocess failure" "inspect the agent log for transport/provider diagnostics" "$public_report_path"
+  local coverage_gap=0
+  if ! edc_file_has_substantive_content "$report_path"; then
+    edc_write_coverage_gap_report "$report_path" "Delivery Review Coverage Gap" \
+      "Delivery review unavailable; the reviewer did not produce substantive output."
+    coverage_gap=1
+  fi
+  assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log" "" "$public_report_path"; exit 1; }
+  if [ "$spawn_rc" -ne 0 ] || [ "$coverage_gap" -ne 0 ]; then
+    if [ "$spawn_rc" -ne 0 ] && [ "$coverage_gap" -eq 0 ]; then
+      echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but its substantive report was preserved." >&2
+    else
+      echo "EDC delivery review completed with warning: delivery-review coverage is unavailable." >&2
+    fi
+    echo "HINT: inspect the agent log for transport/provider diagnostics." >&2
+    edc_result_success_with_warning "delivery review completed with a coverage warning" "inspect the agent log for transport/provider diagnostics" "$public_report_path"
   else
     edc_result_success "$public_report_path"
   fi

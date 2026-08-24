@@ -9,8 +9,8 @@
 #      force-retry) if stale or missing — same recovery path review uses
 #   4. spawn one scoped audit subprocess per manifest module
 #   5. spawn one synthesis subprocess to write canonical reports
-#   6. validate output: <reports-dir>/{complexity,issues}.md must exist
-#      and contain at least one ## heading
+#   6. validate output: <reports-dir>/{complexity,issues}.md must contain
+#      substantive content; unavailable coverage is marked deterministically
 #   7. exit 0 with paths printed, non-zero with reason
 #
 # Usage:
@@ -70,14 +70,9 @@ manifest_audit_modules_for_files() {
 }
 
 assert_markdown_report_valid() {
-  local f="$1" label="$2"
-  if [ ! -f "$f" ]; then
-    echo "ERROR: audit report missing: $f ($label)" >&2
-    return 1
-  fi
-  if ! grep -q '^##' "$f"; then
-    echo "ERROR: $f has no '## ' headings — expected sections like ## Summary" >&2
-    echo "HINT: subprocess produced a stub. check the agent output above." >&2
+  local report_path="$1" label="$2"
+  if ! edc_file_has_substantive_content "$report_path"; then
+    echo "ERROR: audit report has no substantive content: $report_path ($label)" >&2
     return 1
   fi
 }
@@ -306,13 +301,19 @@ audit_main() {
   while [ "$index" -lt "$module_count" ]; do
     module="${audit_modules[$index]}"
     report_path="${audit_reports[$index]}"
+    worker_status=$(node -e 'const j=require(process.argv[1]); const task=j.tasks.find((entry)=>entry.id===process.argv[2]); process.stdout.write(task?.status || "missing")' "$run_dir/stage-result.json" "${audit_task_ids[$index]}")
+    if ! edc_file_has_substantive_content "$report_path"; then
+      edc_write_coverage_gap_report "$report_path" "Quality Review Coverage Gap" \
+        "Quality review unavailable for module \`$module\`; the reviewer did not produce substantive output."
+      had_warning=1
+      echo "EDC audit completed with warning: module $module produced no substantive report." >&2
+    fi
     assert_markdown_report_valid "$report_path" "module $module" \
       || { echo "ERROR: module audit validation failed for $module" >&2; edc_result_failure 1 "audit-report-validation" "module audit validation failed for $module" "inspect the staged module audit and task stderr under $run_dir" "$module"; exit 1; }
-    worker_status=$(node -e 'const j=require(process.argv[1]); const task=j.tasks.find((entry)=>entry.id===process.argv[2]); process.stdout.write(task?.status || "missing")' "$run_dir/stage-result.json" "${audit_task_ids[$index]}")
     if [ "$worker_status" != "success" ]; then
       had_warning=1
-      echo "EDC audit succeeded with warning: audit subprocess for module $module reported failure, but report validation passed." >&2
-      echo "HINT: treating the validated module audit report as success; inspect $run_dir for transport/provider diagnostics." >&2
+      echo "EDC audit completed with warning: audit subprocess for module $module reported status $worker_status." >&2
+      echo "HINT: preserving its substantive report or explicit unavailable marker; inspect $run_dir for diagnostics." >&2
     fi
     index=$((index + 1))
   done
@@ -344,12 +345,27 @@ audit_main() {
     exit 1
   fi
 
+  local synthesis_coverage_gap=0
+  if ! edc_file_has_substantive_content "$staged_complexity"; then
+    edc_write_coverage_gap_report "$staged_complexity" "Quality Review Coverage Gap" \
+      "Quality review unavailable for complexity analysis; the reviewer did not produce substantive output."
+    synthesis_coverage_gap=1
+  fi
+  if ! edc_file_has_substantive_content "$staged_issues"; then
+    edc_write_coverage_gap_report "$staged_issues" "Quality Review Coverage Gap" \
+      "Quality review unavailable for issue analysis; the reviewer did not produce substantive output."
+    synthesis_coverage_gap=1
+  fi
   assert_audit_report_pair_valid "$staged_complexity" "$staged_issues" \
-    || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output under $run_dir; staged reports are missing or incomplete"; exit 1; }
-  if [ "$synthesis_rc" -ne 0 ]; then
+    || { edc_result_failure 1 "audit-report-validation" "audit report validation failed" "inspect synthesis output under $run_dir"; exit 1; }
+  if [ "$synthesis_rc" -ne 0 ] || [ "$synthesis_coverage_gap" -ne 0 ]; then
     had_warning=1
-    echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but report validation passed." >&2
-    echo "HINT: treating the validated audit reports as success; inspect $run_dir for transport/provider diagnostics." >&2
+    if [ "$synthesis_rc" -ne 0 ] && [ "$synthesis_coverage_gap" -eq 0 ]; then
+      echo "EDC audit succeeded with warning: audit synthesis subprocess reported failure, but its substantive reports were preserved." >&2
+    else
+      echo "EDC audit completed with warning: synthesized quality coverage is unavailable." >&2
+    fi
+    echo "HINT: inspect $run_dir for transport/provider diagnostics." >&2
   fi
 
   edc_promote_file "$staged_complexity" "$complexity_output" || exit 1
@@ -361,7 +377,7 @@ audit_main() {
   fi
 
   if [ "$had_warning" -ne 0 ]; then
-    edc_result_success_with_warning "audit validated outputs after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics"
+    edc_result_success_with_warning "audit completed with one or more coverage warnings" "inspect the agent log for transport/provider diagnostics"
   else
     edc_result_success
   fi

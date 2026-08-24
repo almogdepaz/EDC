@@ -90,6 +90,25 @@ edc_result_write() {
   EDC_RESULT_WRITTEN=1
 }
 
+edc_file_has_substantive_content() {
+  local path="$1"
+  node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null 2>&1 \
+    && grep -q '[^[:space:]]' "$path"
+}
+
+edc_write_coverage_gap_report() {
+  local path="$1" title="$2" summary="$3"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null
+  fi
+  rm -f "$path"
+  {
+    printf '# %s\n\n' "$title"
+    printf '## Summary\n\n%s\n\n' "$summary"
+    printf '## Recommendation\n\nCONDITIONAL\n'
+  } > "$path"
+}
+
 edc_result_success() {
   edc_result_write 0 success "" "" "" "${1:-}"
 }

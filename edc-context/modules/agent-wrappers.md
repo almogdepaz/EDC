@@ -9,7 +9,7 @@ Owns the Pi package surface, Pi extension wrapper, Pi-specific installer/readme 
 ## Purpose
 This module adapts EDC to Pi. It registers one interactive `/edc` command, exposes only human-facing skills, hooks Pi session/tool events into the shared JS runtime-injection library, and runs review-all/security-review/delivery-review/quality-review/build/update/audit as detached background jobs with status/logs stored under git metadata rather than the worktree.
 
-Pi remains a wrapper over the shell runtime rather than a fork of review/update semantics. The current docs also explain worker-pool observability: EDC Pi subprocess workers always run with `--no-extensions`, and operators can opt into exactly one prompt-neutral observer by setting `EDC_PI_EXTENSION_PATH` to an absolute readable entrypoint. Worker provenance (`EDC_RUN_ID`, `EDC_TASK_ID`, `EDC_TASK_PHASE`, optional `EDC_TASK_MODULE`) and artifacts under `.git/edc/runs/<run-id>/` come from `runtime-cli`, while this module documents and passes through the configuration surface.
+Pi remains a wrapper over the shell runtime rather than a fork of review/update semantics. It now starts jobs through trusted `runtime-bootstrap.mjs` instead of directly trusting project-local `.edc/scripts`; bootstrap handles runtime inventory preflight/repair and then dispatches the packaged orchestrator. The current docs also explain worker-pool observability: EDC Pi subprocess workers always run with `--no-extensions`, and operators can opt into exactly one prompt-neutral observer by setting `EDC_PI_EXTENSION_PATH` to an absolute readable entrypoint. Worker provenance (`EDC_RUN_ID`, `EDC_TASK_ID`, `EDC_TASK_PHASE`, optional `EDC_TASK_MODULE`) and artifacts under `.git/edc/runs/<run-id>/` come from `runtime-cli`, while this module documents and passes through the configuration surface.
 
 Background kill is now an asynchronous verified state transition rather than a fire-and-forget signal. Pi sends TERM to the top-level process group when possible, waits longer than the nested worker-pool escalation window, uses KILL if needed, and records `cancelled` only after the target is gone. If signaling or verification fails, status remains `running` and the live watcher stays active instead of presenting a false terminal state.
 
@@ -27,22 +27,23 @@ Background kill is now an asynchronous verified state transition rather than a f
 - `pi/lib/args.mjs` and `pi/lib/review-scope.mjs`: own argument quoting/token rendering, default-base detection, freshness summaries/prompts, explicit full-vs-diff command guidance, and review-scope helpers. These are UX sugar only; shell orchestrators still own validation, freshness recovery, and failure reporting.
 - `runReviewFromMenuScope`: maps the already-selected scope to the chosen lens, optionally prompts before context refresh, then starts the selected review job.
 - `runBackgroundAction`: starts non-preflight background jobs such as build and update.
-- `startBackgroundJob`: resolves `.edc/scripts/edc-<kind>.sh`, writes `.git/edc/status`, detaches a `bash` subprocess with `EDC_RESULT_FILE=.git/edc/result.json`, writes `.git/edc/<kind>.log`, classifies failures, records `repo_changed`, handles spawn failures, and projects structured result fields into status (`scope`, `base`, `target`, dirty/untracked inclusion, outputs, failed phase, child result, reason, hint, final review).
+- `findTrustedRuntimeBootstrap` / `runEdcScript` / `startBackgroundJob`: locate the packaged or home trusted bootstrap, not arbitrary project-local scripts. Background jobs write `.git/edc/status`, detach a shell wrapper that runs `node <bootstrap> edc-<kind>.sh` with `EDC_RESULT_FILE=.git/edc/result.json`, write `.git/edc/<kind>.log`, classify failures, record `repo_changed`, handle spawn failures, and project structured result fields into status (`scope`, `base`, `target`, dirty/untracked inclusion, outputs, failed phase, child result, reason, hint, final review).
 - `pi/lib/background-result.mjs`: owns elapsed/footer formatting and background start/already-running messages, keeping result projection display logic outside the extension entrypoint.
 - `renderBackgroundJobStatus`: reads the single current status slot and displays kind, run id, status, exit code, timestamps, scope/base/target, commit drift, outputs/final report path, failed phase/child result, failure reason/hint, and log path. A requested historical run id is rejected because only the current slot is retained.
 - `killBackgroundJob` / `waitForSignalTargetExit`: terminate a process group (falling back to the PID), poll liveness through TERM and KILL grace windows, and return a terminal-vs-still-running outcome. `killRunningJobAction` clears the footer only for terminal outcomes.
 - `plugins/edc/hooks/lib/termination-policy.mjs`: shared managed timing policy imported by Pi. The outer grace equals the worker-pool grace plus a supervisor margin so nested detached worker groups can be reaped before the shell supervisor is killed.
 - `startBackgroundStatusWatcher` / `updateBackgroundStatusUi`: poll current status and pin Pi footer status only for `status=running`; success/failed/cancelled/missing status clears the footer/widget instead of leaving stale completed UI.
 - `runScriptAction`: synchronous menu action for doctor with bounded output capture.
-- `extendEdcBashTimeout`: raises Pi Bash tool timeout to 7200s for `.edc/scripts/edc-{build,update,review,review-all,delivery-review,audit,doctor}.sh` commands.
+- `extendEdcBashTimeout`: raises Pi Bash tool timeout to 7200s for common EDC orchestrator invocations, including `.edc/scripts/edc-{build,update,review,review-all,delivery-review,audit,doctor}.sh` paths used by terminal guidance.
 - Background state is resolved through `git rev-parse --git-path edc/status` and `edc/<kind>.log`; worker-stage run artifacts live under `.git/edc/runs/` but are owned by `runtime-cli`.
 
 ## Core flows
 ### Extension startup and resources
 1. If `EDC_PI_SUBPROCESS=1`, return immediately.
-2. `resources_discover` exposes only `plugins/edc/skills/edc-review`, `edc-audit`, and `edc-delivery-review`.
-3. `session_start` starts the background-status watcher if a job is active, then sends index context only when shared `buildSessionStartContent` says mode is `inject`.
-4. `session_shutdown` stops the poller and clears any Pi status/widget entries for EDC background jobs.
+2. Pi no longer best-effort installs project runtime on command registration; trusted bootstrap dispatch owns runtime preflight/repair when a job runs.
+3. `resources_discover` exposes only `plugins/edc/skills/edc-review`, `edc-audit`, and `edc-delivery-review`.
+4. `session_start` starts the background-status watcher if a job is active, then sends index context only when shared `buildSessionStartContent` says mode is `inject`.
+5. `session_shutdown` stops the poller and clears any Pi status/widget entries for EDC background jobs.
 
 ### Tool-call injection
 1. For `bash|edit|write`, optionally extend timeout for EDC orchestrator Bash calls.
@@ -59,13 +60,13 @@ Background kill is now an asynchronous verified state transition rather than a f
 - **Help/non-interactive:** `/edc -h` and missing UI explain that non-interactive runs should use the terminal CLI with explicit `--diff <base>...<target>` or `--base <default-branch>` scope.
 
 ### Worker observer configuration
-Pi worker subprocesses are launched by `runtime-cli`, not by `pi/index.mjs`, but Pi users configure the behavior documented here. `EDC_PI_EXTENSION_PATH=/absolute/file` allows one explicit observer extension to be passed as `-e <path>` while `--no-extensions` remains active. This is for prompt-neutral observability such as agent-observer; it must not be used to smuggle arbitrary prompt/context behavior into isolated workers. `EDC_MAX_CONCURRENCY` controls worker pool fanout globally and defaults to 4.
+Pi worker subprocesses are launched by `runtime-cli`, not by `pi/index.mjs`, but Pi users configure the behavior documented here. `EDC_PI_EXTENSION_PATH=/absolute/file` allows one explicit observer extension to be passed as `-e <path>` while `--no-extensions` remains active. This is for prompt-neutral observability such as agent-observer; it must not be used to smuggle arbitrary prompt/context behavior into isolated workers. EDC is serial by default; exact `EDC_PARALLEL=1` opts into lens/module fanout, then `EDC_MAX_CONCURRENCY` applies to worker pools.
 
 ## Invariants
 - Pi subprocess agents must not recursively load the extension (`EDC_PI_SUBPROCESS=1`).
 - Only one current background review-all/security-review/delivery-review/quality-review/build/update/audit job slot exists per git repo; `status=running` blocks a second start unless the PID is dead/stale.
 - Long EDC orchestrator Bash calls need a 7200s timeout in Pi.
-- Runtime shell paths stay Bash 3.2-compatible; `EDC_BASH` is not exported or required.
+- Runtime shell paths stay Bash 3.2-compatible; `EDC_BASH` is not exported or required. Pi dispatch uses Node bootstrap plus normal `bash` inside the trusted runtime rather than choosing a shell implementation itself.
 - Pi model/provider is propagated to nested EDC subprocesses as `EDC_PI_MODEL` (`provider/id`).
 - Background job operational state must stay under `.git/edc/`, not `edc-context/`.
 - Completed, failed, or cancelled job state is shown by the Job status command, not persistently pinned in the Pi UI widget.
@@ -79,13 +80,13 @@ Pi worker subprocesses are launched by `runtime-cli`, not by `pi/index.mjs`, but
 - Shell command construction uses `shellQuote` for script/status/log paths; keep any future free-form args array-based or shell-quoted.
 - Status/log/run files are repo-local operational state; contents should be displayed as status/diagnostics, not trusted as source context. Their PID/process-group fields are also untrusted and must be validated before signaling.
 - `getContextFreshness` drives user prompts only. Shell orchestrators still own actual recovery and validation.
-- Before background helpers run, the shared installer/preflight verifies project-local runtime inventory and trusted bytes; mismatches are surfaced without executing the rejected helper.
+- Before background helpers run, trusted bootstrap verifies or repairs project-local runtime inventory and trusted bytes; mismatches are surfaced as structured runtime failures instead of executing rejected helper bytes.
 - Pi package media/docs are user-facing assets; they should not influence review routing beyond this module's context.
 - `EDC_PI_EXTENSION_PATH` can load executable observer code in worker subprocesses; document it as opt-in and prompt-neutral, not as a general extension-discovery path.
 
 ## Coupling
-- Imports shared route/freshness helpers and the managed termination policy from `plugin-surface`; Pi must not fork manifest logic, helper-copy behavior, or nested cancellation timing.
-- Runs `.edc/scripts/edc-*.sh` from `runtime-cli` and relies on `EDC_AGENT_CLI=pi`, `EDC_PI_MODEL`, and `EDC_RESULT_FILE` for structured background status. Worker-pool run artifacts and observer extension validation are owned by `runtime-cli`.
+- Imports shared route/freshness helpers, trusted runtime-bootstrap expectations, and the managed termination policy from `plugin-surface`; Pi must not fork manifest logic, helper-copy behavior, or nested cancellation timing.
+- Runs `runtime-bootstrap.mjs edc-*.sh` for `runtime-cli` jobs and relies on `EDC_AGENT_CLI=pi`, `EDC_PI_MODEL`, and `EDC_RESULT_FILE` for structured background status. Worker-pool run artifacts and observer extension validation are owned by `runtime-cli`.
 - Exposes skills from `canonical-skills` but hides private prompt bundles from normal Pi resource discovery.
 - Package metadata in `plugin-surface` points Pi at `pi/index.mjs` and includes `pi/**` plus screenshot media in npm package contents.
 - Validated primarily by `hardening-tests` (`t10`, `t18`, package/Pi status tests, phase-result tests) and indirectly by worker-pool and CLI/Bash-alignment tests.
@@ -94,7 +95,7 @@ Pi worker subprocesses are launched by `runtime-cli`, not by `pi/index.mjs`, but
 - Default-branch detection depends on local refs, and custom scope depends on optional Pi text input. Repos with unusual default branches and no `origin/HEAD` still need explicit terminal CLI args until the fallback list is expanded.
 - Background status is a single overwrite slot; historical runs are not retained.
 - Detached subprocess supervision cannot stream live progress to the menu; users must inspect `.git/edc/<kind>.log`, `.git/edc/result.json`, or worker run artifacts under `.git/edc/runs/`. Cancellation additionally depends on POSIX process-group semantics; PID fallback cannot guarantee descendant cleanup on platforms where group signaling is unavailable.
-- Failure classification is partly structured (`EDC_RESULT_FILE`) and partly grep-based over logs. New orchestrator result fields need Pi projection support or they degrade to generic pipeline failures.
+- Failure classification is partly structured (`EDC_RESULT_FILE`, including bootstrap runtime failures) and partly grep-based over logs. New orchestrator result fields need Pi projection support or they degrade to generic pipeline failures.
 - The timeout-extension regex recognizes common relative, `$HOME`, and absolute `.edc/scripts/edc-{build,update,review,review-all,delivery-review,audit,doctor}.sh` invocations, but can still miss unusual shell construction around the script path.
 - Runtime availability of `pi`, `git`, `python3`, and `bash` remains environmental.
 - UI status/widget APIs are optional Pi surface area; code must tolerate missing UI helpers and clear state during shutdown/reload.

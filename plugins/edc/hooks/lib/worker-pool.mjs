@@ -330,8 +330,8 @@ function launch(index) {
     result.exitCode = code;
     result.signal = signal;
 
-    if (result.status === "timed-out") {
-      // Preserve the timeout classification assigned by the backstop.
+    if (result.status === "timed-out" || result.status === "failed") {
+      // Preserve classifications assigned before close.
     } else if (current.cancellationRequested) {
       result.status = "cancelled";
     } else if (code === 0) {

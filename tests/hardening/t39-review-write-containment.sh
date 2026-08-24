@@ -75,57 +75,10 @@ if [ "${EDC_T39_FORBIDDEN_GIT_HOOK_WRITE:-0}" = "1" ]; then
   mkdir -p .git/hooks
   printf '#!/usr/bin/env bash\necho pwned\n' > .git/hooks/pre-commit
 fi
-if [ "${EDC_T39_COMPLETE_REPORT:-0}" = "1" ]; then
-  cat > "$report_path" <<'REPORT'
-# Security Review Report
-
-## What Changed
-- Target: `HEAD`
-- Baseline: `HEAD~1`
-- Files reviewed: 1
-- Security-relevant files: 1
-- Context loaded: index/module docs/issues as applicable
-
-## Findings
-
-### No security findings
-No exploitable or security-relevant issue was found in the reviewed scope.
-
-Checked:
-- auth/authorization impact: none
-- validation/input boundaries: src/a.txt
-- external calls/subprocess/filesystem: none
-- sensitive state mutation: none
-- security history/regression scan: no relevant prior fixes
-
-Limitations:
-- mocked review fixture
-
-## Security Test Confidence
-- security-sensitive paths with regression coverage: none
-- missing security regression tests: none
-- mocked-away trust boundaries, if relevant: mocked reviewer
-
-## Blast Radius
-- reachable entrypoints: none
-- callers/modules affected: core
-- EDC invariants or known issues touched: none
-
-## Historical Context
-- removed protections: none
-- reintroduced risky code: none
-- relevant `security` / `CVE` / `fix` commits: none
-
-## Limitations
-- files or call paths not analyzed: none beyond fixture
-- unproven reachability: none
-- external systems/dependencies not inspected: none
-
-## Recommendation
-APPROVE
-REPORT
-else
-  printf '## Findings\n\nmock review\n' > "$report_path"
+if [ "${EDC_T39_EMPTY_REPORT:-0}" = "1" ]; then
+  : > "$report_path"
+elif [ "${EDC_T39_SKIP_REPORT:-0}" != "1" ]; then
+  printf 'mock review without canonical headings\n' > "$report_path"
 fi
 printf '{"type":"assistant","message":{"content":[{"type":"text","text":"reviewed"}]}}\n'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
@@ -227,39 +180,13 @@ echo "PASS: review success writes structured result"
 
 rm -rf edc-context/review-tasks review-HEAD.md
 set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/minimal-failed.out" 2>"$LOG_DIR/minimal-failed.err"
-minimal_failed_rc=$?
-set -e
-if [ "$minimal_failed_rc" -ne 0 ] \
-  && [ ! -f review-HEAD.md ] \
-  && grep -q 'reported failure and wrote an incomplete security report' "$LOG_DIR/minimal-failed.err"; then
-  node --input-type=module <<'NODE'
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
-assert.equal(result.kind, 'review');
-assert.equal(result.status, 'failed');
-assert.equal(result.exitCode, 1);
-assert.equal(result.reasonCode, 'report-validation');
-assert.equal(result.failedModule, 'core');
-NODE
-  echo "PASS: review rejects incomplete report after failed agent rc"
-else
-  echo "FAIL: review accepted incomplete report after failed agent rc"
-  echo "--- stdout ---"; cat "$LOG_DIR/minimal-failed.out"
-  echo "--- stderr ---"; cat "$LOG_DIR/minimal-failed.err"
-  exit 1
-fi
-
-rm -rf edc-context/review-tasks review-HEAD.md
-set +e
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 EDC_T39_COMPLETE_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/warn.out" 2>"$LOG_DIR/warn.err"
 warn_rc=$?
 set -e
 if [ "$warn_rc" -eq 0 ] \
   && [ -f review-HEAD.md ] \
-  && grep -q 'No exploitable or security-relevant issue' review-HEAD.md \
-  && grep -q 'review subprocess for module core reported failure, but report validation passed' "$LOG_DIR/warn.err"; then
+  && grep -q 'mock review without canonical headings' review-HEAD.md \
+  && grep -q 'review subprocess for module core reported status failed' "$LOG_DIR/warn.err"; then
   node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -269,11 +196,53 @@ assert.equal(result.status, 'success-with-warning');
 assert.equal(result.exitCode, 0);
 assert.equal(result.reasonCode, 'success-with-warning');
 NODE
-  echo "PASS: review accepts complete report after failed agent rc with warning"
+  echo "PASS: review accepts substantive noncanonical report after failed agent rc"
 else
-  echo "FAIL: review did not accept complete report after failed agent rc"
+  echo "FAIL: review rejected substantive report after failed agent rc"
   echo "--- stdout ---"; cat "$LOG_DIR/warn.out"
   echo "--- stderr ---"; cat "$LOG_DIR/warn.err"
+  exit 1
+fi
+
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EXIT_AFTER_REPORT=1 EDC_T39_SKIP_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/missing.out" 2>"$LOG_DIR/missing.err"
+missing_rc=$?
+set -e
+if [ "$missing_rc" -eq 0 ] \
+  && grep -Fq "Security review unavailable for module \`core\`" review-HEAD.md \
+  && grep -q '^CONDITIONAL$' review-HEAD.md; then
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.kind, 'review');
+assert.equal(result.status, 'success-with-warning');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success-with-warning');
+NODE
+  echo "PASS: missing failed-worker report becomes explicit unavailable coverage"
+else
+  echo "FAIL: missing failed-worker report aborted or hid incomplete coverage"
+  echo "--- stdout ---"; cat "$LOG_DIR/missing.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/missing.err"
+  exit 1
+fi
+
+rm -rf edc-context/review-tasks review-HEAD.md
+set +e
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_T39_EMPTY_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$LOG_DIR/empty.out" 2>"$LOG_DIR/empty.err"
+empty_rc=$?
+set -e
+if [ "$empty_rc" -eq 0 ] \
+  && grep -Fq "Security review unavailable for module \`core\`" review-HEAD.md \
+  && grep -q 'module core produced no substantive report' "$LOG_DIR/empty.err" \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.status === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: empty successful-worker report becomes explicit unavailable coverage"
+else
+  echo "FAIL: empty successful-worker report aborted or hid incomplete coverage"
+  echo "--- stdout ---"; cat "$LOG_DIR/empty.out"
+  echo "--- stderr ---"; cat "$LOG_DIR/empty.err"
   exit 1
 fi
 

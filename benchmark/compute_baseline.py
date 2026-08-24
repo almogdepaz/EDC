@@ -8,24 +8,18 @@ Usage:
         --out baseline-metrics.json
 """
 import argparse
+import csv
 import json
 import statistics
 import sys
 from pathlib import Path
 
-from scoring_helpers import UnresolvedVerdictError, verdict_to_score
+from scoring_helpers import UnresolvedVerdictError, review_verdict, verdict_to_score
 
 
 def load_results(path: Path):
-    rows = []
-    with open(path) as f:
-        header = f.readline().rstrip("\n").split("\t")
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < len(header):
-                continue
-            rows.append(dict(zip(header, parts)))
-    return rows
+    with path.open(newline="") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
 
 
 def load_metrics(path):
@@ -92,7 +86,7 @@ def main():
             scores = []
             for r in run["results"]:
                 score = verdict_to_score(
-                    r.get("verdict", r.get("found", "")),
+                    review_verdict(r),
                     context=f"{run['label']} {r.get('cve', '<unknown-cve>')}",
                 )
                 scores.append(score)

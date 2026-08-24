@@ -7,8 +7,8 @@
 #   - missing context → orchestrator runs build recovery, then audit
 #   - stale context  → orchestrator runs update recovery, then audit
 #   - one audit worker runs per manifest module, then synthesis writes both reports
-#   - synthesis writes only one report → orchestrator exits non-zero
-#   - synthesis writes structureless report → orchestrator exits non-zero
+#   - synthesis writes only one report → missing coverage is marked explicitly
+#   - substantive noncanonical synthesis output remains usable
 #
 # Run from repo root: bash tests/hardening/t11-audit-orchestrator.sh
 set -euo pipefail
@@ -65,10 +65,14 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
     sleep 0.4
     rm -f "$TMPDIR_T11/active/\$module"
   fi
-  printf '## Module Audit: %s\n\nScoped finding.\n' "\$module" > "\$report_path"
   if [ "\$scenario" = "valid-worker-exit-fail" ]; then
     exit 1
   fi
+  if [ "\$scenario" = "empty-worker-success" ]; then
+    : > "\$report_path"
+    exit 0
+  fi
+  printf 'module audit for %s completed without canonical headings\n' "\$module" > "\$report_path"
   exit 0
 fi
 
@@ -82,7 +86,7 @@ if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
   issues_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
   mkdir -p "\$(dirname "\$complexity_path")" "\$(dirname "\$issues_path")"
   case "\$scenario" in
-    valid|valid-worker-exit-fail)
+    valid|valid-worker-exit-fail|empty-worker-success)
       printf '## Summary\n\nSynthesized findings.\n' > "\$complexity_path"
       printf '## Known Issues\n\nSynthesized findings.\n' > "\$issues_path"
       ;;
@@ -217,13 +221,30 @@ fi
 setup_repo "fresh"
 echo "valid-worker-exit-fail" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported failure, but report validation passed" \
+out=$(EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported status failed" \
+   && grep -Rq 'Quality review unavailable for module' .git/edc/runs/*/staged/audit-tasks \
    && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
-  echo "PASS: valid module audit report accepted after failed worker rc"
+  echo "PASS: missing failed-worker reports become explicit unavailable coverage"
 else
-  echo "FAIL (11c): valid worker report + failed rc should succeed with warning. exit=$result"
+  echo "FAIL (11c): missing worker reports should succeed with warning. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11c2: empty successful worker output → explicit coverage gap ────────────
+setup_repo "fresh"
+echo "empty-worker-success" > "$TMPDIR_T11/scenario"
+result=0
+out=$(EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] \
+   && echo "$out" | grep -q 'module root produced no substantive report' \
+   && grep -Rq 'Quality review unavailable for module' .git/edc/runs/*/staged/audit-tasks \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.status === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: empty successful-worker audit becomes explicit unavailable coverage"
+else
+  echo "FAIL (11c2): empty successful-worker audit aborted or hid incomplete coverage. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
@@ -233,7 +254,7 @@ setup_repo "fresh"
 echo "valid-synthesis-exit-fail" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but report validation passed" \
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but its substantive reports were preserved" \
    && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: valid audit synthesis accepted after failed synthesis rc"
@@ -312,29 +333,31 @@ else
   exit 1
 fi
 
-# ── 11f: fresh context, audit subprocess skips issues.md → orchestrator fails ─
+# ── 11f: missing synthesis output becomes explicit unavailable coverage ───────
 setup_repo "fresh"
 echo "missing-issues" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing" \
-   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 1 && j.reasonCode === "audit-report-validation" ? 0 : 1)'; then
-  echo "PASS: missing report rejected with descriptive error"
+if [ "$result" -eq 0 ] \
+   && grep -q 'Quality review unavailable' edc-context/reports/issues.md \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: missing synthesis report becomes explicit unavailable coverage"
 else
-  echo "FAIL (11f): expected non-zero exit + 'audit report missing'. exit=$result"
+  echo "FAIL (11f): missing synthesis report aborted or hid incomplete coverage. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
 
-# ── 11g: fresh context, audit subprocess writes structureless report → fails ─
+# ── 11g: substantive noncanonical synthesis output is accepted ────────────────
 setup_repo "fresh"
 echo "stub-complexity" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] && echo "$out" | grep -q "no '## ' headings"; then
-  echo "PASS: structureless report rejected with descriptive error"
+if [ "$result" -eq 0 ] \
+   && grep -q 'no headings here just plain text' edc-context/reports/complexity.md; then
+  echo "PASS: substantive noncanonical synthesis output accepted"
 else
-  echo "FAIL (11g): expected non-zero exit + 'no ## headings' error. exit=$result"
+  echo "FAIL (11g): substantive synthesis output was rejected. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi

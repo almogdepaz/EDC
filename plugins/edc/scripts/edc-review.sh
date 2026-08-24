@@ -141,19 +141,6 @@ manifest_module_policy() {
   node "$EDC_JSON_CLI" review-module-policy "$EDC_REVIEW_TASKS_MANIFEST" "$module" 2>/dev/null || true
 }
 
-normalize_review_report_headings() {
-  local report="$1"
-  if grep -q '^## Findings\b' "$report" || ! grep -q '^## Critical Findings\b' "$report"; then
-    return 0
-  fi
-
-  local tmp
-  tmp=$(mktemp "${TMPDIR:-/tmp}/edc-report-normalize-$$.XXXXXX") || return 1
-  awk '{ if ($0 == "## Critical Findings" || $0 ~ /^## Critical Findings[[:space:]]/) print "## Findings"; else print }' "$report" > "$tmp" \
-    && cat "$tmp" > "$report"
-  rm -f "$tmp"
-}
-
 assert_promotion_check_result_valid() {
   local module="$1"
   local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
@@ -170,59 +157,17 @@ assert_promotion_check_result_valid() {
   node "$EDC_JSON_CLI" review-promotion-result-valid "$result" "$report" || return 1
 }
 
-# assert_report_valid <module>: validate the machine contract for a module.
-# Normal security review reports keep the edc-review markdown contract; promotion
-# checks use a structured JSON sidecar because their human report is not a
-# security findings report.
-assert_report_valid() {
+# Intermediate LLM reports are prose inputs to deterministic consolidation.
+# Promotion checks keep their structured sidecar contract.
+assert_intermediate_report_valid() {
   local module="$1"
   local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
   if [ "$(manifest_module_policy "$module")" = "promotion-check" ]; then
     assert_promotion_check_result_valid "$module"
     return $?
   fi
-  if [ ! -f "$report" ]; then
-    echo "ERROR: missing $report - edc-review skill did not produce output for module '$module'" >&2
-    return 1
-  fi
-  if ! grep -q '^##' "$report"; then
-    echo "ERROR: $report has no '## ' headings (module: $module) - expected sections like ## What Changed, ## Findings" >&2
-    echo "HINT: this usually means the edc-review skill was bypassed or wrote a stub. check the subprocess output above." >&2
-    return 1
-  fi
-  normalize_review_report_headings "$report"
-  if ! grep -q '^## Findings\b' "$report"; then
-    echo "ERROR: $report missing required section: ## Findings (module: $module)" >&2
-    echo "HINT: this usually means the edc-review skill wrote an incomplete report. check the subprocess output above." >&2
-    return 1
-  fi
-}
-
-assert_report_complete_after_failed_subprocess() {
-  local module="$1"
-  local report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
-  local missing=0 heading
-  for heading in \
-    '## What Changed' \
-    '## Findings' \
-    '## Security Test Confidence' \
-    '## Blast Radius' \
-    '## Historical Context' \
-    '## Limitations' \
-    '## Recommendation'
-  do
-    if ! grep -q "^${heading}\\b" "$report"; then
-      echo "ERROR: $report missing required section after failed subprocess: $heading (module: $module)" >&2
-      missing=1
-    fi
-  done
-  if ! grep -Eq '^(APPROVE|CONDITIONAL|BLOCK)([[:space:]]|$)' "$report"; then
-    echo "ERROR: $report missing explicit APPROVE | CONDITIONAL | BLOCK recommendation after failed subprocess (module: $module)" >&2
-    missing=1
-  fi
-  if [ "$missing" -ne 0 ]; then
-    echo "ERROR: review subprocess for module $module reported failure and wrote an incomplete security report." >&2
-    echo "HINT: failed subprocesses are trusted only when the durable report satisfies the full security report contract." >&2
+  if ! edc_file_has_substantive_content "$report"; then
+    echo "ERROR: $report has no substantive content (module: $module)" >&2
     return 1
   fi
 }
@@ -303,7 +248,7 @@ consolidate_mode() {
   # verify every expected report is present and non-trivial before writing final file
   while IFS= read -r module; do
     [ -z "$module" ] && continue
-    assert_report_valid "$module" || missing=1
+    assert_intermediate_report_valid "$module" || missing=1
   done <<< "$modules"
 
   if [ "$missing" -ne 0 ]; then
@@ -353,15 +298,23 @@ verify_mode() {
 
   while IFS= read -r module; do
     [ -z "$module" ] && continue
-    if [ ! -f "$EDC_REVIEW_TASKS_DIR/report-${module}.md" ]; then
-      echo "ERROR: missing $EDC_REVIEW_TASKS_DIR/report-${module}.md" >&2
-      missing=1
-    fi
+    assert_intermediate_report_valid "$module" || missing=1
   done <<< "$modules"
 
-  if [ ! -f "$final" ]; then
-    echo "ERROR: missing final review file ($final)" >&2
+  if [ ! -s "$final" ]; then
+    echo "ERROR: missing or empty final review file ($final)" >&2
     missing=1
+  elif ! grep -q '^# Review: ' "$final"; then
+    echo "ERROR: final review missing canonical title ($final)" >&2
+    missing=1
+  else
+    while IFS= read -r module; do
+      [ -z "$module" ] && continue
+      if ! grep -Fqx "## Module: \`$module\`" "$final"; then
+        echo "ERROR: final review missing module section: $module" >&2
+        missing=1
+      fi
+    done <<< "$modules"
   fi
 
   if [ "$missing" -ne 0 ]; then
@@ -507,19 +460,6 @@ auto_mode() {
   # prewritten reports and intentionally have no subprocess task file.
   local tasks
   tasks=$(find "$EDC_REVIEW_TASKS_DIR" -maxdepth 1 -type f -name '*.md' ! -name 'report-*.md' -print | sort)
-  if [ -z "$tasks" ]; then
-    local module prewritten_missing=0
-    while IFS= read -r module; do
-      [ -z "$module" ] && continue
-      assert_report_valid "$module" || prewritten_missing=1
-    done <<< "$(manifest_modules)"
-    if [ "$prewritten_missing" -ne 0 ]; then
-      echo "ERROR: no TASK lines in script output and no complete prewritten reports" >&2
-      edc_write_review_result 1 "report-validation" "review report validation failed" "inspect the reviewer output in the log; a prewritten report is incomplete" "" ""
-      exit 1
-    fi
-  fi
-
   local had_warning=0
 
   if [ -n "$tasks" ]; then
@@ -563,20 +503,24 @@ auto_mode() {
       exit 1
     fi
 
-    local task_index=0 worker_status
+    local task_index=0 worker_status report
     while [ "$task_index" -lt "$task_count" ]; do
       module="${review_modules[$task_index]}"
-      assert_report_valid "$module" \
-        || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the staged reviewer output under $run_dir" "$module" ""; exit 1; }
       worker_status=$(node -e 'const j=require(process.argv[1]); const task=j.tasks.find((entry)=>entry.id===process.argv[2]); process.stdout.write(task?.status || "missing")' "$run_dir/stage-result.json" "${review_task_ids[$task_index]}")
-      if [ "$worker_status" != "success" ]; then
-        if [ "$(manifest_module_policy "$module")" != "promotion-check" ]; then
-          assert_report_complete_after_failed_subprocess "$module" \
-            || { edc_write_review_result 1 "report-validation" "review subprocess for module $module failed and wrote an incomplete security report" "inspect the staged reviewer output under $run_dir; failed subprocesses must satisfy the full report contract" "$module" ""; exit 1; }
-        fi
+      report="$EDC_REVIEW_TASKS_DIR/report-${module}.md"
+      if [ "$(manifest_module_policy "$module")" != "promotion-check" ] \
+        && ! edc_file_has_substantive_content "$report"; then
+        edc_write_coverage_gap_report "$report" "Security Review Coverage Gap" \
+          "Security review unavailable for module \`$module\`; its reviewer finished with status \`$worker_status\` without substantive output."
         had_warning=1
-        echo "EDC review succeeded with warning: review subprocess for module $module reported failure, but report validation passed." >&2
-        echo "HINT: treating the validated report as success; inspect $run_dir for transport/provider diagnostics." >&2
+        echo "EDC review completed with warning: module $module produced no substantive report." >&2
+      fi
+      assert_intermediate_report_valid "$module" \
+        || { echo "ERROR: report validation failed for module $module" >&2; edc_write_review_result 1 "report-validation" "review report validation failed for module $module" "inspect the staged reviewer output under $run_dir" "$module" ""; exit 1; }
+      if [ "$worker_status" != "success" ]; then
+        had_warning=1
+        echo "EDC review completed with warning: review subprocess for module $module reported status $worker_status." >&2
+        echo "HINT: preserving its substantive report or explicit unavailable marker; inspect $run_dir for diagnostics." >&2
       fi
       task_index=$((task_index + 1))
     done
@@ -586,17 +530,7 @@ auto_mode() {
     fi
   fi
 
-  # Validate deterministic prewritten reports too, then consolidate to staging.
-  local module all_reports_invalid=0
-  while IFS= read -r module; do
-    [ -z "$module" ] && continue
-    assert_report_valid "$module" || all_reports_invalid=1
-  done <<< "$(manifest_modules)"
-  if [ "$all_reports_invalid" -ne 0 ]; then
-    edc_write_review_result 1 "report-validation" "one or more review reports failed validation" "inspect staged reports under $run_dir" "" ""
-    exit 1
-  fi
-
+  # Consolidation validates worker and deterministic prewritten reports.
   consolidate_mode || { echo "ERROR: consolidation failed" >&2; edc_write_review_result 1 "consolidation-failed" "review consolidation failed" "inspect staged reports under $run_dir" "" ""; exit 1; }
   verify_mode || { echo "ERROR: verification failed" >&2; edc_write_review_result 1 "verification-failed" "review verification failed" "inspect staged artifacts under $run_dir" "" ""; exit 1; }
   edc_promote_file "$staged_review" "$promotion_review" || { edc_write_review_result 1 "promotion-failed" "review promotion failed" "inspect filesystem permissions and staged output under $run_dir" "" ""; exit 1; }
@@ -606,7 +540,7 @@ auto_mode() {
   fi
 
   if [ "$had_warning" -ne 0 ]; then
-    edc_write_review_result 0 "success-with-warning" "review validated reports after one or more subprocess failures" "inspect the agent log for transport/provider diagnostics" "" "$canonical_review"
+    edc_write_review_result 0 "success-with-warning" "review completed with one or more module coverage warnings" "inspect the agent log for transport/provider diagnostics" "" "$canonical_review"
   else
     edc_write_review_result 0 "success" "" "" "" "$canonical_review"
   fi

@@ -46,7 +46,7 @@ fi
 
 # ── 5c2: shellcheck is wired in package scripts and CI ─────────────────────
 if grep -q '"lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/\*.sh"' package.json \
-  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh"' package.json \
+  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh tests/hardening/lib/\*.sh"' package.json \
   && grep -q '"test:modules": "node --test tests/unit/\*.test.mjs"' package.json \
   && grep -q '"test": "npm run lint:hardening && npm run test:modules && npm run test:benchmark && bash tests/hardening/run-all.sh"' package.json \
   && grep -q 'npm run lint:shell' .github/workflows/ci.yml \

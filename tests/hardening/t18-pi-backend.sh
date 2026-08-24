@@ -103,27 +103,27 @@ if [ "${PI_FAKE_AUTH_TEXT:-0}" = "1" ]; then
   sleep 30
   exit 1
 fi
-if printf '%s' "$prompt" | grep -q 'BUILD DISCOVERY TASK'; then
+if [[ "$prompt" == *'BUILD DISCOVERY TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^DISCOVERY_OUTPUT: ' | sed 's/^DISCOVERY_OUTPUT: //')
   mkdir -p "$(dirname "$output")"
   printf '{"modules":[{"name":"core","paths":["src/"],"approxLoc":1}]}\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"discovered"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'MODULE CONTEXT TASK'; then
+if [[ "$prompt" == *'MODULE CONTEXT TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | head -1 | sed 's/^OUTPUT: //')
   mkdir -p "$(dirname "$output")"
   printf '# Core\n\n## Ownership\n\nMock module.\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"module"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'CROSS-MODULE SYNTHESIS TASK'; then
+if [[ "$prompt" == *'CROSS-MODULE SYNTHESIS TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | sed 's/^OUTPUT: //')
   printf '## Flows\n\nMock.\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"cross"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
+if [[ "$prompt" == *'BUILD ASSEMBLY TASK'* ]]; then
   index_output=$(printf '%s\n' "$prompt" | grep '^INDEX_OUTPUT: ' | sed 's/^INDEX_OUTPUT: //')
   partial_output=$(printf '%s\n' "$prompt" | grep '^PARTIAL_MANIFEST_OUTPUT: ' | sed 's/^PARTIAL_MANIFEST_OUTPUT: //')
   build_output=$(printf '%s\n' "$prompt" | grep '^BUILD_INFO_OUTPUT: ' | sed 's/^BUILD_INFO_OUTPUT: //')
@@ -136,27 +136,27 @@ if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"assembled"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'BUILD_SKILL_MARKER|name: edc-build-impl'; then
+if [[ "$prompt" == *'BUILD_SKILL_MARKER'* || "$prompt" == *'name: edc-build-impl'* ]]; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'UPDATE_SKILL_MARKER|name: edc-update-impl'; then
+if [[ "$prompt" == *'UPDATE_SKILL_MARKER'* || "$prompt" == *'name: edc-update-impl'* ]]; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'CURATOR_EDIT_SKILL_MARKER|name: edc-context-curator-edit-impl'; then
+if [[ "$prompt" == *'CURATOR_EDIT_SKILL_MARKER'* || "$prompt" == *'name: edc-context-curator-edit-impl'* ]]; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curator edit"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'CURATOR_SKILL_MARKER|name: edc-context-curator-impl'; then
+if [[ "$prompt" == *'CURATOR_SKILL_MARKER'* || "$prompt" == *'name: edc-context-curator-impl'* ]]; then
   mkdir -p edc-context/reports
   printf '# Context Curation Report\n\n## Summary\n- mock pi curator\n' > edc-context/reports/context-curation.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curated"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'REVIEW_SKILL_MARKER|name: edc-review'; then
+if [[ "$prompt" == *'REVIEW_SKILL_MARKER'* || "$prompt" == *'name: edc-review'* ]]; then
   task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
   report_path="$(dirname "$task_path")/report-$(basename "$task_path" .md).md"
   mkdir -p "$(dirname "$report_path")"
@@ -164,14 +164,14 @@ if printf '%s' "$prompt" | grep -Eq 'REVIEW_SKILL_MARKER|name: edc-review'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'AUDIT WORKER TASK'; then
+if [[ "$prompt" == *'AUDIT WORKER TASK'* ]]; then
   report_path=$(printf '%s\n' "$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
   mkdir -p "$(dirname "$report_path")"
   printf '## Module Audit\n\nmock pi module audit\n' > "$report_path"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited module"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
+if [[ "$prompt" == *'AUDIT SYNTHESIS TASK'* ]]; then
   complexity_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
   issues_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
   mkdir -p "$(dirname "$complexity_path")" "$(dirname "$issues_path")"
@@ -180,7 +180,7 @@ if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'AUDIT_SKILL_MARKER|name: edc-audit'; then
+if [[ "$prompt" == *'AUDIT_SKILL_MARKER'* || "$prompt" == *'name: edc-audit'* ]]; then
   mkdir -p edc-context/reports
   printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
   printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md

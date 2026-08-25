@@ -39,6 +39,27 @@ if (mode === "resistant") {
   }
   if (started) writeFileSync(started, `${process.pid}\n`);
   setTimeout(() => writeFileSync(marker, "survived\n"), 1500);
+} else if (mode === "late-output") {
+  const outputBeforeSignal = process.env.CHILD_OUTPUT_BEFORE_SIGNAL === "1";
+  process.on("SIGTERM", () => {
+    writeFileSync(process.env.CHILD_SIGNAL, "SIGTERM\n");
+    if (outputBeforeSignal) {
+      process.removeAllListeners("SIGTERM");
+      process.kill(process.pid, "SIGTERM");
+      return;
+    }
+    setTimeout(() => {
+      process.stdout.write("late child output\n");
+      setTimeout(() => {
+        process.removeAllListeners("SIGTERM");
+        process.kill(process.pid, "SIGTERM");
+      }, 25);
+    }, 100);
+  });
+  if (started) writeFileSync(started, `${process.pid}\n`);
+  process.stdout.write("ready\n");
+  if (outputBeforeSignal) setTimeout(() => process.stdout.write("late child output\n"), 100);
+  setTimeout(() => writeFileSync(marker, "survived\n"), 1500);
 } else {
   process.exit(64);
 }
@@ -146,6 +167,47 @@ for spec in TERM:143 INT:130 HUP:129; do
   run_parent_signal_case stream "$signal" "$expected" stream-filter
   run_parent_signal_case pi "$signal" "$expected" pi-supervisor
 done
+
+run_closed_stdout_case() {
+  local label="$1" output_before_signal="$2" expected="$3"
+  local fifo="$TMP/$label.fifo"
+  local started="$TMP/$label.started"
+  local received="$TMP/$label.received"
+  local marker="$TMP/$label.marker"
+  local errors="$TMP/$label.err"
+  mkfifo "$fifo"
+  head -n 1 <"$fifo" >/dev/null &
+  local reader_pid=$!
+  CHILD_OUTPUT_BEFORE_SIGNAL="$output_before_signal" \
+    CHILD_STARTED="$started" CHILD_SIGNAL="$received" CHILD_MARKER="$marker" \
+    node "$PI_SUPERVISOR" node "$TMP/managed-child.mjs" late-output \
+    >"$fifo" 2>"$errors" &
+  local supervisor_pid=$!
+  local attempts=0
+  while [ ! -s "$started" ] && [ "$attempts" -lt 500 ]; do
+    sleep 0.01
+    attempts=$((attempts + 1))
+  done
+  if [ "$output_before_signal" = "0" ]; then kill -TERM "$supervisor_pid"; fi
+  wait "$reader_pid"
+  set +e
+  wait "$supervisor_pid"
+  local rc=$?
+  set -e
+  local observed=""
+  [ -f "$received" ] && observed=$(tr -d '\n' <"$received")
+  if [ "$rc" -eq "$expected" ] \
+    && [ "$observed" = "SIGTERM" ] \
+    && ! grep -q 'EPIPE' "$errors"; then
+    pass "$label handles closed stdout, terminates the child, and exits $expected"
+  else
+    fail "$label rc=$rc expected=$expected child_received=${observed:-missing} epipe=$([ -s "$errors" ] && grep -q EPIPE "$errors" && echo yes || echo no)"
+    cat "$errors" >&2
+  fi
+}
+
+run_closed_stdout_case pi-signal-before-epipe 0 143
+run_closed_stdout_case pi-epipe-before-signal 1 1
 
 # Cooperative signal children write after 1.5s if orphaned. Resistant children
 # write after 3s; the two required grace windows plus signal cases exceed that.

@@ -155,7 +155,7 @@ export function validateRuntimeManifest(manifest = RUNTIME_MANIFEST, sourceRoot 
     validateRelPath(artifact.source, "source");
     validateRelPath(artifact.destination, "destination");
     if (!artifact.destination.startsWith(".edc/")) {
-      throw fail(structured("runtime-validation-failed", "runtime manifest destination must be project-local .edc", "reinstall EDC from a trusted package", { destination: artifact.destination }));
+      throw fail(structured("runtime-validation-failed", "runtime manifest destination must be under managed global .edc", "reinstall EDC from a trusted package", { destination: artifact.destination }));
     }
     if (typeof artifact.executable !== "boolean") throw fail(structured("runtime-validation-failed", "runtime manifest executable flag must be boolean", "reinstall EDC from a trusted package", { source: artifact.source }));
     if (destinations.has(artifact.destination)) throw fail(structured("runtime-validation-failed", "runtime manifest declares a duplicate destination", "reinstall EDC from a trusted package", { destination: artifact.destination }));
@@ -263,35 +263,35 @@ function validateInstalledTree(projectRoot, manifest = RUNTIME_MANIFEST, trusted
     if (artifact.executable && (st.mode & 0o111) === 0) badModes.push(artifact.destination);
   }
   if (missingPaths.length > 0) {
-    throw fail(structured("runtime-install-incomplete", "project-local EDC runtime is incomplete", "reinstall EDC from a trusted package", { missingPaths, missingPath: missingPaths[0] }));
+    throw fail(structured("runtime-install-incomplete", "managed global EDC runtime is incomplete", "reinstall EDC from a trusted package", { missingPaths, missingPath: missingPaths[0] }));
   }
   if (badModes.length > 0) {
-    throw fail(structured("runtime-validation-failed", "project-local EDC runtime has non-executable scripts", "reinstall EDC from a trusted package", { badModes }));
+    throw fail(structured("runtime-validation-failed", "managed global EDC runtime has non-executable scripts", "reinstall EDC from a trusted package", { badModes }));
   }
   const metadataPath = join(projectRoot, manifest.metadataPath);
   if (!existsSync(metadataPath) || !lstatSync(metadataPath).isFile() || lstatSync(metadataPath).isSymbolicLink()) {
-    throw fail(structured("runtime-install-incomplete", "project-local EDC runtime metadata is missing", "reinstall EDC from a trusted package", { missingPath: manifest.metadataPath }));
+    throw fail(structured("runtime-install-incomplete", "managed global EDC runtime metadata is missing", "reinstall EDC from a trusted package", { missingPath: manifest.metadataPath }));
   }
   let metadata;
   try {
     metadata = JSON.parse(readFileSync(metadataPath, "utf8"));
   } catch {
-    throw fail(structured("runtime-validation-failed", "project-local EDC runtime metadata is corrupt", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
+    throw fail(structured("runtime-validation-failed", "managed global EDC runtime metadata is corrupt", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
   }
   if (metadata.schemaVersion !== RUNTIME_SCHEMA_VERSION || metadata.runtimeVersion !== RUNTIME_VERSION) {
-    throw fail(structured("runtime-version-mismatch", "project-local EDC runtime version mismatch", "reinstall EDC so project-local .edc matches this EDC version", { expected: RUNTIME_VERSION, observed: metadata.runtimeVersion || "unknown" }));
+    throw fail(structured("runtime-version-mismatch", "managed global EDC runtime version mismatch", "reinstall EDC so ~/.edc matches this EDC version", { expected: RUNTIME_VERSION, observed: metadata.runtimeVersion || "unknown" }));
   }
   const expectedFingerprint = trustedSourceRoot ? runtimeFingerprint(trustedSourceRoot, manifest) : "";
   if (expectedFingerprint && metadata.fingerprint !== expectedFingerprint) {
-    throw fail(structured("runtime-version-mismatch", "project-local EDC runtime fingerprint mismatch", "reinstall EDC so project-local .edc matches this EDC version", { expectedFingerprint, observedFingerprint: metadata.fingerprint || "missing" }));
+    throw fail(structured("runtime-version-mismatch", "managed global EDC runtime fingerprint mismatch", "reinstall EDC so ~/.edc matches this EDC version", { expectedFingerprint, observedFingerprint: metadata.fingerprint || "missing" }));
   }
   if (!Array.isArray(metadata.artifacts)) {
-    throw fail(structured("runtime-validation-failed", "project-local EDC runtime metadata has no artifact hashes", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
+    throw fail(structured("runtime-validation-failed", "managed global EDC runtime metadata has no artifact hashes", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
   }
   const metadataByDestination = new Map();
   for (const entry of metadata.artifacts) {
     if (!isObject(entry) || typeof entry.destination !== "string" || metadataByDestination.has(entry.destination)) {
-      throw fail(structured("runtime-validation-failed", "project-local EDC runtime metadata has invalid artifacts", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
+      throw fail(structured("runtime-validation-failed", "managed global EDC runtime metadata has invalid artifacts", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
     }
     metadataByDestination.set(entry.destination, entry);
   }
@@ -300,27 +300,93 @@ function validateInstalledTree(projectRoot, manifest = RUNTIME_MANIFEST, trusted
     const entry = metadataByDestination.get(artifact.destination);
     const recordedHash = entry?.sha256;
     if (!entry || entry.executable !== artifact.executable || typeof recordedHash !== "string" || !/^[a-f0-9]{64}$/.test(recordedHash)) {
-      throw fail(structured("runtime-validation-failed", "project-local EDC runtime metadata has invalid artifact hashes", "reinstall EDC from a trusted package", { path: artifact.destination }));
+      throw fail(structured("runtime-validation-failed", "managed global EDC runtime metadata has invalid artifact hashes", "reinstall EDC from a trusted package", { path: artifact.destination }));
     }
     const expectedHash = trustedSourceRoot ? hashFile(sourcePathFor(trustedSourceRoot, artifact)) : recordedHash;
     if (hashFile(join(projectRoot, artifact.destination)) !== expectedHash) changedPaths.push(artifact.destination);
   }
   if (metadataByDestination.size !== manifest.artifacts.length) {
-    throw fail(structured("runtime-validation-failed", "project-local EDC runtime metadata declares unexpected artifacts", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
+    throw fail(structured("runtime-validation-failed", "managed global EDC runtime metadata declares unexpected artifacts", "reinstall EDC from a trusted package", { path: manifest.metadataPath }));
   }
   if (changedPaths.length > 0) {
-    throw fail(structured("runtime-integrity-mismatch", "project-local EDC runtime artifacts do not match trusted bytes", "reinstall EDC from a trusted package before running EDC", { changedPaths, path: changedPaths[0] }));
+    throw fail(structured("runtime-integrity-mismatch", "managed global EDC runtime artifacts do not match trusted bytes", "reinstall EDC from a trusted package before running EDC", { changedPaths, path: changedPaths[0] }));
   }
   for (const artifact of manifest.artifacts.filter((entry) => entry.destination.endsWith(".mjs"))) {
     const path = join(projectRoot, artifact.destination);
     try {
       execFileSync(process.execPath, ["--check", path], { stdio: "ignore", timeout: RUNTIME_VALIDATION_TIMEOUT_MS });
     } catch {
-      throw fail(structured("runtime-validation-failed", "project-local EDC runtime contains invalid JavaScript", "reinstall EDC from a trusted package", { path: artifact.destination }));
+      throw fail(structured("runtime-validation-failed", "managed global EDC runtime contains invalid JavaScript", "reinstall EDC from a trusted package", { path: artifact.destination }));
     }
   }
   workerManifestSmoke(projectRoot, trustedSourceRoot, manifest);
   return structured("success", "runtime preflight passed", "", { fingerprint: metadata.fingerprint }, 0);
+}
+
+function currentHomeRoot() {
+  const home = process.env.HOME;
+  if (!home) {
+    throw fail(structured("runtime-validation-failed", "current HOME is required for managed EDC runtime access", "set HOME and reinstall EDC globally"));
+  }
+  try {
+    return realpathSync(resolve(home));
+  } catch {
+    throw fail(structured("runtime-validation-failed", "current HOME cannot be resolved", "create HOME and reinstall EDC globally", { home: resolve(home) }));
+  }
+}
+
+function assertCurrentHomeInstallRoot(root) {
+  let target;
+  try {
+    target = realpathSync(resolve(root));
+  } catch {
+    throw fail(structured("runtime-validation-failed", "runtime install target cannot be resolved", "install EDC into the current HOME", { target: resolve(root) }));
+  }
+  const home = currentHomeRoot();
+  if (target !== home) {
+    throw fail(structured("runtime-validation-failed", "runtime install target must be the current HOME", "install EDC globally without a project-local target", { target, home }));
+  }
+  return target;
+}
+
+function assertCurrentHomeRuntimeSource(source) {
+  const home = currentHomeRoot();
+  let expected;
+  try {
+    expected = realpathSync(join(home, ".edc"));
+  } catch {
+    throw fail(structured("runtime-validation-failed", "current HOME has no managed EDC runtime", "reinstall EDC globally", { home }));
+  }
+  if (source !== expected) {
+    throw fail(structured("runtime-validation-failed", "installed EDC runtime must be current HOME/.edc", "invoke the trusted package or current HOME global runtime", { source, expected }));
+  }
+}
+
+export function preflightRuntimeSource(sourceRoot, manifest = RUNTIME_MANIFEST) {
+  const requestedSource = resolve(sourceRoot);
+  const source = realpathSync(requestedSource);
+  if (basename(requestedSource) === ".edc" || basename(source) === ".edc") {
+    assertCurrentHomeRuntimeSource(source);
+    return validateInstalledTree(currentHomeRoot(), manifest, source);
+  }
+
+  validateRuntimeManifest(manifest, source);
+  for (const artifact of manifest.artifacts) {
+    const path = sourcePathFor(source, artifact);
+    const st = lstatSync(path);
+    if (!st.isFile() || st.isSymbolicLink()) {
+      throw fail(structured("runtime-validation-failed", "trusted EDC runtime source contains a non-regular artifact", "reinstall EDC from a trusted package", { path: artifact.source }));
+    }
+  }
+  for (const artifact of manifest.artifacts.filter((entry) => entry.destination.endsWith(".mjs"))) {
+    try {
+      execFileSync(process.execPath, ["--check", sourcePathFor(source, artifact)], { stdio: "ignore", timeout: RUNTIME_VALIDATION_TIMEOUT_MS });
+    } catch {
+      throw fail(structured("runtime-validation-failed", "trusted EDC runtime source contains invalid JavaScript", "reinstall EDC from a trusted package", { path: artifact.source }));
+    }
+  }
+  workerManifestSmoke("", source, manifest);
+  return structured("success", "runtime source preflight passed", "", { fingerprint: runtimeFingerprint(source, manifest) }, 0);
 }
 
 function workerManifestSmoke(projectRoot, trustedSourceRoot = "", manifest = RUNTIME_MANIFEST) {
@@ -378,7 +444,7 @@ function lockOwnerIsAlive(owner) {
 }
 
 function installBusy() {
-  return fail(structured("runtime-install-busy", "project-local EDC runtime install is locked", "wait for the running EDC install/review to finish, then rerun", { lockPath: ".edc.install.lock" }));
+  return fail(structured("runtime-install-busy", "managed global EDC runtime install is locked", "wait for the running EDC install/review to finish, then rerun", { lockPath: ".edc.install.lock" }));
 }
 
 function createOwnedLock(path, token) {
@@ -398,7 +464,7 @@ function acquireInstallLock(projectRoot) {
     createOwnedLock(path, token);
   } catch (error) {
     if (error?.code !== "EEXIST") {
-      throw fail(structured("runtime-validation-failed", "could not create project-local EDC runtime lock", "check project directory permissions and retry", { lockPath: ".edc.install.lock", code: error?.code || "unknown" }));
+      throw fail(structured("runtime-validation-failed", "could not create managed global EDC runtime lock", "check the EDC install directory permissions and retry", { lockPath: ".edc.install.lock", code: error?.code || "unknown" }));
     }
     if (!lockIsStale(path) || lockOwnerIsAlive(readLockOwner(path))) throw installBusy();
     const abandonedPath = `${path}.abandoned.${process.pid}.${token}`;
@@ -408,7 +474,7 @@ function acquireInstallLock(projectRoot) {
     } catch (takeoverError) {
       if (!existsSync(path) && existsSync(abandonedPath)) renameSync(abandonedPath, path);
       if (takeoverError?.code === "EEXIST" || takeoverError?.code === "ENOENT") throw installBusy();
-      throw fail(structured("runtime-validation-failed", "could not take ownership of stale EDC runtime lock", "check project directory permissions and retry", { lockPath: ".edc.install.lock", code: takeoverError?.code || "unknown" }));
+      throw fail(structured("runtime-validation-failed", "could not take ownership of stale EDC runtime lock", "check the EDC install directory permissions and retry", { lockPath: ".edc.install.lock", code: takeoverError?.code || "unknown" }));
     }
     rmSync(abandonedPath, { recursive: true, force: true });
   }
@@ -431,14 +497,13 @@ function validateStageRoot(stageEdcRoot, sourceRoot, manifest = RUNTIME_MANIFEST
     rmSync(tmpProjectRoot, { recursive: true, force: true });
   }
   if (!pathInside(stageProjectRoot, stageEdcRoot)) {
-    throw fail(structured("runtime-validation-failed", "staged runtime escaped project root", "reinstall EDC from a trusted package"));
+    throw fail(structured("runtime-validation-failed", "staged runtime escaped global install root", "reinstall EDC from a trusted package"));
   }
 }
 
-export function installRuntime(projectRoot, sourceRoot, manifest = RUNTIME_MANIFEST) {
-  const root = resolve(projectRoot);
+export function installRuntime(globalRoot, sourceRoot, manifest = RUNTIME_MANIFEST) {
+  const root = assertCurrentHomeInstallRoot(globalRoot);
   const source = resolve(sourceRoot);
-  mkdirSync(root, { recursive: true });
   validateRuntimeManifest(manifest, source);
   const release = acquireInstallLock(root);
   const parent = root;
@@ -482,23 +547,6 @@ export function installRuntime(projectRoot, sourceRoot, manifest = RUNTIME_MANIF
   }
 }
 
-export function preflightRuntime(projectRoot, sourceRoot = "", options = {}) {
-  const root = resolve(projectRoot);
-  const source = sourceRoot ? resolve(sourceRoot) : "";
-  try {
-    return validateInstalledTree(root, RUNTIME_MANIFEST, source);
-  } catch (error) {
-    const first = error.result || structured("runtime-validation-failed", error.message || "runtime preflight failed", "rerun the EDC installer");
-    if (!options.repair || !source) throw fail(first);
-    try {
-      installRuntime(root, source, RUNTIME_MANIFEST);
-      return validateInstalledTree(root, RUNTIME_MANIFEST, source);
-    } catch (repairError) {
-      throw repairError.result ? repairError : fail(first);
-    }
-  }
-}
-
 function printResult(result) {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -513,18 +561,18 @@ function command() {
       return;
     }
     if (cmd === "install") {
-      const [projectRoot, sourceRoot] = args;
-      if (!projectRoot || !sourceRoot) throw fail(structured("runtime-validation-failed", "runtime install requires project root and source root", "call runtime installer with explicit roots"));
-      printResult(installRuntime(projectRoot, sourceRoot));
+      const [globalRoot, sourceRoot] = args;
+      if (!globalRoot || !sourceRoot) throw fail(structured("runtime-validation-failed", "runtime install requires global and source roots", "call the global runtime installer with explicit roots"));
+      printResult(installRuntime(globalRoot, sourceRoot));
       return;
     }
-    if (cmd === "preflight") {
-      const [projectRoot, sourceRoot = "", ...rest] = args;
-      if (!projectRoot) throw fail(structured("runtime-validation-failed", "runtime preflight requires project root", "call runtime doctor with a project root"));
-      printResult(preflightRuntime(projectRoot, sourceRoot, { repair: rest.includes("--repair") }));
+    if (cmd === "source-preflight") {
+      const [sourceRoot] = args;
+      if (!sourceRoot) throw fail(structured("runtime-validation-failed", "runtime source preflight requires a source root", "reinstall EDC from a trusted package"));
+      printResult(preflightRuntimeSource(sourceRoot));
       return;
     }
-    throw fail(structured("runtime-validation-failed", "usage: runtime-manifest.mjs inventory-check|install|preflight", "rerun with a valid runtime command", { command: cmd || "" }, 64));
+    throw fail(structured("runtime-validation-failed", "usage: runtime-manifest.mjs inventory-check|install|source-preflight", "rerun with a valid runtime command", { command: cmd || "" }, 64));
   } catch (error) {
     printResult(error.result || structured("runtime-validation-failed", error.message || "runtime command failed", "rerun EDC after repairing the runtime"));
     process.exit(error.result?.exitCode || 1);

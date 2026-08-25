@@ -8,18 +8,9 @@ SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 
 find_phase_script() {
-  local name="$1" candidate
-  for candidate in \
-    "$SCRIPT_DIR/$name" \
-    ".edc/scripts/$name" \
-    "$HOME/.edc/scripts/$name"
-  do
-    if [ -f "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
+  local candidate="$SCRIPT_DIR/$1"
+  [ -f "$candidate" ] || return 1
+  printf '%s\n' "$candidate"
 }
 
 usage() {

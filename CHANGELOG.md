@@ -5,13 +5,13 @@ Notable user-facing changes to EDC are documented here.
 ## [1.1.5] - Unreleased
 
 ### Added
-- canonical project-runtime inventory, transactional installation, and structured runtime diagnostics
+- canonical global/package runtime inventory, transactional managed-global installation, and structured runtime diagnostics
 - staged multi-phase review results and Pi status projection
 - macOS CI coverage and deterministic benchmark scorer tests
 - vulnerability reporting policy
 
 ### Changed
-- project-local runtime inconsistencies now fail before managed helpers execute
+- global/package runtime validation now fails closed before managed helpers execute
 - review workers remain read-only by contract and fail when forbidden paths change
 - release, plugin, context, and installer versions are aligned
 

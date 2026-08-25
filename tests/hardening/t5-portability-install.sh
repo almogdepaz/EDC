@@ -154,7 +154,7 @@ else
 fi
 
 # User-facing wrappers must enter through trusted package/global bootstrap code;
-# project-local scripts are execution targets only after trusted preflight.
+# repo-local scripts are never execution targets.
 if grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-build.md \
   && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-update.md \
   && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-run-review.md \
@@ -316,11 +316,36 @@ else
   exit 1
 fi
 
-if grep -q 'local_suffix=' pi/install.sh \
-  && ! grep -q '\${LOCAL:+, project-local}' pi/install.sh; then
-  echo "PASS: pi installer labels project-local only when --local is set"
+PI_INSTALL_BIN="$TMPDIR_T5/pi-install-bin"
+PI_INSTALL_LOG="$TMPDIR_T5/pi-install-args"
+mkdir -p "$PI_INSTALL_BIN"
+cat >"$PI_INSTALL_BIN/pi" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${PI_INSTALL_LOG:?}"
+EOF
+chmod +x "$PI_INSTALL_BIN/pi"
+set +e
+PATH="$PI_INSTALL_BIN:$PATH" PI_INSTALL_LOG="$PI_INSTALL_LOG" bash pi/install.sh --local >"$TMPDIR_T5/pi-local.out" 2>&1
+pi_local_rc=$?
+set -e
+if [ "$pi_local_rc" -eq 2 ] \
+  && grep -q -- '--local is unsupported' "$TMPDIR_T5/pi-local.out" \
+  && [ ! -e "$PI_INSTALL_LOG" ]; then
+  echo "PASS: pi installer rejects unsupported repo-local installs"
 else
-  echo "FAIL: pi installer may label global installs as project-local"
+  echo "FAIL: pi installer accepted or unclearly rejected --local"
+  cat "$TMPDIR_T5/pi-local.out"
+  exit 1
+fi
+
+PATH="$PI_INSTALL_BIN:$PATH" PI_INSTALL_LOG="$PI_INSTALL_LOG" bash pi/install.sh --from-source >"$TMPDIR_T5/pi-source.out" 2>&1
+if [ "$(sed -n '1p' "$PI_INSTALL_LOG")" = "install" ] \
+  && [ "$(sed -n '2p' "$PI_INSTALL_LOG")" = "$(pwd)" ] \
+  && [ "$(wc -l <"$PI_INSTALL_LOG" | tr -d ' ')" -eq 2 ]; then
+  echo "PASS: explicit Pi source install remains global"
+else
+  echo "FAIL: explicit Pi source install forwarded local-install flags"
+  cat "$PI_INSTALL_LOG" "$TMPDIR_T5/pi-source.out"
   exit 1
 fi
 
@@ -332,72 +357,15 @@ else
   exit 1
 fi
 
-# ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
-# Simulate install: run the hook with a fake project root
-result=$(node -e "
-import { join } from 'path';
-import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-const projectRoot = '${TMPDIR_T5}';
-const pluginDir = join('$(pwd)', 'plugins', 'edc');
-const pluginScript = join(pluginDir, 'scripts', 'edc-review.sh');
-const destDir = join(projectRoot, '.edc', 'scripts');
-const destScript = join(destDir, 'edc-review.sh');
-
-if (!existsSync(pluginScript)) {
-  process.stderr.write('plugin script missing\\n'); process.exit(1);
-}
-
-let shouldCopy = !existsSync(destScript);
-if (shouldCopy) {
-  mkdirSync(destDir, { recursive: true });
-  copyFileSync(pluginScript, destScript);
-  chmodSync(destScript, 0o755);
-  console.log('installed');
-} else {
-  console.log('already present');
-}
-" 2>&1)
-
-if echo "$result" | grep -q 'installed'; then
-  echo "PASS: install logic copies script to project .edc/scripts/"
+runtime_docs=(README.md pi/README.md docs/index.md docs/agent-discovery.md examples/pi-quickstart.md plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md)
+if ! rg -n 'pi install .* (-l|--local)|project-local install|runtime cache is created' "${runtime_docs[@]}" >"$TMPDIR_T5/local-runtime-docs.txt" \
+  && ! grep -qx '\.edc/' README.md \
+  && grep -qi 'repo-local `.edc/` is never read, repaired, created, or executed' README.md; then
+  echo "PASS: source docs describe package/global runtime without repo cache guidance"
 else
-  echo "FAIL: install logic did not copy script ($result)"
+  echo "FAIL: source docs retain project-local runtime install/cache guidance"
+  cat "$TMPDIR_T5/local-runtime-docs.txt"
   exit 1
-fi
-
-# Verify it's actually there and executable
-if [ -x "$TMPDIR_T5/.edc/scripts/edc-review.sh" ]; then
-  echo "PASS: installed script is executable"
-else
-  echo "FAIL: installed script is not executable or missing"
-  exit 1
-fi
-
-# ── 5i: install is idempotent (stale-check: older dest → copy again) ─────────
-# Make dest older by touching plugin script with newer mtime
-touch "$(pwd)/$PLUGIN_SCRIPT"
-result=$(node -e "
-import { join } from 'path';
-import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'fs';
-
-const projectRoot = '${TMPDIR_T5}';
-const pluginDir = join('$(pwd)', 'plugins', 'edc');
-const pluginScript = join(pluginDir, 'scripts', 'edc-review.sh');
-const destScript = join(projectRoot, '.edc', 'scripts', 'edc-review.sh');
-
-const srcMtime = statSync(pluginScript).mtimeMs;
-const dstMtime = statSync(destScript).mtimeMs;
-const shouldCopy = srcMtime > dstMtime;
-console.log(shouldCopy ? 'would-copy' : 'up-to-date');
-" 2>&1)
-
-if echo "$result" | grep -q 'would-copy'; then
-  echo "PASS: stale detection fires (plugin newer than project copy)"
-else
-  echo "INFO: stale detection: $result (may be same mtime — acceptable)"
 fi
 
 # ── 5j: installer adds ~/.edc/scripts to shell rc idempotently ───────────────

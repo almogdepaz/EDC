@@ -21,7 +21,7 @@ pi
 # run /edc, choose build context, then choose scope + review lens
 ```
 
-First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
+First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, pi job state under `.git/edc/`, and `review-*.md` reports. Runtime code comes only from the installed package or `~/.edc`; old repo-local `.edc/` caches are ignored and can be removed manually. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
 
 ## Why EDC?
 
@@ -161,13 +161,10 @@ bash install.sh --agent codex
 ### pi
 
 ```bash
-# npm package
+# npm package (global)
 pi install npm:@sgtbeatdown/edc
 
-# project-local install for a team repo
-pi install npm:@sgtbeatdown/edc -l
-
-# or from a local checkout
+# or from a local checkout (also global)
 bash install.sh --agent pi
 ```
 
@@ -233,12 +230,12 @@ Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi s
 
 ## Generated Files and Local State
 
-EDC writes generated context and local runtime state in a few places:
+EDC writes generated context and operational state in a few places:
 
 - `edc-context/` — generated per-module deep context written by build/update; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may wipe and rebuild it.
 - `AGENTS.md` / `EDC_AGENTS.md` — short generated orientation pointing agents at `edc-context/`. If a repo already has a non-EDC `AGENTS.md`, non-pi builds preserve it, write `EDC_AGENTS.md`, and explain how to replace, append, or reference it. Set `EDC_AGENTS_MODE=overwrite` to replace `AGENTS.md`.
 - `review-*.md` — consolidated review output.
-- `.edc/` — project-local runtime copy used by hooks/extensions when they need deterministic access to orchestrator scripts and private prompt bundles. Global installs also live under `~/.edc/`.
+- `~/.edc/` — managed global terminal runtime and private prompt bundles. Package integrations may execute their own installed package source directly. Repo-local `.edc/` is never read, repaired, created, or executed; remove legacy caches manually if desired.
 - `.git/edc/status` and `.git/edc/<kind>.log` — pi's current background job status/logs. These are git metadata files, not worktree files, and need no `.gitignore` entry.
 
 For repos where you do not want generated EDC artifacts tracked, add:
@@ -248,7 +245,6 @@ AGENTS.md
 EDC_AGENTS.md
 edc-context/
 review-*.md
-.edc/
 ```
 
 If generated context or review outputs get committed, `edc review` filters them out of diffs automatically so the tool does not review its own output, but you will still usually want them ignored to keep history clean.

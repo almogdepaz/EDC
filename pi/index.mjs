@@ -133,10 +133,10 @@ function sendInfo(pi, customType, content) {
 }
 
 function isEdcOrchestratorCommand(command) {
+  const commandBoundary = "(?:^|[;&|()]\\s*)";
   const scriptName = "edc-(?:build|update|review|review-all|delivery-review|audit|doctor)\\.sh";
-  return new RegExp(`(?:^|[\\s"'])\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
-    || new RegExp(`(?:^|[\\s"'])\\$HOME/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command)
-    || new RegExp(`(?:^|[\\s"'])/[^\\s"']*/\\.edc/scripts/${scriptName}(?:[\\s"']|$)`).test(command);
+  return new RegExp(`${commandBoundary}edc(?:\\s|$)`).test(command)
+    || new RegExp(`${commandBoundary}(?:bash\\s+)?["']?(?:\\$HOME|~)/\\.edc/scripts/${scriptName}["']?(?:\\s|$)`).test(command);
 }
 
 function extendEdcBashTimeout(event) {
@@ -200,12 +200,14 @@ function runEdcScript(scriptName, args, ctx) {
     let settled = false;
     let timedOut = false;
     let timeoutTimer = null;
+    let escalationTimer = null;
     const onStdout = (chunk) => { stdout = appendCapturedOutput(stdout, chunk); };
     const onStderr = (chunk) => { stderr = appendCapturedOutput(stderr, chunk); };
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
+      clearTimeout(escalationTimer);
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
       child.off("error", onError);
@@ -241,10 +243,17 @@ function runEdcScript(scriptName, args, ctx) {
     timeoutTimer = setTimeout(() => {
       timedOut = true;
       try {
-        process.kill(-child.pid, "SIGKILL");
+        process.kill(-child.pid, "SIGTERM");
       } catch (error) {
-        if (error?.code !== "ESRCH") child.kill("SIGKILL");
+        if (error?.code !== "ESRCH") child.kill("SIGTERM");
       }
+      escalationTimer = setTimeout(() => {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (error) {
+          if (error?.code !== "ESRCH") child.kill("SIGKILL");
+        }
+      }, BACKGROUND_JOB_TERMINATION_GRACE_MS);
     }, timeoutMs);
   });
 }

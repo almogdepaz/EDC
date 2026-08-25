@@ -29,7 +29,6 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
   mkdir -p edc-context/modules edc-context/reports
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md

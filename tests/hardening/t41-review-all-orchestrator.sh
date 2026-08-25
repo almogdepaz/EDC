@@ -78,7 +78,6 @@ SH
   git -C "$TMP/work" add tracked.txt
   git -C "$TMP/work" commit -q -m initial
   git -C "$TMP/work" branch -M main
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/work" "$TMP/plugin" >/dev/null
 }
 
 setup_runtime
@@ -88,7 +87,7 @@ setup_runtime
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-warning.log"
   export EDC_T41_DELIVERY=warning
-  bash .edc/scripts/edc-review-all.sh HEAD --base main --committed-only --ignore 'generated/**' --context-mode advisory > "$TMP/warning.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --committed-only --ignore 'generated/**' --context-mode advisory > "$TMP/warning.out" 2>&1
 )
 
 candidate_sha=$(git -C "$TMP/work" rev-parse HEAD)
@@ -138,7 +137,7 @@ setup_runtime
   export EDC_AGENT_CLI=pi
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-full.log"
-  bash .edc/scripts/edc-review-all.sh --full --ignore 'generated/**' --context-mode advisory > "$TMP/full.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" --full --ignore 'generated/**' --context-mode advisory > "$TMP/full.out" 2>&1
 )
 
 expected_full=$(printf '%s\n' \
@@ -173,7 +172,7 @@ set +e
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-fail.log"
   export EDC_T41_DELIVERY=fail
-  bash .edc/scripts/edc-review-all.sh HEAD --base main --committed-only > "$TMP/fail.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --committed-only > "$TMP/fail.out" 2>&1
 )
 rc=$?
 set -e

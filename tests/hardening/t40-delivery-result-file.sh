@@ -36,7 +36,6 @@ setup_repo() {
   printf 'two\n' > file.txt
   git add file.txt
   git commit -q -m change
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$ROOT/plugins/edc" >/dev/null
   mkdir -p edc-context/modules edc-context/reports edc-context/build
   head=$(git rev-parse HEAD)
   cat > edc-context/manifest.json <<EOF

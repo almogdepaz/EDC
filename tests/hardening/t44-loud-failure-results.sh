@@ -34,7 +34,6 @@ setup_repo() {
   echo one > src/app.ts
   git add src/app.ts
   git commit -q -m init
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$repo" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_stale_context() {

@@ -31,7 +31,6 @@ setup_repo() {
   printf 'seed\n' > seed.txt
   git add seed.txt
   git commit -q -m init
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_context() {
@@ -125,7 +124,6 @@ fi
 # ── 30.5: promotion-check uses structured sidecar, not markdown headings ──
 AUTO="$TMP/auto"
 setup_repo "$AUTO"
-node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$AUTO" "$ROOT/plugins/edc" >/dev/null
 mkdir -p config
 printf 'config\n' > config/app.yml
 git add config/app.yml

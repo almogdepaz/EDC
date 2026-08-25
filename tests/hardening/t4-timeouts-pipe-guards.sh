@@ -388,7 +388,6 @@ git config user.email "test@test.com"
 git config user.name "Test"
 git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
-node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T4" "$ROOT/plugins/edc" >/dev/null
 
 mkdir -p edc-context
 # Write malformed manifest.json (no sourceCommit field)

@@ -70,7 +70,6 @@ setup_repo() {
   git add src/app.ts
   git commit -q -m change
 
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T38/repo" "$ROOT/plugins/edc" >/dev/null
   mkdir -p edc-context/modules
   printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
   printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md

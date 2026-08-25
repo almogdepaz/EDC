@@ -369,4 +369,5 @@ function handleSignal(signal) {
 
 process.on("SIGINT", () => handleSignal("SIGINT"));
 process.on("SIGTERM", () => handleSignal("SIGTERM"));
+process.on("SIGHUP", () => handleSignal("SIGHUP"));
 schedule();

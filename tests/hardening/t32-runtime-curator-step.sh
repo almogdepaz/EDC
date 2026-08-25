@@ -128,7 +128,6 @@ setup_repo() {
   printf 'src\n' > src/main.py
   git add src/main.py
   git commit -q -m init
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ROOT/plugins/edc" >/dev/null
   : > "$TMP/log"
 }
 

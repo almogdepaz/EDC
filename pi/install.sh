@@ -3,8 +3,7 @@
 #
 # Usage:
 #   ./install.sh                   # global install via git url
-#   ./install.sh --local           # project-local install (.pi/settings.json)
-#   ./install.sh --from-source     # install from this checkout (local path)
+#   ./install.sh --from-source     # global install from this checkout
 #   ./install.sh --context-mode advisory|inject
 #                                  # toggle edc-context/manifest.json default mode
 #
@@ -17,14 +16,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 REPO_SOURCE="git:github.com/almogdepaz/edc"
 
-LOCAL=0
 FROM_SOURCE=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --local|-l)
-      LOCAL=1
-      shift
+      echo "edc: --local is unsupported; EDC installs globally only" >&2
+      exit 2
       ;;
     --from-source)
       FROM_SOURCE=1
@@ -70,24 +68,14 @@ if ! command -v pi >/dev/null 2>&1; then
   exit 1
 fi
 
-ARGS=()
-if [ "$LOCAL" -eq 1 ]; then
-  ARGS+=("-l")
-fi
-
 if [ "$FROM_SOURCE" -eq 1 ]; then
   SOURCE="$REPO_ROOT"
 else
   SOURCE="$REPO_SOURCE"
 fi
 
-local_suffix=""
-if [ "$LOCAL" -eq 1 ]; then
-  local_suffix=", project-local"
-fi
-
-echo "Installing EDC as pi extension (source: $SOURCE$local_suffix)..."
-pi install "$SOURCE" "${ARGS[@]}"
+echo "Installing EDC as pi extension globally (source: $SOURCE)..."
+pi install "$SOURCE"
 
 cat <<EOF
 

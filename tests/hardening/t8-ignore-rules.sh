@@ -32,8 +32,6 @@ printf 'two\n' > generated/skip.txt
 git add src/keep.txt generated/skip.txt
 git commit -q -m "change files"
 HEAD_SHA=$(git rev-parse HEAD)
-node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
-
 mkdir -p edc-context
 cat > edc-context/manifest.json <<EOF
 {"schemaVersion":2,"sourceCommit":"$HEAD_SHA","modules":[]}

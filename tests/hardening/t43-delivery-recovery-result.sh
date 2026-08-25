@@ -35,7 +35,6 @@ git commit -q -m init
 echo two > src/app.ts
 git add src/app.ts
 git commit -q -m change
-node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$ROOT/plugins/edc" >/dev/null
 printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
 printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md
 printf '{"schemaVersion":2,"sourceCommit":"deadbeef","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' > edc-context/manifest.json

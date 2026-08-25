@@ -42,7 +42,6 @@ setup_repo() {
   echo "seed" > seed.txt
   git add seed.txt
   git commit -q -m "init"
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ORIG_DIR/plugins/edc" >/dev/null
 }
 
 write_manifest() {

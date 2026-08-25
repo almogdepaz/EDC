@@ -122,25 +122,16 @@ edc_result_failure() {
 }
 
 edc_runtime_source_root() {
-  if [ -n "${EDC_PLUGIN_ROOT:-}" ] && [ -f "$EDC_PLUGIN_ROOT/hooks/lib/runtime-manifest.mjs" ]; then
-    printf '%s\n' "$EDC_PLUGIN_ROOT"
-    return 0
+  [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ] || return 1
+  local runtime_root home_runtime_root=""
+  runtime_root=$(cd "$EDC_SCRIPTS_DIR/.." && pwd -P)
+  if [ -d "$HOME/.edc" ]; then
+    home_runtime_root=$(cd "$HOME/.edc" && pwd -P)
   fi
-  local physical_pwd
-  physical_pwd=$(pwd -P)
-  case "$EDC_SCRIPTS_DIR" in
-    "$PWD/.edc/scripts"|"$physical_pwd/.edc/scripts")
-      return 1
-      ;;
+  case "$runtime_root" in
+    */.edc) [ -n "$home_runtime_root" ] && [ "$runtime_root" = "$home_runtime_root" ] || return 1 ;;
   esac
-  if [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ]; then
-    case "$EDC_SCRIPTS_DIR" in
-      "$HOME/.edc/scripts") printf '%s\n' "$HOME/.edc" ;;
-      *) printf '%s\n' "$(cd "$EDC_SCRIPTS_DIR/.." && pwd)" ;;
-    esac
-    return 0
-  fi
-  return 1
+  printf '%s\n' "$runtime_root"
 }
 
 edc_runtime_failure_result_write() {
@@ -208,14 +199,15 @@ edc_runtime_preflight_or_exit() {
   local source_root="" out rc reason message hint details
   out=$(mktemp "${TMPDIR:-/tmp}/edc-runtime-preflight-$$.XXXXXX.json") || exit 1
   if [ ! -f "$runtime_cli" ]; then
-    printf '%s\n' '{"reasonCode":"runtime-install-incomplete","message":"runtime preflight helper is missing","hint":"rerun the EDC installer to repair project-local .edc","details":{"missingPath":".edc/hooks/lib/runtime-manifest.mjs"}}' > "$out"
+    printf '%s\n' '{"reasonCode":"runtime-install-incomplete","message":"runtime preflight helper is missing","hint":"rerun the EDC installer to repair the global runtime","details":{"missingPath":"hooks/lib/runtime-manifest.mjs"}}' > "$out"
     rc=1
   else
     source_root=$(edc_runtime_source_root || true)
     if [ -n "$source_root" ]; then
-      node "$runtime_cli" preflight "$PWD" "$source_root" > "$out" 2>&1 || rc=$?
+      node "$runtime_cli" source-preflight "$source_root" > "$out" 2>&1 || rc=$?
     else
-      node "$runtime_cli" preflight "$PWD" > "$out" 2>&1 || rc=$?
+      printf '%s\n' '{"reasonCode":"runtime-validation-failed","message":"repo-local EDC runtime execution is unsupported","hint":"invoke EDC through the trusted package or ~/.edc/scripts/edc","details":{}}' > "$out"
+      rc=1
     fi
     rc=${rc:-0}
   fi
@@ -999,36 +991,21 @@ find_installed_skill() {
 }
 
 # _find_skill_for_agent <skill-name>
-# Resolve <skill-name>/SKILL.md from the agent-specific install paths.
-#
-# Per-agent layout:
-#   claude: .edc/skills, ~/.edc/skills, plus marketplace fallbacks.
-#   cursor: private .edc/~/.edc prompt bundles first, then public cursor skills.
-#   codex:  private .edc/~/.edc prompt bundles first, then public codex skills.
+# Resolve managed prompts only from the validated package/global runtime.
 _find_skill_for_agent() {
-  local name="$1"
+  local name="$1" runtime_root
   case "$EDC_AGENT_CLI" in
-    claude)
-      find_installed_skill "$name" \
-        ".edc/skills" \
-        "$HOME/.edc/skills" \
-        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/prompt-bundles" \
-        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/skills"
-      ;;
-    cursor)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".cursor/skills" "$HOME/.cursor/skills"
-      ;;
-    codex)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".codex/skills" "$HOME/.codex/skills"
-      ;;
-    pi)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".pi/skills" "$HOME/.pi/agent/skills"
-      ;;
+    claude|cursor|codex|pi) ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2
       ;;
   esac
+  runtime_root=$(edc_runtime_source_root) || {
+    echo "ERROR: trusted EDC runtime source is unavailable" >&2
+    return 1
+  }
+  find_installed_skill "$name" "$runtime_root/prompt-bundles" "$runtime_root/skills"
 }
 
 EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2

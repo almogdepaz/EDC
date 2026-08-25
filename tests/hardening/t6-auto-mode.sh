@@ -122,8 +122,6 @@ echo "initial" > seed.txt
 git add seed.txt
 git commit -q -m "init"
 
-node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T6" "$ORIG_DIR/plugins/edc" >/dev/null
-
 # Pre-populate valid context (already-fresh: lastCommit == HEAD-of-base, but we
 # add another commit below and rely on auto_mode's CONTEXT_STALE → edc-update
 # recovery to bring it forward). This is the realistic happy path.

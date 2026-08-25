@@ -85,7 +85,6 @@ setup_repo() {
   printf 'committed\n' > committed.txt
   git add committed.txt
   git commit -q -m candidate
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$TMP/plugin" >/dev/null
 }
 
 prepare_dirty_candidate() {
@@ -105,7 +104,7 @@ setup_repo
 prepare_dirty_candidate
 : > "$TMP/default-phases.log"
 set +e
-out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/default-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main 2>&1)
+out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/default-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main 2>&1)
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] \
@@ -123,7 +122,7 @@ setup_repo
 prepare_dirty_candidate
 : > "$TMP/env-bypass-phases.log"
 set +e
-out=$(EDC_CANDIDATE_RESOLVED=1 EDC_CANDIDATE_COMMIT=$(git rev-parse HEAD) EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/env-bypass-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main 2>&1)
+out=$(EDC_CANDIDATE_RESOLVED=1 EDC_CANDIDATE_COMMIT=$(git rev-parse HEAD) EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/env-bypass-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main 2>&1)
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] && [ ! -s "$TMP/env-bypass-phases.log" ] \
@@ -137,9 +136,9 @@ fi
 setup_repo
 prepare_dirty_candidate
 set +e
-out=$(bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_resolve_external patch.diff main ""' 2>&1)
+out=$(bash -c 'source "$1"; edc_candidate_resolve_external patch.diff main ""' _ "$TMP/plugin/scripts/edc-review-candidate.sh" 2>&1)
 rc_default=$?
-include_out=$(bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_resolve_external patch.diff main include-working-tree' 2>&1)
+include_out=$(bash -c 'source "$1"; edc_candidate_resolve_external patch.diff main include-working-tree' _ "$TMP/plugin/scripts/edc-review-candidate.sh" 2>&1)
 rc_include=$?
 set -e
 if [ "$rc_default" -ne 0 ] && [ "$rc_include" -ne 0 ] \
@@ -155,7 +154,7 @@ setup_repo
 prepare_dirty_candidate
 : > "$TMP/committed-phases.log"
 set +e
-out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/committed-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --committed-only 2>&1)
+out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/committed-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --committed-only 2>&1)
 rc=$?
 set -e
 head_sha=$(git rev-parse HEAD)
@@ -176,7 +175,7 @@ refs_before=$(git show-ref | LC_ALL=C sort)
 source_before=$(for path in staged.txt unstaged.txt untracked.txt ignored.tmp; do printf '%s ' "$path"; git hash-object "$path"; done; printf 'deleted=%s\n' "$(test -e deleted.txt && echo present || echo absent)")
 : > "$TMP/include-phases.log"
 set +e
-out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/include-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/include-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --include-working-tree 2>&1)
 rc=$?
 set -e
 head_after=$(git rev-parse HEAD)
@@ -219,7 +218,7 @@ setup_repo
 prepare_dirty_candidate
 : > "$TMP/historical-phases.log"
 set +e
-out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/historical-phases.log" bash .edc/scripts/edc-review-all.sh HEAD~1 --base main --include-working-tree 2>&1)
+out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/historical-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD~1 --base main --include-working-tree 2>&1)
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] \
@@ -254,7 +253,7 @@ refs_before=$(git show-ref | LC_ALL=C sort)
 sub_refs_before=$(git -C nested show-ref | LC_ALL=C sort)
 : > "$TMP/submodule-phases.log"
 set +e
-out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/submodule-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/submodule-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --include-working-tree 2>&1)
 rc=$?
 set -e
 candidate_sha=$(sed -n 's/^security|target=\([^|]*\).*/\1/p' "$TMP/submodule-phases.log" | head -1)
@@ -292,9 +291,9 @@ git config submodule.nested.ignore all
 printf 'sub ignored dirty\n' > nested/inside.txt
 : > "$TMP/ignored-submodule-default-phases.log"
 set +e
-default_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-default-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main 2>&1)
+default_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-default-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main 2>&1)
 default_rc=$?
-external_out=$(bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_resolve_external patch.diff main ""' 2>&1)
+external_out=$(bash -c 'source "$1"; edc_candidate_resolve_external patch.diff main ""' _ "$TMP/plugin/scripts/edc-review-candidate.sh" 2>&1)
 external_rc=$?
 set -e
 if [ "$default_rc" -ne 0 ] && [ ! -s "$TMP/ignored-submodule-default-phases.log" ] \
@@ -306,7 +305,7 @@ else
 fi
 : > "$TMP/ignored-submodule-phases.log"
 set +e
-include_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+include_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --include-working-tree 2>&1)
 include_rc=$?
 set -e
 ignored_candidate=$(sed -n 's/^security|target=\([^|]*\).*/\1/p' "$TMP/ignored-submodule-phases.log" | head -1)
@@ -326,7 +325,7 @@ git -C nested checkout -q -- inside.txt
 printf 'sub ignored untracked\n' > nested/new.txt
 : > "$TMP/ignored-submodule-untracked-phases.log"
 set +e
-untracked_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-untracked-phases.log" bash .edc/scripts/edc-review-all.sh HEAD --base main --include-working-tree 2>&1)
+untracked_out=$(EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/ignored-submodule-untracked-phases.log" bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --include-working-tree 2>&1)
 untracked_rc=$?
 set -e
 untracked_candidate=$(sed -n 's/^security|target=\([^|]*\).*/\1/p' "$TMP/ignored-submodule-untracked-phases.log" | head -1)
@@ -361,13 +360,13 @@ git submodule deinit -q -f nested
 printf 'top dirty\n' > unstaged.txt
 : > "$TMP/uninitialized-phases.log"
 set +e
-EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/uninitialized-phases.log" python3 - <<'PY' >"$TMP/uninitialized.out" 2>&1
+EDC_AGENT_CLI=pi EDC_T49_LOG="$TMP/uninitialized-phases.log" EDC_T49_REVIEW_ALL="$TMP/plugin/scripts/edc-review-all.sh" python3 - <<'PY' >"$TMP/uninitialized.out" 2>&1
 import os
 import subprocess
 import sys
 try:
     completed = subprocess.run(
-        ["bash", ".edc/scripts/edc-review-all.sh", "HEAD", "--base", "main", "--include-working-tree"],
+        ["bash", os.environ["EDC_T49_REVIEW_ALL"], "HEAD", "--base", "main", "--include-working-tree"],
         env=os.environ,
         timeout=15,
     )

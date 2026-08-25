@@ -3,9 +3,10 @@ import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:os";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { preflightRuntime, RUNTIME_MANIFEST, sourcePathFor } from "./runtime-manifest.mjs";
+import { preflightRuntimeSource, RUNTIME_MANIFEST, sourcePathFor } from "./runtime-manifest.mjs";
+import { RUNTIME_BOOTSTRAP_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 const ALLOWED_ORCHESTRATORS = new Set([
   "edc-audit.sh",
@@ -29,9 +30,23 @@ function structured(reasonCode, message, hint, details = {}, exitCode = 1) {
   };
 }
 
-function trustedSourceRoot() {
-  const libDir = dirname(realpathSync(fileURLToPath(import.meta.url)));
-  return dirname(dirname(libDir));
+function trustedSourceRoots() {
+  const modulePath = fileURLToPath(import.meta.url);
+  const sourceRoot = dirname(dirname(dirname(realpathSync(modulePath))));
+  const invokedPath = process.argv[1] ? resolve(process.argv[1]) : modulePath;
+  const invokedSourceRoot = dirname(dirname(dirname(invokedPath)));
+  return { sourceRoot, invokedSourceRoot };
+}
+
+function isAllowedSourceRoot(sourceRoot, invokedSourceRoot) {
+  if (basename(sourceRoot) !== ".edc" && basename(invokedSourceRoot) !== ".edc") return true;
+  const home = process.env.HOME;
+  if (!home) return false;
+  try {
+    return realpathSync(resolve(home, ".edc")) === sourceRoot;
+  } catch {
+    return false;
+  }
 }
 
 function writeStructuredResult(result) {
@@ -67,9 +82,17 @@ if (!ALLOWED_ORCHESTRATORS.has(scriptName)) {
 }
 
 const projectRoot = process.cwd();
-const sourceRoot = trustedSourceRoot();
+const { sourceRoot, invokedSourceRoot } = trustedSourceRoots();
+if (!isAllowedSourceRoot(sourceRoot, invokedSourceRoot)) {
+  fail(structured(
+    "runtime-validation-failed",
+    "repo-local EDC runtime execution is unsupported",
+    "invoke EDC through the trusted package or ~/.edc/scripts/edc",
+    { sourceRoot },
+  ));
+}
 try {
-  preflightRuntime(projectRoot, sourceRoot, { repair: true });
+  preflightRuntimeSource(sourceRoot);
 } catch (error) {
   fail(error.result || structured(
     "runtime-validation-failed",
@@ -93,16 +116,30 @@ if (!trustedScript || !existsSync(trustedScript)) {
 
 const child = spawn("bash", [trustedScript, ...scriptArgs], {
   cwd: projectRoot,
+  detached: true,
   env: process.env,
   stdio: "inherit",
 });
 const forwardedSignals = ["SIGTERM", "SIGINT", "SIGHUP"];
-const signalHandlers = new Map(forwardedSignals.map((signal) => [signal, () => {
+let requestedSignal = "";
+
+function signalChildGroup(signal) {
   try {
-    child.kill(signal);
-  } catch {
-    // The child may have exited between parent signal delivery and forwarding.
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
   }
+}
+
+const signalHandlers = new Map(forwardedSignals.map((signal) => [signal, () => {
+  if (requestedSignal) return;
+  requestedSignal = signal;
+  signalChildGroup(signal);
+  setTimeout(() => {
+    signalChildGroup("SIGKILL");
+    removeSignalHandlers();
+    process.exit(128 + constants.signals[signal]);
+  }, RUNTIME_BOOTSTRAP_TERMINATION_GRACE_MS);
 }]));
 for (const [signal, handler] of signalHandlers) process.on(signal, handler);
 
@@ -120,6 +157,7 @@ child.on("error", (error) => {
   ));
 });
 child.on("close", (code, signal) => {
+  if (requestedSignal) return;
   removeSignalHandlers();
   if (typeof code === "number") process.exit(code);
   const signalNumber = signal ? constants.signals[signal] : 0;

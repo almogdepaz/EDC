@@ -19,7 +19,6 @@ git config user.email "test@test.com"
 git config user.name "Test"
 git config commit.gpgsign false
 touch dummy.txt && git add dummy.txt && git commit -q -m "init"
-node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T3" "$ORIG_DIR/plugins/edc" >/dev/null
 HEAD=$(git rev-parse HEAD)
 
 # ── 3a: assert_context_fresh rejects index.md without ## headings ─────────────

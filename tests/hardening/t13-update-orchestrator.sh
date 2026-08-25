@@ -70,7 +70,6 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T13/log"

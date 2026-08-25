@@ -103,6 +103,11 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(signal, () => finish(signalExitCode(signal), signal));
 }
 
+process.stdout.on("error", (error) => {
+  if (error?.code !== "EPIPE") throw error;
+  finish(requestedExitCode ?? 1);
+});
+
 child.stderr.on("data", (chunk) => {
   const text = chunk.toString();
   const reason = plaintextFatalReason(text);

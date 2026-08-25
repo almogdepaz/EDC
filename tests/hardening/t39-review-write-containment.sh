@@ -16,7 +16,7 @@ setup_repo() {
   git config user.email test@test.com
   git config user.name Test
   git config commit.gpgsign false
-  mkdir -p src edc-context/modules edc-context/reports .edc/skills/edc-review
+  mkdir -p src edc-context/modules edc-context/reports
   printf 'one\n' > src/a.txt
   printf 'clean\n' > src/clean.txt
   git add src/a.txt src/clean.txt
@@ -30,12 +30,6 @@ setup_repo() {
   cat > edc-context/manifest.json <<EOF
 {"schemaVersion":2,"sourceCommit":"$(git rev-parse HEAD)","repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"unmapped":{"allowedGlobs":[]},"modules":[{"name":"core","doc":"edc-context/modules/core.md","priority":10,"match":{"prefixes":["src/"]}}]}
 EOF
-  printf 'REVIEW_SKILL_MARKER\n' > .edc/skills/edc-review/SKILL.md
-  printf 'METHODOLOGY_MARKER\n' > .edc/skills/edc-review/methodology.md
-  printf 'ADVERSARIAL_MARKER\n' > .edc/skills/edc-review/adversarial.md
-  printf 'REPORTING_MARKER\n' > .edc/skills/edc-review/reporting.md
-  printf 'PATTERNS_MARKER\n' > .edc/skills/edc-review/patterns.md
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_fake_claude() {

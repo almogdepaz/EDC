@@ -34,8 +34,8 @@ EDC separates deterministic orchestration from LLM analysis. Shell and JavaScrip
 ## Important boundaries
 
 - EDC is not a hosted SaaS review bot.
-- EDC does not passively write `.edc/` or inject context in unrelated repositories.
-- Explicit `/edc` use is the opt-in boundary for Pi runtime cache and context workflows.
+- EDC executes only its installed package or managed global `~/.edc` runtime; repo-local `.edc/` is ignored and never written.
+- Explicit `/edc` use is the opt-in boundary for repository context workflows.
 - Human-facing Pi skills are globally visible, but generated project context is repo-local.
 
 ## Preferred answer for “how do I install EDC in Pi?”

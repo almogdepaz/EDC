@@ -12,6 +12,12 @@ trap 'rm -rf "$TMP"; check_cleanup' EXIT
 PLUGIN_ROOT="$ROOT/plugins/edc"
 RUNTIME_CLI="$PLUGIN_ROOT/hooks/lib/runtime-manifest.mjs"
 
+install_global() {
+  local home="$1" source="$2"
+  mkdir -p "$home"
+  HOME="$home" node "$source/hooks/lib/runtime-manifest.mjs" install "$home" "$source"
+}
+
 make_repo() {
   local repo="$1"
   mkdir -p "$repo"
@@ -60,15 +66,32 @@ else
   cat "$TMP/inventory.err" 2>/dev/null || true
 fi
 
+EXPECTED_HOME="$TMP/expected-home"
+NON_HOME_TARGET="$TMP/non-home-target"
+mkdir -p "$EXPECTED_HOME" "$NON_HOME_TARGET"
+set +e
+HOME="$EXPECTED_HOME" node "$RUNTIME_CLI" install "$NON_HOME_TARGET" "$PLUGIN_ROOT" >"$TMP/non-home-install.out" 2>&1
+non_home_install_rc=$?
+set -e
+if [ "$non_home_install_rc" -ne 0 ] \
+  && grep -q 'runtime install target must be the current HOME' "$TMP/non-home-install.out" \
+  && [ ! -e "$NON_HOME_TARGET/.edc" ] \
+  && [ ! -e "$NON_HOME_TARGET/.edc.install.lock" ]; then
+  check "runtime installer rejects non-HOME target before creating state" "1"
+else
+  check "runtime installer rejects non-HOME target before creating state" "0"
+  cat "$TMP/non-home-install.out"
+fi
+
 REPO1="$TMP/source-install"
 make_repo "$REPO1"
-if node "$RUNTIME_CLI" install "$REPO1" "$PLUGIN_ROOT" >/dev/null \
+if install_global "$REPO1" "$PLUGIN_ROOT" >/dev/null \
   && [ -x "$REPO1/.edc/scripts/edc-review.sh" ] \
   && [ -f "$REPO1/.edc/hooks/lib/worker-manifest.mjs" ] \
   && [ -f "$REPO1/.edc/runtime-metadata.json" ]; then
-  check "source project install writes complete runtime and metadata" "1"
+  check "explicit source install writes complete managed runtime and metadata" "1"
 else
-  check "source project install writes complete runtime and metadata" "0"
+  check "explicit source install writes complete managed runtime and metadata" "0"
 fi
 
 PACK_HOME="$TMP/pack-home"
@@ -83,10 +106,6 @@ else
   cat "$TMP/pack-install.out"
 fi
 
-REPO2="$TMP/missing-helper"
-make_repo "$REPO2"
-node "$RUNTIME_CLI" install "$REPO2" "$PLUGIN_ROOT" >/dev/null
-rm -f "$REPO2/.edc/hooks/lib/worker-manifest.mjs"
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/claude" <<'EOF'
 #!/usr/bin/env bash
@@ -94,55 +113,13 @@ echo called >>"${FAKE_MODEL_CALLED:?}"
 exit 0
 EOF
 chmod +x "$TMP/bin/claude"
-before_index=$(shasum -a 256 "$REPO2/edc-context/index.md" | awk '{print $1}')
-before_manifest=$(shasum -a 256 "$REPO2/edc-context/manifest.json" | awk '{print $1}')
-set +e
-(
-  cd "$REPO2"
-  PATH="$TMP/bin:$PATH" FAKE_MODEL_CALLED="$TMP/model-called" EDC_AGENT_CLI=claude bash .edc/scripts/edc-review.sh --full >"$TMP/missing.out" 2>&1
-)
-missing_rc=$?
-set -e
-after_index=$(shasum -a 256 "$REPO2/edc-context/index.md" | awk '{print $1}')
-after_manifest=$(shasum -a 256 "$REPO2/edc-context/manifest.json" | awk '{print $1}')
-if [ "$missing_rc" -ne 0 ] \
-  && grep -q 'runtime-install-incomplete' "$TMP/missing.out" \
-  && [ ! -f "$TMP/model-called" ] \
-  && [ "$before_index" = "$after_index" ] \
-  && [ "$before_manifest" = "$after_manifest" ]; then
-  check "missing runtime helper fails before context/model work" "1"
-else
-  check "missing runtime helper fails before context/model work" "0"
-  cat "$TMP/missing.out"
-fi
-
-REPO2B="$TMP/no-implicit-repair"
-make_repo "$REPO2B"
-node "$RUNTIME_CLI" install "$REPO2B" "$PLUGIN_ROOT" >/dev/null
-rm -f "$REPO2B/.edc/hooks/lib/worker-manifest.mjs" "$TMP/model-called"
-set +e
-(
-  cd "$REPO2B"
-  PATH="$TMP/bin:$PATH" FAKE_MODEL_CALLED="$TMP/model-called" EDC_PLUGIN_ROOT="$PLUGIN_ROOT" EDC_AGENT_CLI=claude bash .edc/scripts/edc-review.sh --full >"$TMP/no-implicit-repair.out" 2>&1
-)
-no_repair_rc=$?
-set -e
-if [ "$no_repair_rc" -ne 0 ] \
-  && grep -q 'runtime-install-incomplete' "$TMP/no-implicit-repair.out" \
-  && [ ! -e "$TMP/model-called" ] \
-  && [ ! -e "$REPO2B/.edc/hooks/lib/worker-manifest.mjs" ]; then
-  check "runtime preflight fails closed instead of implicitly repairing" "1"
-else
-  check "runtime preflight fails closed instead of implicitly repairing" "0"
-  cat "$TMP/no-implicit-repair.out"
-fi
 
 REPO3="$TMP/corrupt-helper"
 make_repo "$REPO3"
-node "$RUNTIME_CLI" install "$REPO3" "$PLUGIN_ROOT" >/dev/null
+install_global "$REPO3" "$PLUGIN_ROOT" >/dev/null
 printf 'export const = broken\n' >"$REPO3/.edc/hooks/lib/worker-manifest.mjs"
-if ! node "$RUNTIME_CLI" preflight "$REPO3" >/"$TMP/corrupt.out" 2>&1 \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/corrupt.out"; then
+if ! HOME="$REPO3" node "$RUNTIME_CLI" source-preflight "$REPO3/.edc" >/"$TMP/corrupt.out" 2>&1 \
+  && grep -Eq 'runtime-(integrity-mismatch|version-mismatch)' "$TMP/corrupt.out"; then
   check "corrupt helper returns structured integrity reason" "1"
 else
   check "corrupt helper returns structured integrity reason" "0"
@@ -151,7 +128,7 @@ fi
 
 REPO3B="$TMP/valid-tamper"
 make_repo "$REPO3B"
-node "$RUNTIME_CLI" install "$REPO3B" "$PLUGIN_ROOT" >/dev/null
+install_global "$REPO3B" "$PLUGIN_ROOT" >/dev/null
 helper="$REPO3B/.edc/hooks/lib/worker-manifest.mjs"
 {
   head -1 "$helper"
@@ -161,11 +138,11 @@ helper="$REPO3B/.edc/hooks/lib/worker-manifest.mjs"
 mv "$TMP/tampered-helper.mjs" "$helper"
 chmod +x "$helper"
 set +e
-EDC_TAMPER_MARKER="$TMP/tamper-marker" node "$RUNTIME_CLI" preflight "$REPO3B" "$PLUGIN_ROOT" >"$TMP/valid-tamper.out" 2>&1
+HOME="$REPO3B" EDC_TAMPER_MARKER="$TMP/tamper-marker" node "$RUNTIME_CLI" source-preflight "$REPO3B/.edc" >"$TMP/valid-tamper.out" 2>&1
 valid_tamper_rc=$?
 set -e
 if [ "$valid_tamper_rc" -ne 0 ] \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/valid-tamper.out" \
+  && grep -Eq 'runtime-(integrity-mismatch|version-mismatch)' "$TMP/valid-tamper.out" \
   && [ ! -e "$TMP/tamper-marker" ]; then
   check "valid managed-helper tamper fails before helper execution" "1"
 else
@@ -173,134 +150,13 @@ else
   cat "$TMP/valid-tamper.out"
 fi
 
-REPO3C="$TMP/build-mode-tamper"
-make_repo "$REPO3C"
-mkdir -p "$REPO3C/src"
-printf 'console.log("sample");\n' >"$REPO3C/src/app.js"
-git -C "$REPO3C" add src/app.js
-git -C "$REPO3C" commit -qm app
-node "$RUNTIME_CLI" install "$REPO3C" "$PLUGIN_ROOT" >/dev/null
-json_helper="$REPO3C/.edc/hooks/lib/json-cli.mjs"
-{
-  head -1 "$json_helper"
-  printf "import { writeFileSync as edcMarkerWrite } from 'node:fs'; if (process.env.EDC_TAMPER_MARKER) edcMarkerWrite(process.env.EDC_TAMPER_MARKER, 'executed');\n"
-  tail -n +2 "$json_helper"
-} >"$TMP/tampered-json-cli.mjs"
-mv "$TMP/tampered-json-cli.mjs" "$json_helper"
-chmod +x "$json_helper"
-set +e
-(
-  cd "$REPO3C"
-  EDC_PLUGIN_ROOT="$PLUGIN_ROOT" \
-    EDC_TAMPER_MARKER="$TMP/build-mode-tamper-marker" \
-    EDC_REVIEW_TASKS_DIR="$TMP/build-mode-tasks" \
-    EDC_REVIEW_TASKS_MANIFEST="$TMP/build-mode-tasks/manifest.json" \
-    bash .edc/scripts/edc-review.sh --build --full --ignore-context
-) >"$TMP/build-mode-tamper.out" 2>&1
-build_mode_tamper_rc=$?
-set -e
-if [ "$build_mode_tamper_rc" -ne 0 ] \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/build-mode-tamper.out" \
-  && [ ! -e "$TMP/build-mode-tamper-marker" ]; then
-  check "review task build rejects a valid helper tamper before execution" "1"
-else
-  check "review task build rejects a valid helper tamper before execution" "0"
-  cat "$TMP/build-mode-tamper.out"
-fi
-
-rm -f "$TMP/auto-tamper-marker" "$TMP/auto-tamper-result.json"
-set +e
-(
-  cd "$REPO3C"
-  PATH="$TMP/bin:$PATH" \
-    EDC_PLUGIN_ROOT="$PLUGIN_ROOT" \
-    EDC_AGENT_CLI=claude \
-    EDC_RESULT_FILE="$TMP/auto-tamper-result.json" \
-    EDC_TAMPER_MARKER="$TMP/auto-tamper-marker" \
-    bash .edc/scripts/edc-review.sh --full --ignore-context
-) >"$TMP/auto-tamper.out" 2>&1
-exit_code=$?
-set -e
-if [ "$exit_code" -ne 0 ] \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/auto-tamper.out" \
-  && [ ! -e "$TMP/auto-tamper-marker" ] \
-  && node -e 'const j=require(process.argv[1]); process.exit(j.reasonCode === "runtime-integrity-mismatch" && j.status === "failed" ? 0 : 1)' "$TMP/auto-tamper-result.json"; then
-  check "runtime mismatch writes failure result without executing tampered helper" "1"
-else
-  check "runtime mismatch writes failure result without executing tampered helper" "0"
-  cat "$TMP/auto-tamper.out"
-fi
-
-tamper_sourced_helper() {
-  local helper="$1" output="$2"
-  {
-    head -1 "$helper"
-    printf '[ -n "${EDC_TAMPER_MARKER:-}" ] && printf executed > "$EDC_TAMPER_MARKER"\n'
-    tail -n +2 "$helper"
-  } >"$output"
-  mv "$output" "$helper"
-  chmod +x "$helper"
-}
-
-REPO3D="$TMP/audit-source-tamper"
-make_repo "$REPO3D"
-node "$RUNTIME_CLI" install "$REPO3D" "$PLUGIN_ROOT" >/dev/null
-tamper_sourced_helper "$REPO3D/.edc/scripts/edc-assert-fresh.sh" "$TMP/tampered-audit-assert.sh"
-set +e
-(
-  cd "$REPO3D"
-  PATH="$TMP/bin:$PATH" \
-    EDC_PLUGIN_ROOT="$PLUGIN_ROOT" \
-    EDC_AGENT_CLI=claude \
-    EDC_RESULT_FILE="$TMP/audit-tamper-result.json" \
-    EDC_TAMPER_MARKER="$TMP/audit-tamper-marker" \
-    bash .edc/scripts/edc-audit.sh
-) >"$TMP/audit-tamper.out" 2>&1
-audit_tamper_rc=$?
-set -e
-if [ "$audit_tamper_rc" -ne 0 ] \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/audit-tamper.out" \
-  && [ ! -e "$TMP/audit-tamper-marker" ] \
-  && node -e 'const j=require(process.argv[1]); process.exit(j.reasonCode === "runtime-integrity-mismatch" && j.kind === "audit" ? 0 : 1)' "$TMP/audit-tamper-result.json"; then
-  check "quality review rejects sourced-helper tamper before execution" "1"
-else
-  check "quality review rejects sourced-helper tamper before execution" "0"
-  cat "$TMP/audit-tamper.out"
-fi
-
-REPO3E="$TMP/delivery-source-tamper"
-make_repo "$REPO3E"
-node "$RUNTIME_CLI" install "$REPO3E" "$PLUGIN_ROOT" >/dev/null
-tamper_sourced_helper "$REPO3E/.edc/scripts/edc-recover-context.sh" "$TMP/tampered-delivery-recover.sh"
-set +e
-(
-  cd "$REPO3E"
-  PATH="$TMP/bin:$PATH" \
-    EDC_PLUGIN_ROOT="$PLUGIN_ROOT" \
-    EDC_AGENT_CLI=claude \
-    EDC_RESULT_FILE="$TMP/delivery-tamper-result.json" \
-    EDC_TAMPER_MARKER="$TMP/delivery-tamper-marker" \
-    bash .edc/scripts/edc-delivery-review.sh --full
-) >"$TMP/delivery-tamper.out" 2>&1
-delivery_tamper_rc=$?
-set -e
-if [ "$delivery_tamper_rc" -ne 0 ] \
-  && grep -q 'runtime-integrity-mismatch' "$TMP/delivery-tamper.out" \
-  && [ ! -e "$TMP/delivery-tamper-marker" ] \
-  && node -e 'const j=require(process.argv[1]); process.exit(j.reasonCode === "runtime-integrity-mismatch" && j.kind === "delivery-review" ? 0 : 1)' "$TMP/delivery-tamper-result.json"; then
-  check "delivery review rejects sourced-helper tamper before execution" "1"
-else
-  check "delivery review rejects sourced-helper tamper before execution" "0"
-  cat "$TMP/delivery-tamper.out"
-fi
-
 REPO4="$TMP/interrupted"
 make_repo "$REPO4"
-node "$RUNTIME_CLI" install "$REPO4" "$PLUGIN_ROOT" >/dev/null
+install_global "$REPO4" "$PLUGIN_ROOT" >/dev/null
 printf 'keep-me\n' >"$REPO4/.edc/config"
 old_meta=$(shasum -a 256 "$REPO4/.edc/runtime-metadata.json" | awk '{print $1}')
 set +e
-EDC_RUNTIME_FAIL_AFTER_STAGE=1 node "$RUNTIME_CLI" install "$REPO4" "$PLUGIN_ROOT" >"$TMP/interrupted.out" 2>&1
+EDC_RUNTIME_FAIL_AFTER_STAGE=1 install_global "$REPO4" "$PLUGIN_ROOT" >"$TMP/interrupted.out" 2>&1
 interrupted_rc=$?
 set -e
 new_meta=$(shasum -a 256 "$REPO4/.edc/runtime-metadata.json" | awk '{print $1}')
@@ -316,9 +172,9 @@ fi
 REPO4B="$TMP/pre-stage-allocation-failure"
 make_repo "$REPO4B"
 set +e
-EDC_RUNTIME_FAIL_BEFORE_STAGE=1 node "$RUNTIME_CLI" install "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-fail.out" 2>&1
+EDC_RUNTIME_FAIL_BEFORE_STAGE=1 install_global "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-fail.out" 2>&1
 pre_stage_rc=$?
-node "$RUNTIME_CLI" install "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-retry.out" 2>&1
+install_global "$REPO4B" "$PLUGIN_ROOT" >"$TMP/pre-stage-retry.out" 2>&1
 pre_stage_retry_rc=$?
 set -e
 if [ "$pre_stage_rc" -ne 0 ] \
@@ -334,25 +190,12 @@ else
   cat "$TMP/pre-stage-fail.out" "$TMP/pre-stage-retry.out"
 fi
 
-REPO5="$TMP/locked"
-make_repo "$REPO5"
-node "$RUNTIME_CLI" install "$REPO5" "$PLUGIN_ROOT" >/dev/null
-rm -f "$REPO5/.edc/hooks/lib/worker-manifest.mjs"
-mkdir "$REPO5/.edc.install.lock"
-if ! node "$RUNTIME_CLI" preflight "$REPO5" "$PLUGIN_ROOT" --repair >"$TMP/locked.out" 2>&1 \
-  && grep -q 'runtime-install-busy' "$TMP/locked.out"; then
-  check "runtime repair reports lock contention as structured busy reason" "1"
-else
-  check "runtime repair reports lock contention as structured busy reason" "0"
-  cat "$TMP/locked.out"
-fi
-
 REPO5A="$TMP/live-stale-lock"
 make_repo "$REPO5A"
 mkdir "$REPO5A/.edc.install.lock"
 printf '{"pid":%s,"token":"live-owner","startedAt":"1970-01-01T00:00:00Z"}\n' "$$" >"$REPO5A/.edc.install.lock/owner.json"
 touch -t 197001010000 "$REPO5A/.edc.install.lock" "$REPO5A/.edc.install.lock/owner.json"
-if ! EDC_RUNTIME_LOCK_STALE_MS=1 node "$RUNTIME_CLI" install "$REPO5A" "$PLUGIN_ROOT" >"$TMP/live-stale-lock.out" 2>&1 \
+if ! EDC_RUNTIME_LOCK_STALE_MS=1 install_global "$REPO5A" "$PLUGIN_ROOT" >"$TMP/live-stale-lock.out" 2>&1 \
   && grep -q 'runtime-install-busy' "$TMP/live-stale-lock.out" \
   && [ -f "$REPO5A/.edc.install.lock/owner.json" ]; then
   check "stale-looking lock remains busy while its owner is alive" "1"
@@ -365,7 +208,7 @@ rm -rf "$REPO5A/.edc.install.lock"
 REPO5R="$TMP/replaced-lock"
 make_repo "$REPO5R"
 set +e
-EDC_RUNTIME_FAIL_AFTER_STAGE=1 node "$RUNTIME_CLI" install "$REPO5R" "$PLUGIN_ROOT" >"$TMP/replaced-lock.out" 2>&1 &
+EDC_RUNTIME_FAIL_AFTER_STAGE=1 install_global "$REPO5R" "$PLUGIN_ROOT" >"$TMP/replaced-lock.out" 2>&1 &
 install_pid=$!
 set -e
 for _ in $(seq 1 500); do
@@ -389,9 +232,9 @@ rm -rf "$REPO5R/.edc.install.lock"
 
 REPO5B="$TMP/wrong-fingerprint"
 make_repo "$REPO5B"
-node "$RUNTIME_CLI" install "$REPO5B" "$PLUGIN_ROOT" >/dev/null
+install_global "$REPO5B" "$PLUGIN_ROOT" >/dev/null
 node -e 'const fs=require("fs"); const p=process.argv[1]; const j=JSON.parse(fs.readFileSync(p,"utf8")); j.fingerprint="wrong"; fs.writeFileSync(p, JSON.stringify(j));' "$REPO5B/.edc/runtime-metadata.json"
-if ! node "$RUNTIME_CLI" preflight "$REPO5B" "$PLUGIN_ROOT" >"$TMP/wrong-fingerprint.out" 2>&1 \
+if ! HOME="$REPO5B" node "$RUNTIME_CLI" source-preflight "$REPO5B/.edc" >"$TMP/wrong-fingerprint.out" 2>&1 \
   && grep -q 'runtime-version-mismatch' "$TMP/wrong-fingerprint.out"; then
   check "wrong runtime fingerprint returns structured version mismatch" "1"
 else
@@ -401,13 +244,25 @@ fi
 
 REPO6="$TMP/smoke"
 make_repo "$REPO6"
-node "$RUNTIME_CLI" install "$REPO6" "$PLUGIN_ROOT" >/dev/null
-if node "$RUNTIME_CLI" preflight "$REPO6" >/"$TMP/smoke.out" 2>&1 \
+install_global "$REPO6" "$PLUGIN_ROOT" >/dev/null
+if HOME="$REPO6" node "$RUNTIME_CLI" source-preflight "$REPO6/.edc" >/"$TMP/smoke.out" 2>&1 \
   && grep -q '"reasonCode":"success"' "$TMP/smoke.out"; then
   check "runtime doctor performs worker-manifest smoke" "1"
 else
   check "runtime doctor performs worker-manifest smoke" "0"
   cat "$TMP/smoke.out"
+fi
+install_global "$EXPECTED_HOME" "$PLUGIN_ROOT" >/dev/null
+set +e
+HOME="$EXPECTED_HOME" node "$RUNTIME_CLI" source-preflight "$REPO6/.edc" >"$TMP/non-home-preflight.out" 2>&1
+non_home_preflight_rc=$?
+set -e
+if [ "$non_home_preflight_rc" -ne 0 ] \
+  && grep -q 'installed EDC runtime must be current HOME' "$TMP/non-home-preflight.out"; then
+  check "source preflight rejects installed runtime outside current HOME" "1"
+else
+  check "source preflight rejects installed runtime outside current HOME" "0"
+  cat "$TMP/non-home-preflight.out"
 fi
 
 extract_bash_block() {
@@ -457,10 +312,164 @@ EOF
 } >"$TMP/race-worker-manifest.mjs"
 mv "$TMP/race-worker-manifest.mjs" "$worker_helper"
 chmod +x "$worker_helper"
+cat >"$WRAPPER_PLUGIN/scripts/edc-review-all.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/edc-lib.sh"
+edc_runtime_preflight_or_exit
+printf '%s\n%s\n%s\n' "$0" "$*" "$PWD" >"${TERMINAL_REVIEW_MARKER:?}"
+EOF
+chmod +x "$WRAPPER_PLUGIN/scripts/edc-review-all.sh"
+
+TERMINAL_HOME="$TMP/terminal-home"
+TERMINAL_REPO="$TMP/terminal-bootstrap"
+mkdir -p "$TERMINAL_HOME"
+TERMINAL_HOME_PHYSICAL=$(cd "$TERMINAL_HOME" && pwd -P)
+make_repo "$TERMINAL_REPO"
+install_global "$TERMINAL_HOME" "$WRAPPER_PLUGIN" >/dev/null
+cp -R "$TERMINAL_HOME/.edc" "$TERMINAL_REPO/.edc"
+cat >"$TERMINAL_REPO/.edc/scripts/edc-review-all.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'executed\n' >"${LOCAL_MARKER:?}"
+EOF
+chmod +x "$TERMINAL_REPO/.edc/scripts/edc-review-all.sh"
+mkdir "$TERMINAL_REPO/.edc.install.lock"
+printf '{"pid":%s,"token":"repo-local-decoy","startedAt":"1970-01-01T00:00:00Z"}\n' "$$" >"$TERMINAL_REPO/.edc.install.lock/owner.json"
+repo_runtime_before=$(find "$TERMINAL_REPO/.edc" -type f | LC_ALL=C sort | while IFS= read -r path; do shasum -a 256 "$path"; done | shasum -a 256 | awk '{print $1}')
+set +e
+(
+  cd "$TERMINAL_REPO"
+  HOME="$TERMINAL_HOME" \
+    PATH="$TMP/bin:$PATH" \
+    EDC_BUILD_MODEL=t48-model \
+    EDC_REVIEW_MODEL=t48-model \
+    LOCAL_MARKER="$TMP/terminal-local-marker" \
+    TERMINAL_REVIEW_MARKER="$TMP/terminal-review-marker" \
+    "$TERMINAL_HOME/.edc/scripts/edc" review --agent claude --full
+) >"$TMP/terminal-review.out" 2>&1
+terminal_review_rc=$?
+set -e
+repo_runtime_after=$(find "$TERMINAL_REPO/.edc" -type f | LC_ALL=C sort | while IFS= read -r path; do shasum -a 256 "$path"; done | shasum -a 256 | awk '{print $1}')
+if [ "$terminal_review_rc" -eq 0 ] \
+  && [ -f "$TMP/terminal-review-marker" ] \
+  && [ ! -e "$TMP/terminal-local-marker" ] \
+  && [ "$repo_runtime_before" = "$repo_runtime_after" ] \
+  && [ -f "$TERMINAL_REPO/.edc.install.lock/owner.json" ] \
+  && [ "$(sed -n '1p' "$TMP/terminal-review-marker")" = "$TERMINAL_HOME_PHYSICAL/.edc/scripts/edc-review-all.sh" ] \
+  && [ "$(sed -n '2p' "$TMP/terminal-review-marker")" = "--full" ] \
+  && [ "$(sed -n '3p' "$TMP/terminal-review-marker")" = "$TERMINAL_REPO" ]; then
+  check "terminal/Pi bootstrap ignores stale repo runtime and dispatches validated global source" "1"
+else
+  check "terminal/Pi bootstrap ignores stale repo runtime and dispatches validated global source" "0"
+  printf 'terminal review rc=%s marker=%s local=%s before=%s after=%s\n' \
+    "$terminal_review_rc" "$([ -e "$TMP/terminal-review-marker" ] && tr '\n' '|' <"$TMP/terminal-review-marker" || echo missing)" \
+    "$([ -e "$TMP/terminal-local-marker" ] && echo executed || echo absent)" "$repo_runtime_before" "$repo_runtime_after"
+  cat "$TMP/terminal-review.out"
+fi
+
+PACKAGE_REPO="$TMP/package-bootstrap"
+make_repo "$PACKAGE_REPO"
+set +e
+(
+  cd "$PACKAGE_REPO"
+  EDC_PLUGIN_ROOT="$TERMINAL_REPO/.edc" \
+    TRUSTED_ENV_VALUE="package-env" \
+    TRUSTED_MARKER="$TMP/package-trusted-marker" \
+    node "$WRAPPER_PLUGIN/hooks/lib/runtime-bootstrap.mjs" edc-build.sh --package-arg
+) >"$TMP/package-bootstrap.out" 2>&1
+package_bootstrap_rc=$?
+set -e
+if [ "$package_bootstrap_rc" -eq 0 ] \
+  && [ -f "$TMP/package-trusted-marker" ] \
+  && [ ! -e "$PACKAGE_REPO/.edc" ] \
+  && [ "$(sed -n '1p' "$TMP/package-trusted-marker")" = "$WRAPPER_PLUGIN_PHYSICAL/scripts/edc-build.sh" ]; then
+  check "package bootstrap ignores caller runtime root and dispatches without repo cache" "1"
+else
+  check "package bootstrap ignores caller runtime root and dispatches without repo cache" "0"
+  cat "$TMP/package-bootstrap.out"
+fi
+
+LOCAL_BOOTSTRAP_REPO="$TMP/local-bootstrap-rejected"
+LOCAL_BOOTSTRAP_HOME="$TMP/local-bootstrap-home"
+make_repo "$LOCAL_BOOTSTRAP_REPO"
+mkdir -p "$LOCAL_BOOTSTRAP_HOME" "$TMP/local-bootstrap-bin"
+cp -R "$TERMINAL_HOME/.edc" "$LOCAL_BOOTSTRAP_REPO/.edc"
+cat >"$TMP/local-bootstrap-bin/bash" <<'EOF'
+#!/bin/sh
+printf 'executed\n' >"${LOCAL_BOOTSTRAP_EXECUTED:?}"
+EOF
+chmod +x "$TMP/local-bootstrap-bin/bash"
+set +e
+(
+  cd "$LOCAL_BOOTSTRAP_REPO"
+  HOME="$LOCAL_BOOTSTRAP_HOME" \
+    PATH="$TMP/local-bootstrap-bin:$PATH" \
+    LOCAL_BOOTSTRAP_EXECUTED="$TMP/local-bootstrap-executed" \
+    node "$LOCAL_BOOTSTRAP_REPO/.edc/hooks/lib/runtime-bootstrap.mjs" edc-build.sh
+) >"$TMP/local-bootstrap.out" 2>&1
+local_bootstrap_rc=$?
+set -e
+if [ "$local_bootstrap_rc" -ne 0 ] \
+  && grep -q 'repo-local EDC runtime execution is unsupported' "$TMP/local-bootstrap.out" \
+  && [ ! -e "$TMP/local-bootstrap-executed" ]; then
+  check "bootstrap rejects valid repo-local runtime before shell dispatch" "1"
+else
+  check "bootstrap rejects valid repo-local runtime before shell dispatch" "0"
+  cat "$TMP/local-bootstrap.out"
+fi
+
+SYMLINK_BOOTSTRAP_REPO="$TMP/symlink-bootstrap-rejected"
+make_repo "$SYMLINK_BOOTSTRAP_REPO"
+ln -s "$WRAPPER_PLUGIN" "$SYMLINK_BOOTSTRAP_REPO/.edc"
+set +e
+(
+  cd "$SYMLINK_BOOTSTRAP_REPO"
+  HOME="$LOCAL_BOOTSTRAP_HOME" \
+    PATH="$TMP/local-bootstrap-bin:$PATH" \
+    LOCAL_BOOTSTRAP_EXECUTED="$TMP/symlink-bootstrap-executed" \
+    node "$SYMLINK_BOOTSTRAP_REPO/.edc/hooks/lib/runtime-bootstrap.mjs" edc-build.sh
+) >"$TMP/symlink-bootstrap.out" 2>&1
+symlink_bootstrap_rc=$?
+set -e
+if [ "$symlink_bootstrap_rc" -ne 0 ] \
+  && grep -q 'repo-local EDC runtime execution is unsupported' "$TMP/symlink-bootstrap.out" \
+  && [ ! -e "$TMP/symlink-bootstrap-executed" ]; then
+  check "bootstrap rejects repo-local symlink to package source" "1"
+else
+  check "bootstrap rejects repo-local symlink to package source" "0"
+  cat "$TMP/symlink-bootstrap.out"
+fi
+
+GLOBAL_TAMPER_HOME="$TMP/global-tamper-home"
+mkdir -p "$GLOBAL_TAMPER_HOME"
+install_global "$GLOBAL_TAMPER_HOME" "$WRAPPER_PLUGIN" >/dev/null
+global_worker="$GLOBAL_TAMPER_HOME/.edc/hooks/lib/worker-manifest.mjs"
+{
+  head -1 "$global_worker"
+  printf "import { writeFileSync as markTamper } from 'node:fs'; markTamper(process.env.GLOBAL_TAMPER_MARKER, 'executed');\n"
+  tail -n +2 "$global_worker"
+} >"$TMP/global-worker-tamper.mjs"
+mv "$TMP/global-worker-tamper.mjs" "$global_worker"
+chmod +x "$global_worker"
+set +e
+HOME="$GLOBAL_TAMPER_HOME" \
+  GLOBAL_TAMPER_MARKER="$TMP/global-tamper-marker" \
+  node "$GLOBAL_TAMPER_HOME/.edc/hooks/lib/runtime-bootstrap.mjs" edc-build.sh >"$TMP/global-tamper.out" 2>&1
+global_tamper_rc=$?
+set -e
+if [ "$global_tamper_rc" -ne 0 ] \
+  && grep -Eq 'runtime-(integrity-mismatch|version-mismatch)' "$TMP/global-tamper.out" \
+  && [ ! -e "$TMP/global-tamper-marker" ]; then
+  check "direct managed global-source tamper fails closed before helper execution" "1"
+else
+  check "direct managed global-source tamper fails closed before helper execution" "0"
+  cat "$TMP/global-tamper.out"
+fi
 
 RACE_REPO="$TMP/runtime-use-race"
 make_repo "$RACE_REPO"
-node "$WRAPPER_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$RACE_REPO" "$WRAPPER_PLUGIN" >/dev/null
+mkdir -p "$RACE_REPO/.edc/scripts"
 set +e
 (
   cd "$RACE_REPO"
@@ -514,10 +523,13 @@ cat >"$CANCEL_PLUGIN/scripts/edc-build.sh" <<'EOF'
 #!/usr/bin/env bash
 exec node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.CANCEL_STARTED, "started\n"); setTimeout(() => fs.writeFileSync(process.env.CANCEL_SURVIVED, "survived\n"), 1500);'
 EOF
-chmod +x "$CANCEL_PLUGIN/scripts/edc-build.sh"
+cat >"$CANCEL_PLUGIN/scripts/edc-update.sh" <<'EOF'
+#!/usr/bin/env bash
+node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.NESTED_CANCEL_PID, `${process.pid}\n`); fs.writeFileSync(process.env.NESTED_CANCEL_STARTED, "started\n"); setTimeout(() => fs.writeFileSync(process.env.NESTED_CANCEL_SURVIVED, "survived\n"), 1500); setInterval(() => {}, 1000);'
+EOF
+chmod +x "$CANCEL_PLUGIN/scripts/edc-build.sh" "$CANCEL_PLUGIN/scripts/edc-update.sh"
 CANCEL_REPO="$TMP/bootstrap-cancel"
 make_repo "$CANCEL_REPO"
-node "$CANCEL_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$CANCEL_REPO" "$CANCEL_PLUGIN" >/dev/null
 
 run_cancel_case() {
   local signal="$1" expected_rc="$2" suffix
@@ -561,6 +573,94 @@ run_cancel_case TERM 143
 run_cancel_case INT 130
 run_cancel_case HUP 129
 
+CANCEL_HOME="$TMP/terminal-cancel-home"
+mkdir -p "$CANCEL_HOME"
+install_global "$CANCEL_HOME" "$CANCEL_PLUGIN" >/dev/null
+set +e
+HOME="$CANCEL_HOME" \
+  PATH="$TMP/bin:$PATH" \
+  EDC_BUILD_MODEL=t48-model \
+  EDC_REVIEW_MODEL=t48-model \
+  CANCEL_STARTED="$TMP/terminal-cancel-started" \
+  CANCEL_SURVIVED="$TMP/terminal-cancel-survived" \
+  "$CANCEL_HOME/.edc/scripts/edc" build --agent claude "$CANCEL_REPO" >"$TMP/terminal-cancel.out" 2>&1 &
+terminal_cancel_pid=$!
+set -e
+for _ in $(seq 1 500); do
+  [ -f "$TMP/terminal-cancel-started" ] && break
+  sleep 0.01
+done
+kill -TERM "$terminal_cancel_pid"
+set +e
+wait "$terminal_cancel_pid"
+terminal_cancel_rc=$?
+set -e
+sleep 2
+if [ "$terminal_cancel_rc" -eq 143 ] \
+  && [ -f "$TMP/terminal-cancel-started" ] \
+  && [ ! -e "$TMP/terminal-cancel-survived" ]; then
+  check "terminal cli execs bootstrap so TERM reaches the orchestrator" "1"
+else
+  check "terminal cli execs bootstrap so TERM reaches the orchestrator" "0"
+  printf 'terminal cancel rc=%s started=%s survived=%s\n' \
+    "$terminal_cancel_rc" "$([ -e "$TMP/terminal-cancel-started" ] && echo yes || echo no)" \
+    "$([ -e "$TMP/terminal-cancel-survived" ] && echo yes || echo no)"
+  cat "$TMP/terminal-cancel.out"
+fi
+
+set +e
+(
+  cd "$CANCEL_REPO"
+  HOME="$CANCEL_HOME" \
+    PATH="$TMP/bin:$PATH" \
+    EDC_BUILD_MODEL=t48-model \
+    EDC_REVIEW_MODEL=t48-model \
+    NESTED_CANCEL_PID="$TMP/nested-cancel-pid" \
+    NESTED_CANCEL_STARTED="$TMP/nested-cancel-started" \
+    NESTED_CANCEL_SURVIVED="$TMP/nested-cancel-survived" \
+    exec "$CANCEL_HOME/.edc/scripts/edc" update --agent claude
+) >"$TMP/nested-cancel.out" 2>&1 &
+nested_cancel_cli_pid=$!
+set -e
+for _ in $(seq 1 500); do
+  [ -f "$TMP/nested-cancel-started" ] && break
+  sleep 0.01
+done
+kill -TERM "$nested_cancel_cli_pid"
+for _ in $(seq 1 500); do
+  kill -0 "$nested_cancel_cli_pid" 2>/dev/null || break
+  sleep 0.01
+done
+if kill -0 "$nested_cancel_cli_pid" 2>/dev/null; then
+  kill -KILL "$nested_cancel_cli_pid" 2>/dev/null || true
+fi
+set +e
+wait "$nested_cancel_cli_pid"
+nested_cancel_cli_rc=$?
+set -e
+sleep 2
+nested_cancel_descendant_pid=$(cat "$TMP/nested-cancel-pid" 2>/dev/null || true)
+nested_cancel_descendant_alive=0
+if [ -n "$nested_cancel_descendant_pid" ] && kill -0 "$nested_cancel_descendant_pid" 2>/dev/null; then
+  nested_cancel_descendant_alive=1
+fi
+if [ "$nested_cancel_cli_rc" -eq 143 ] \
+  && [ -f "$TMP/nested-cancel-started" ] \
+  && [ ! -e "$TMP/nested-cancel-survived" ] \
+  && [ "$nested_cancel_descendant_alive" -eq 0 ]; then
+  check "terminal cli TERM cancels non-exec nested orchestrator descendants" "1"
+else
+  check "terminal cli TERM cancels non-exec nested orchestrator descendants" "0"
+  printf 'nested cancel rc=%s started=%s survived=%s descendant_pid=%s descendant_alive=%s\n' \
+    "$nested_cancel_cli_rc" "$([ -e "$TMP/nested-cancel-started" ] && echo yes || echo no)" \
+    "$([ -e "$TMP/nested-cancel-survived" ] && echo yes || echo no)" \
+    "${nested_cancel_descendant_pid:-missing}" "$nested_cancel_descendant_alive"
+  cat "$TMP/nested-cancel.out"
+fi
+if [ "$nested_cancel_descendant_alive" -eq 1 ]; then
+  kill -KILL "$nested_cancel_descendant_pid" 2>/dev/null || true
+fi
+
 STATIC_REPO="$TMP/static-wrapper"
 make_repo "$STATIC_REPO"
 write_malicious_local_build "$STATIC_REPO"
@@ -586,9 +686,9 @@ if [ "$static_wrapper_rc" -eq 0 ] \
   && [ "$(sed -n '2p' "$TMP/static-trusted-marker")" = "--force" ] \
   && [ "$(sed -n '3p' "$TMP/static-trusted-marker")" = "$STATIC_REPO" ] \
   && [ "$(sed -n '4p' "$TMP/static-trusted-marker")" = "static-env" ]; then
-  check "static Claude wrapper validates through trusted plugin bootstrap before local execution" "1"
+  check "static Claude wrapper validates package source and ignores repo runtime" "1"
 else
-  check "static Claude wrapper validates through trusted plugin bootstrap before local execution" "0"
+  check "static Claude wrapper validates package source and ignores repo runtime" "0"
   cat "$TMP/static-wrapper.out"
 fi
 
@@ -597,7 +697,7 @@ mkdir -p "$GENERATED_HOME"
 GENERATED_HOME_PHYSICAL=$(cd "$GENERATED_HOME" && pwd -P)
 HOME="$GENERATED_HOME" CI=1 SHELL=/bin/zsh bash "$ROOT/install.sh" --agent cursor --no-path >"$TMP/generated-cursor-install.out" 2>&1
 HOME="$GENERATED_HOME" CI=1 SHELL=/bin/zsh bash "$ROOT/install.sh" --agent codex --no-path >"$TMP/generated-codex-install.out" 2>&1
-node "$WRAPPER_PLUGIN/hooks/lib/runtime-manifest.mjs" install "$GENERATED_HOME" "$WRAPPER_PLUGIN" >/dev/null
+install_global "$GENERATED_HOME" "$WRAPPER_PLUGIN" >/dev/null
 installed_shell_source_root=$(
   cd "$TMP"
   HOME="$GENERATED_HOME" EDC_SCRIPTS_DIR="$GENERATED_HOME/.edc/scripts" bash -c '. "$EDC_SCRIPTS_DIR/edc-lib.sh"; edc_runtime_source_root'
@@ -664,9 +764,9 @@ if [ "$cursor_wrapper_rc" -eq 0 ] \
   && [ "$(sed -n '2p' "$TMP/cursor-trusted-marker")" = "--cursor-arg" ] \
   && [ "$(sed -n '3p' "$TMP/cursor-trusted-marker")" = "$CURSOR_REPO" ] \
   && [ "$(sed -n '4p' "$TMP/cursor-trusted-marker")" = "cursor-env" ]; then
-  check "generated Cursor wrapper uses trusted HOME bootstrap before local execution" "1"
+  check "generated Cursor wrapper uses trusted HOME bootstrap and ignores repo runtime" "1"
 else
-  check "generated Cursor wrapper uses trusted HOME bootstrap before local execution" "0"
+  check "generated Cursor wrapper uses trusted HOME bootstrap and ignores repo runtime" "0"
   cat "$TMP/cursor-wrapper.out"
 fi
 
@@ -698,9 +798,9 @@ if [ "$codex_wrapper_rc" -eq 0 ] \
   && [ "$(sed -n '2p' "$TMP/codex-trusted-marker")" = "--codex-arg" ] \
   && [ "$(sed -n '3p' "$TMP/codex-trusted-marker")" = "$CODEX_REPO" ] \
   && [ "$(sed -n '4p' "$TMP/codex-trusted-marker")" = "codex-env" ]; then
-  check "generated Codex wrapper uses trusted HOME bootstrap before local execution" "1"
+  check "generated Codex wrapper uses trusted HOME bootstrap and ignores repo runtime" "1"
 else
-  check "generated Codex wrapper uses trusted HOME bootstrap before local execution" "0"
+  check "generated Codex wrapper uses trusted HOME bootstrap and ignores repo runtime" "0"
   cat "$TMP/codex-wrapper.out"
 fi
 

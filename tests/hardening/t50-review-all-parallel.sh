@@ -102,7 +102,6 @@ setup_repo() {
   printf 'tracked\n' > tracked.txt
   git add tracked.txt
   git commit -q -m initial
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$TMP/plugin" >/dev/null
 }
 
 prepare_plugin
@@ -129,7 +128,7 @@ fi
 # Default mode runs each lens to completion in security/delivery/quality order.
 setup_repo
 set +e
-env -u EDC_PARALLEL EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" bash .edc/scripts/edc-review-all.sh --full \
+env -u EDC_PARALLEL EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" bash "$TMP/plugin/scripts/edc-review-all.sh" --full \
   --ignore 'vendor/**' --ignore 'generated/**' --context-mode inject > "$TMP/success.out" 2>&1
 rc=$?
 set -e
@@ -175,7 +174,7 @@ fi
 setup_repo
 set +e
 EDC_AGENT_CLI=pi EDC_PARALLEL=1 EDC_T50_EXPECT_PARALLEL=1 EDC_T50_STATE="$TMP/state" \
-  bash .edc/scripts/edc-review-all.sh --full > "$TMP/parallel.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" --full > "$TMP/parallel.out" 2>&1
 rc=$?
 set -e
 first_finished_line=$(grep -n ' finished$' "$TMP/state/events" 2>/dev/null | head -1 | cut -d: -f1 || echo 0)
@@ -193,7 +192,7 @@ for invalid in 2 true yes; do
   setup_repo
   set +e
   EDC_AGENT_CLI=pi EDC_PARALLEL="$invalid" EDC_T50_STATE="$TMP/state" \
-    bash .edc/scripts/edc-review-all.sh --full > "$TMP/invalid-$invalid.out" 2>&1
+    bash "$TMP/plugin/scripts/edc-review-all.sh" --full > "$TMP/invalid-$invalid.out" 2>&1
   rc=$?
   set -e
   if [ "$rc" -ne 0 ] && [ ! -e "$TMP/state/events" ] && grep -q 'EDC_PARALLEL must be 0 or 1' "$TMP/invalid-$invalid.out"; then
@@ -210,7 +209,7 @@ done
 for link_kind in symlink hardlink; do
   setup_repo
   set +e
-  EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_LINK_ESCAPE="$link_kind" bash .edc/scripts/edc-review-all.sh --full > "$TMP/$link_kind.out" 2>&1
+  EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_LINK_ESCAPE="$link_kind" bash "$TMP/plugin/scripts/edc-review-all.sh" --full > "$TMP/$link_kind.out" 2>&1
   rc=$?
   set -e
   if [ "$rc" -ne 0 ] \
@@ -228,7 +227,7 @@ done
 # The two quality reports validate as a pair before either canonical file moves.
 setup_repo
 set +e
-EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_INVALID_QUALITY_PAIR=issues-symlink bash .edc/scripts/edc-review-all.sh --full > "$TMP/quality-pair.out" 2>&1
+EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_INVALID_QUALITY_PAIR=issues-symlink bash "$TMP/plugin/scripts/edc-review-all.sh" --full > "$TMP/quality-pair.out" 2>&1
 rc=$?
 set -e
 if [ "$rc" -ne 0 ] \
@@ -246,7 +245,7 @@ fi
 # A failed lens must not cancel siblings; aggregation happens after every result exists.
 setup_repo
 set +e
-env -u EDC_PARALLEL EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_FAIL=security bash .edc/scripts/edc-review-all.sh --full > "$TMP/failure.out" 2>&1
+env -u EDC_PARALLEL EDC_AGENT_CLI=pi EDC_T50_STATE="$TMP/state" EDC_T50_FAIL=security bash "$TMP/plugin/scripts/edc-review-all.sh" --full > "$TMP/failure.out" 2>&1
 rc=$?
 set -e
 failure_events=$(cat "$TMP/state/events" 2>/dev/null || true)

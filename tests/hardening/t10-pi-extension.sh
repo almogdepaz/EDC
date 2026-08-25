@@ -68,41 +68,15 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-install_check=$(node --input-type=module - "$TMP/install-project" "$ROOT" <<'NODE'
-import { mkdirSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { installRuntime } from "./plugins/edc/hooks/lib/runtime-manifest.mjs";
-
-const [projectRoot, root] = process.argv.slice(2);
-mkdirSync(join(projectRoot, ".git"), { recursive: true });
-installRuntime(projectRoot, join(root, "plugins", "edc"));
-
-const expectedHooks = readdirSync(join(root, "plugins", "edc", "hooks", "lib"))
-  .filter((name) => name.endsWith(".mjs"))
-  .sort();
-const missingHooks = expectedHooks.filter((name) => !existsSync(join(projectRoot, ".edc", "hooks", "lib", name)));
-
-const expectedScripts = readdirSync(join(root, "plugins", "edc", "scripts"))
-  .filter((name) => name === "edc" || (name.endsWith(".sh") && name !== "edc-spawn-analyze.sh"))
-  .sort();
-const missingScripts = expectedScripts.filter((name) => !existsSync(join(projectRoot, ".edc", "scripts", name)));
-
-if (missingHooks.length || missingScripts.length) {
-  console.log(JSON.stringify({ missingHooks, missingScripts }));
-  process.exit(1);
-}
-console.log("OK");
-NODE
-)
-if [ "$install_check" = "OK" ]; then
-  say_pass "runtime manifest installs complete project-local runtime"
+source_preflight=$(node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" source-preflight "$ROOT/plugins/edc" 2>&1)
+if echo "$source_preflight" | grep -q '"reasonCode":"success"'; then
+  say_pass "trusted package runtime source passes preflight"
 else
-  say_fail "runtime manifest installs complete project-local runtime" "$install_check"
+  say_fail "trusted package runtime source passes preflight" "$source_preflight"
 fi
-rm -rf "$TMP/install-project"
 
 # Use a copied package as the trusted Pi/plugin source so dispatch can exercise
-# real preflight/repair while the orchestrator bodies remain deterministic.
+# real package preflight while the orchestrator bodies remain deterministic.
 TRUSTED_PACKAGE="$TMP/trusted-package"
 mkdir -p "$TRUSTED_PACKAGE/plugins"
 cp -R "$ROOT/pi" "$TRUSTED_PACKAGE/pi"
@@ -111,7 +85,8 @@ cat >"$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [ -f "$PWD/worker-run/tasks.json" ]; then
-  exec node "$PWD/.edc/hooks/lib/worker-pool.mjs" --runner "$PWD/term-resistant-worker.sh" "$PWD/worker-run/tasks.json"
+  SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  exec node "$SCRIPT_DIR/../hooks/lib/worker-pool.mjs" --runner "$PWD/term-resistant-worker.sh" "$PWD/worker-run/tasks.json"
 fi
 if [ -n "${EDC_TEST_REVIEW_ARGS_FILE:-}" ]; then
   : > "$EDC_TEST_REVIEW_ARGS_FILE"
@@ -230,6 +205,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   };
   const { pathToFileURL } = await import("node:url");
   const factory = (await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href)).default;
+  const { BACKGROUND_JOB_TERMINATION_GRACE_MS } = await import(pathToFileURL(`${process.env.EDC_TEST_PLUGIN_ROOT}/hooks/lib/termination-policy.mjs`).href);
   await factory(fakePi);
 
   // 1. only the interactive /edc command is registered.
@@ -250,13 +226,6 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
 
   const fs = await import("node:fs");
   const childProcess = await import("node:child_process");
-
-  const trustedRuntimeCli = `${process.env.EDC_TEST_PLUGIN_ROOT}/hooks/lib/runtime-manifest.mjs`;
-  const trustedPluginRoot = process.env.EDC_TEST_PLUGIN_ROOT;
-  childProcess.execFileSync(process.execPath, [trustedRuntimeCli, "install", cwd, trustedPluginRoot], { stdio: "ignore" });
-  // A valid runtime must remain executable while another installer owns the lock.
-  fs.mkdirSync(`${cwd}/.edc.install.lock`, { recursive: true });
-  fs.writeFileSync(`${cwd}/.edc.install.lock/owner.json`, JSON.stringify({ pid: process.pid, token: "valid-busy-test", startedAt: new Date().toISOString() }));
 
   const menuCtx = (selection, extra = {}) => {
     const selections = Array.isArray(selection) ? [...selection] : [selection];
@@ -280,8 +249,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   };
   };
 
-  // Execution sinks must enter through trusted package code. A busy repair lock
-  // must not let a tampered project-local edc-lib execute before preflight.
+  // Pi execution must ignore stale repo-local runtime state, including a live
+  // install lock, without repairing or executing it.
   const tamperedRuntimeDir = `${cwd}/busy-tampered-runtime`;
   const tamperedLibMarker = `${tamperedRuntimeDir}/local-edc-lib-executed`;
   fs.mkdirSync(tamperedRuntimeDir, { recursive: true });
@@ -289,12 +258,12 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   fs.writeFileSync(`${tamperedRuntimeDir}/tracked.txt`, "tracked\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: tamperedRuntimeDir });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: tamperedRuntimeDir });
-  childProcess.execFileSync(process.execPath, [trustedRuntimeCli, "install", tamperedRuntimeDir, trustedPluginRoot], { stdio: "ignore" });
   const tamperedLib = `${tamperedRuntimeDir}/.edc/scripts/edc-lib.sh`;
-  const tamperedLibBytes = fs.readFileSync(tamperedLib, "utf-8");
-  fs.writeFileSync(tamperedLib, tamperedLibBytes.replace("\n", `\nprintf executed > ${JSON.stringify(tamperedLibMarker)}\n`));
+  fs.mkdirSync(`${tamperedRuntimeDir}/.edc/scripts`, { recursive: true });
+  fs.writeFileSync(tamperedLib, `printf executed > ${JSON.stringify(tamperedLibMarker)}\n`);
   fs.mkdirSync(`${tamperedRuntimeDir}/.edc.install.lock`, { recursive: true });
   fs.writeFileSync(`${tamperedRuntimeDir}/.edc.install.lock/owner.json`, JSON.stringify({ pid: process.pid, token: "busy-test", startedAt: new Date().toISOString() }));
+  const tamperedLibBefore = fs.readFileSync(tamperedLib, "utf-8");
   const tamperedMessagesBefore = calls.messages.length;
   await edcCmd.opts.handler("", { ...menuCtx("build context"), cwd: tamperedRuntimeDir });
   const tamperedStartMessage = calls.messages.slice(tamperedMessagesBefore).at(-1)?.content || "";
@@ -307,14 +276,18 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   const tamperedStatus = fs.existsSync(tamperedStatusFile) ? fs.readFileSync(tamperedStatusFile, "utf-8") : "missing";
-  if (!tamperedStartMessage.includes("Background EDC build started.") || fs.existsSync(tamperedLibMarker) || !tamperedStatus.includes("status=failed") || !tamperedStatus.includes("reason_code=runtime-install-busy")) {
-    console.log("PI_BUSY_TAMPER_GATE_FAIL:" + JSON.stringify({ start: tamperedStartMessage, markerExecuted: fs.existsSync(tamperedLibMarker), status: tamperedStatus }));
+  if (!tamperedStartMessage.includes("Background EDC build started.")
+    || fs.existsSync(tamperedLibMarker)
+    || !tamperedStatus.includes("status=success")
+    || fs.readFileSync(tamperedLib, "utf-8") !== tamperedLibBefore
+    || !fs.existsSync(`${tamperedRuntimeDir}/.edc.install.lock/owner.json`)) {
+    console.log("PI_REPO_RUNTIME_IGNORE_FAIL:" + JSON.stringify({ start: tamperedStartMessage, markerExecuted: fs.existsSync(tamperedLibMarker), status: tamperedStatus }));
     process.exit(1);
   }
   fs.rmSync(`${tamperedRuntimeDir}/.edc.install.lock`, { recursive: true, force: true });
 
-  // Foreground doctor uses the same trusted gate and must surface the structured
-  // busy reason without executing either a malicious doctor or sourced edc-lib.
+  // Foreground doctor uses the same package/global gate and ignores malicious
+  // repo-local doctor and library files.
   const foregroundTamperedDir = `${cwd}/foreground-busy-tampered-runtime`;
   const foregroundDoctorMarker = `${foregroundTamperedDir}/local-doctor-executed`;
   const foregroundLibMarker = `${foregroundTamperedDir}/local-edc-lib-executed`;
@@ -323,7 +296,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   fs.writeFileSync(`${foregroundTamperedDir}/tracked.txt`, "tracked\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: foregroundTamperedDir });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: foregroundTamperedDir });
-  childProcess.execFileSync(process.execPath, [trustedRuntimeCli, "install", foregroundTamperedDir, trustedPluginRoot], { stdio: "ignore" });
+  fs.mkdirSync(`${foregroundTamperedDir}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${foregroundTamperedDir}/.edc/scripts/edc-lib.sh`, `printf executed > ${JSON.stringify(foregroundLibMarker)}\n`);
   fs.writeFileSync(`${foregroundTamperedDir}/.edc/scripts/edc-doctor.sh`, `#!/usr/bin/env bash\n. "$(dirname "\${BASH_SOURCE[0]}")/edc-lib.sh"\nprintf executed > ${JSON.stringify(foregroundDoctorMarker)}\n`);
   fs.chmodSync(`${foregroundTamperedDir}/.edc/scripts/edc-doctor.sh`, 0o755);
@@ -335,9 +308,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   const foregroundResult = foregroundMessages.at(-1);
   if (foregroundMessages.length !== 2
     || foregroundResult?.customType !== "edc-command-result"
-    || !foregroundResult.content.includes("edc doctor failed with exit code 1")
-    || !foregroundResult.content.includes("\"reasonCode\":\"runtime-install-busy\"")
-    || !foregroundResult.content.includes("wait for the running EDC install/review to finish, then rerun")
+    || !foregroundResult.content.includes("doctor args:  agent=pi")
     || fs.existsSync(foregroundDoctorMarker)
     || fs.existsSync(foregroundLibMarker)) {
     console.log("PI_FOREGROUND_BUSY_TAMPER_GATE_FAIL:" + JSON.stringify({ messages: foregroundMessages, doctorExecuted: fs.existsSync(foregroundDoctorMarker), libExecuted: fs.existsSync(foregroundLibMarker) }));
@@ -398,15 +369,13 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   const maliciousShortRef = `origin/evil$(touch\${IFS}${maliciousPwned})`;
   const maliciousFullRef = `refs/remotes/${maliciousShortRef}`;
   try { fs.unlinkSync(maliciousPwned); } catch {}
-  fs.mkdirSync(`${maliciousDir}/.edc/scripts`, { recursive: true });
+  fs.mkdirSync(maliciousDir, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: maliciousDir, stdio: "ignore" });
   fs.writeFileSync(`${maliciousDir}/tracked.txt`, "x\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: maliciousDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: maliciousDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["update-ref", maliciousFullRef, "HEAD"], { cwd: maliciousDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", maliciousFullRef], { cwd: maliciousDir, stdio: "ignore" });
-  fs.writeFileSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Verified: review-HEAD.md"\n`);
-  fs.chmodSync(`${maliciousDir}/.edc/scripts/edc-review.sh`, 0o755);
   const maliciousMessagesBefore = calls.messages.length;
   await edcCmd.opts.handler("", { ...menuCtx(["changes vs default branch", "security review"]), cwd: maliciousDir });
   const maliciousStartMessage = calls.messages.slice(maliciousMessagesBefore).at(-1);
@@ -544,7 +513,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
 
   // 3d. immediate duplicate starts are rejected before the child writes status.
   const raceDir = `${cwd}/race-review`;
-  fs.mkdirSync(`${raceDir}/.edc/scripts`, { recursive: true });
+  fs.mkdirSync(raceDir, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: raceDir, stdio: "ignore" });
   fs.writeFileSync(`${raceDir}/tracked.txt`, "x\n");
   fs.writeFileSync(`${raceDir}/.gitignore`, "fake-bin/\nworker-run/\nterm-resistant-worker.sh\n");
@@ -574,11 +543,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   }));
   fs.writeFileSync(workerRunner, `#!/usr/bin/env bash\nset -uo pipefail\non_term() { printf term > .git/edc/worker-term; }\ntrap on_term TERM\nprintf "%s\\n" "$$" > .git/edc/worker-pgid\nprintf "%s\\n" "$PPID" > .git/edc/worker-pool-pid\nprintf ready > .git/edc/race-ready\nwhile :; do\n  sleep 30 &\n  wait "$!" || true\ndone\n`);
   fs.chmodSync(workerRunner, 0o755);
-  const workerPool = `${process.cwd()}/plugins/edc/hooks/lib/worker-pool.mjs`;
   const { WORKER_PROCESS_GROUP_TERMINATION_GRACE_MS } = await import("./plugins/edc/hooks/lib/termination-policy.mjs");
-  fs.writeFileSync(`${raceDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nexec node ${JSON.stringify(workerPool)} --runner ${JSON.stringify(workerRunner)} ${JSON.stringify(workerManifest)}\n`);
-  fs.chmodSync(`${raceDir}/.edc/scripts/edc-review.sh`, 0o755);
-
   const realBash = childProcess.execFileSync("/usr/bin/env", ["bash", "-lc", "command -v bash"], { encoding: "utf-8" }).trim();
   if (!realBash) {
     console.log("RACE_TEST_BASH_MISSING");
@@ -763,13 +728,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
 
   // 3e2. dead running PID is marked failed and does not wedge future starts.
   const stalePidDir = `${cwd}/stale-pid-review`;
-  fs.mkdirSync(`${stalePidDir}/.edc/scripts`, { recursive: true });
+  fs.mkdirSync(stalePidDir, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: stalePidDir, stdio: "ignore" });
   fs.writeFileSync(`${stalePidDir}/tracked.txt`, "x\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: stalePidDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: stalePidDir, stdio: "ignore" });
-  fs.writeFileSync(`${stalePidDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\necho "Verified: review-HEAD.md"\n`);
-  fs.chmodSync(`${stalePidDir}/.edc/scripts/edc-review.sh`, 0o755);
   fs.mkdirSync(`${stalePidDir}/.git/edc`, { recursive: true });
   fs.writeFileSync(`${stalePidDir}/.git/edc/status`, "status=running\nrun_id=dead\npid=999999\nstarted_at=2000-01-01T00:00:00Z\n");
   const stalePidMessagesBefore = calls.messages.length;
@@ -856,10 +819,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
 
   const foregroundHangPidFile = `${cwd}/foreground-hang.pid`;
   const foregroundHangChildPidFile = `${cwd}/foreground-hang-child.pid`;
+  const foregroundTimeoutMs = 1000;
   process.env.EDC_TEST_FOREGROUND_MODE = "hang";
   process.env.EDC_TEST_FOREGROUND_PID_FILE = foregroundHangPidFile;
   process.env.EDC_TEST_FOREGROUND_CHILD_PID_FILE = foregroundHangChildPidFile;
-  process.env.EDC_FOREGROUND_COMMAND_TIMEOUT_MS = "1000";
+  process.env.EDC_FOREGROUND_COMMAND_TIMEOUT_MS = String(foregroundTimeoutMs);
   const foregroundHangStarted = Date.now();
   await edcCmd.opts.handler("", menuCtx("doctor / validate context"));
   const foregroundHangDuration = Date.now() - foregroundHangStarted;
@@ -873,8 +837,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   const foregroundHangAlive = foregroundHangPids.filter((pid) => {
     try { process.kill(pid, 0); return true; } catch (error) { if (error?.code === "ESRCH") return false; throw error; }
   });
-  if (foregroundHangDuration > 3000 || foregroundHangAlive.length > 0 || !foregroundHangResult.includes("edc doctor failed with exit code 124") || !foregroundHangResult.includes("foreground EDC command timed out")) {
-    console.log("FOREGROUND_TIMEOUT_FAIL:" + JSON.stringify({ duration: foregroundHangDuration, alive: foregroundHangAlive, result: foregroundHangResult }));
+  const foregroundTimeoutBoundMs = foregroundTimeoutMs + BACKGROUND_JOB_TERMINATION_GRACE_MS;
+  if (foregroundHangDuration > foregroundTimeoutBoundMs || foregroundHangAlive.length > 0 || !foregroundHangResult.includes("edc doctor failed with exit code 124") || !foregroundHangResult.includes("foreground EDC command timed out")) {
+    console.log("FOREGROUND_TIMEOUT_FAIL:" + JSON.stringify({ duration: foregroundHangDuration, bound: foregroundTimeoutBoundMs, alive: foregroundHangAlive, result: foregroundHangResult }));
     process.exit(1);
   }
 
@@ -900,15 +865,11 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
 
   // 3i. missing context prompts before auto-build and emits a compact start message.
   const missingDir = `${cwd}/missing-context`;
-  fs.mkdirSync(`${missingDir}/.edc/scripts`, { recursive: true });
+  fs.mkdirSync(missingDir, { recursive: true });
   childProcess.execFileSync("git", ["init"], { cwd: missingDir, stdio: "ignore" });
   fs.writeFileSync(`${missingDir}/tracked.txt`, "x\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: missingDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: missingDir, stdio: "ignore" });
-  fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-args.txt\necho "Consolidated: review-HEAD.md"\necho "Verified: review-HEAD.md"\n`);
-  fs.writeFileSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, `#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" > review-all-args.txt\necho "Review-all complete"\n`);
-  fs.chmodSync(`${missingDir}/.edc/scripts/edc-review.sh`, 0o755);
-  fs.chmodSync(`${missingDir}/.edc/scripts/edc-review-all.sh`, 0o755);
   const missingSelections = ["changes vs default branch", "combined review"];
   const missingCtx = {
     cwd: missingDir,
@@ -1080,8 +1041,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     model: { provider: "test-provider", id: "test-model" },
     ui: { select: async () => "doctor / validate context" },
   });
-  if (!fs.existsSync(`${plainRepo}/.edc/scripts/edc-build.sh`) || !fs.existsSync(`${plainRepo}/.edc/skills/edc-review/SKILL.md`) || !calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
-    console.log("EXECUTION_PREPARED_RUNTIME_FAIL:" + JSON.stringify({ hasScripts: fs.existsSync(`${plainRepo}/.edc/scripts/edc-build.sh`), hasSkill: fs.existsSync(`${plainRepo}/.edc/skills/edc-review/SKILL.md`), message: calls.messages.at(-1) }));
+  if (fs.existsSync(`${plainRepo}/.edc`) || !calls.messages.at(-1)?.content?.includes("doctor args:  agent=pi")) {
+    console.log("EXECUTION_CREATED_REPO_RUNTIME_FAIL:" + JSON.stringify({ hasEdc: fs.existsSync(`${plainRepo}/.edc`), message: calls.messages.at(-1) }));
     process.exit(1);
   }
 
@@ -1104,7 +1065,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     type: "tool_call",
     toolCallId: "bash-edc",
     toolName: "bash",
-    input: { command: "export EDC_AGENT_CLI=pi\nbash .edc/scripts/edc-review.sh --base main", timeout: 1200 },
+    input: { command: "edc security diff main --agent pi", timeout: 1200 },
   };
   await tc.handler(edcBashEvent, fakeCtx);
   if (edcBashEvent.input.timeout < 7200) {
@@ -1115,7 +1076,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     type: "tool_call",
     toolCallId: "bash-edc-absolute",
     toolName: "bash",
-    input: { command: `/opt/homebrew/bin/bash ${cwd}/.edc/scripts/edc-review.sh --base main`, timeout: 1200 },
+    input: { command: `bash $HOME/.edc/scripts/edc-review.sh --base main`, timeout: 1200 },
   };
   await tc.handler(absoluteEdcBashEvent, fakeCtx);
   if (absoluteEdcBashEvent.input.timeout < 7200) {
@@ -1132,6 +1093,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   fs.writeFileSync(`${spawnFailDir}/tracked.txt`, "tracked\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: spawnFailDir });
   childProcess.execFileSync("git", ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"], { cwd: spawnFailDir });
+  // A stale repo runtime decoy must remain ignored even when trusted dispatch cannot spawn.
   fs.mkdirSync(`${spawnFailDir}/.edc/scripts`, { recursive: true });
   fs.writeFileSync(`${spawnFailDir}/.edc/scripts/edc-review-all.sh`, "#!/usr/bin/env bash\necho should-not-run\n");
   fs.chmodSync(`${spawnFailDir}/.edc/scripts/edc-review-all.sh`, 0o755);

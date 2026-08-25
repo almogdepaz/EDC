@@ -38,6 +38,7 @@ case "$mode:$id" in
   timeout:*)
     sleep 30 &
     child=$!
+    printf '%s\n' "$$" > "$WORKER_STATE/runner.pid"
     printf '%s\n' "$child" > "$WORKER_STATE/descendant.pid"
     wait "$child"
     ;;
@@ -151,6 +152,40 @@ else
   cat "$timeout_run/out.log" "$timeout_run/err.log" 2>/dev/null || true
   printf 'rc=%s duration=%s descendant_alive=%s\n' "$timeout_rc" "$duration" "$timeout_descendant_alive"
 fi
+
+# SIGHUP must use the same cancellation path as TERM/INT so detached worker
+# groups do not outlive the pool.
+hup_run="$TMP/hup"
+write_manifest "$hup_run" 1 30 timeout
+WORKER_MODE=timeout WORKER_STATE="$hup_run/state" node "$POOL" --runner "$RUNNER" "$hup_run/tasks.json" >"$hup_run/out.log" 2>"$hup_run/err.log" &
+hup_pool_pid=$!
+for _ in $(seq 1 500); do
+  [ -f "$hup_run/state/descendant.pid" ] && break
+  sleep 0.01
+done
+kill -HUP "$hup_pool_pid"
+wait "$hup_pool_pid"
+hup_rc=$?
+sleep 0.2
+hup_descendant=$(cat "$hup_run/state/descendant.pid" 2>/dev/null || true)
+hup_descendant_alive=0
+if [ -n "$hup_descendant" ] && kill -0 "$hup_descendant" 2>/dev/null; then
+  hup_descendant_alive=1
+fi
+if [ "$hup_rc" -ne 0 ] \
+  && [ "$hup_descendant_alive" -eq 0 ] \
+  && node -e 'const j=require(process.argv[1]); process.exit(j.status === "failed" && j.tasks[0].status === "cancelled" && /SIGHUP/.test(j.reason) ? 0 : 1)' "$hup_run/stage-result.json"; then
+  check "47.5a: SIGHUP cancels the detached worker process group" 1
+else
+  check "47.5a: SIGHUP cancels the detached worker process group" 0
+  cat "$hup_run/out.log" "$hup_run/err.log" "$hup_run/stage-result.json" 2>/dev/null || true
+  printf 'rc=%s descendant=%s descendant_alive=%s\n' "$hup_rc" "${hup_descendant:-missing}" "$hup_descendant_alive"
+fi
+hup_runner=$(cat "$hup_run/state/runner.pid" 2>/dev/null || true)
+case "$hup_runner" in
+  ''|*[!0-9]*) ;;
+  *) kill -KILL -- "-$hup_runner" 2>/dev/null || true ;;
+esac
 
 # A continue policy records failure but lets independent workers finish so the
 # phase coordinator can apply output-specific validation/warning semantics.

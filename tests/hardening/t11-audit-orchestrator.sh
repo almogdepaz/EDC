@@ -163,15 +163,6 @@ setup_repo() {
   echo "lib" > lib.py
   git add src.py lib.py
   git commit -q -m "init"
-  mkdir -p .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-audit/references
-  printf '# Build Context\nedc-build\n' > .edc/skills/edc-build-impl/SKILL.md
-  printf '# Update Context\nedc-update\n' > .edc/skills/edc-update-impl/SKILL.md
-  printf '# Audit Code Quality\nname: edc-audit\n' > .edc/skills/edc-audit/SKILL.md
-  printf '# Scope and Standards\n' > .edc/skills/edc-audit/references/scope-and-standards.md
-  printf '# Smell Baseline\n' > .edc/skills/edc-audit/references/smell-baseline.md
-  printf '# Quality Checks\n' > .edc/skills/edc-audit/references/quality-checks.md
-  printf '# Reporting\n' > .edc/skills/edc-audit/references/reporting.md
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T11/repo" "$ORIG_DIR/plugins/edc" >/dev/null
   if [ "$with_context" = "fresh" ]; then
     mkdir -p edc-context/modules
     head=$(git rev-parse HEAD)

@@ -8,13 +8,9 @@ EDC adds repository architecture maps, agent context, and context-aware code rev
 pi install npm:@sgtbeatdown/edc
 ```
 
-Project-local install for a team repo:
+EDC supports global installs only. Pi's `--local`/`-l` mode is unsupported.
 
-```bash
-pi install npm:@sgtbeatdown/edc -l
-```
-
-Git/source installs still work:
+Git/source installs still work and remain global:
 
 ```bash
 pi install git:github.com/almogdepaz/edc
@@ -29,7 +25,7 @@ pi update npm:@sgtbeatdown/edc
 pi remove npm:@sgtbeatdown/edc
 ```
 
-Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.4`. Project-local installs use `.pi/settings.json`; global installs use `~/.pi/agent/settings.json`.
+Use a pinned git ref when you need reproducible installs, e.g. `pi install git:github.com/almogdepaz/edc@v1.1.4`. Pi records the global package in `~/.pi/agent/settings.json`.
 
 ## Requirements and permissions
 
@@ -37,7 +33,7 @@ Orchestrated pi reviews require:
 
 - `pi`, `git`, and `node` on `PATH`
 - shell access for background build/update/review/delivery-review/quality-review subprocesses
-- write access to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, and `review-*.md`
+- write access to `AGENTS.md`, `edc-context/`, `.git/edc/`, and `review-*.md`, plus the global install location during installation
 
 Permission gates, plan/read-only modes, path guards, sandboxes, and SSH tool replacements may intentionally block or redirect those operations. EDC does not try to bypass them.
 
@@ -107,7 +103,7 @@ Pi exposes only the human-facing EDC methodology skills globally:
 | `edc-audit` | Apply the EDC quality-review methodology directly in chat. |
 | `edc-delivery-review` | Apply the EDC goal/spec delivery + architecture-fit review methodology directly in chat. |
 
-Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are installed under `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension copies runtime scripts/private prompt bundles into a project-local `.edc/` cache only after an explicit `/edc` command invocation, so ordinary Pi session startup in unrelated repos stays quiet and does not create EDC project files.
+Hidden implementation prompt bundles (`edc-module-context-impl`, `edc-build-impl`, `edc-update-impl`) are available from the installed package or `~/.edc/skills` for orchestrator subprocesses, but are not advertised in pi's TUI skill list. The extension validates and executes only its package source or the managed global runtime. It never reads, repairs, creates, or executes repo-local `.edc/`; legacy caches are ignored and can be removed manually.
 
 ## Compatibility with other pi packages
 
@@ -161,7 +157,7 @@ edc mode inject
 |---|---|
 | `bash` not found | Install or restore the system Bash executable on `PATH`. macOS `/bin/bash` 3.2 is supported. |
 | `node: command not found` | Install Node; EDC orchestrators use it for manifest, routing, and stream handling. |
-| `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash`, writes to `AGENTS.md`, `edc-context/`, `.edc/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
+| `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash` or writes to `AGENTS.md`, `edc-context/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
 | Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from default branch** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
 | Background review reports provider websocket/transport failure | The nested pi subprocess lost provider transport. Rerun the job; if it repeats, run `edc update --agent pi` separately or reduce context/update scope. |
 | Wrong model in nested pi subprocesses | EDC forwards the active pi model as `EDC_PI_MODEL` when `ctx.model.provider` and `ctx.model.id` are available. Check the job log for the propagated model and set explicit model env vars only if you need to override it. |

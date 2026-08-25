@@ -408,6 +408,8 @@ auto_mode() {
     edc_result_scope_from_args "$target" ${extra_args[@]+"${extra_args[@]}"}
   fi
 
+  edc_octocode_capability_init
+
   # Gate on freshness; recover (build/update + force-retry) unless the caller
   # explicitly requested a no-refresh run. --no-context-refresh may still use
   # existing context; it just refuses to create/update it. --ignore-context is

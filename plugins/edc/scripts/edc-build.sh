@@ -443,6 +443,7 @@ build_main() {
   fi
 
   edc_require_agent_cli
+  edc_octocode_capability_init
 
   # Decide route in shell (LLM does NOT make this call).
   local route route_rc=0

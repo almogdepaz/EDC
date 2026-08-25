@@ -261,6 +261,7 @@ delivery_main() {
   fi
 
   edc_require_agent_cli
+  edc_octocode_capability_init
 
   if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
     recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \

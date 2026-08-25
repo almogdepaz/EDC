@@ -99,6 +99,13 @@ echo "MOCK ERROR: unrecognized prompt: $prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<MOCK
+#!/usr/bin/env bash
+printf 'probe\n' >> "$TMPDIR_T6/octocode-log"
+[ "\${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 # ── set up a minimal git repo with valid pre-existing context ────────────────
 cd "$TMPDIR_T6"
@@ -167,6 +174,14 @@ if [ ! -f .mock-update-prompt ] || ! grep -q -- "--base $base_head" .mock-update
   exit 1
 fi
 echo "PASS: stale-context recovery uses manifest.sourceCommit for edc-update"
+
+probe_count=0
+[ ! -f "$TMPDIR_T6/octocode-log" ] || probe_count=$(wc -l < "$TMPDIR_T6/octocode-log" | tr -d ' ')
+if [ "$probe_count" -ne 1 ]; then
+  echo "FAIL: stale standalone security review probed Octocode $probe_count times (expected 1)"
+  exit 1
+fi
+echo "PASS: stale standalone security review probes Octocode once"
 
 final=$(ls review-*.md 2>/dev/null | head -1 || true)
 if [ -z "$final" ]; then

@@ -77,6 +77,20 @@ class RegressionAggregationTests(unittest.TestCase):
         self.assertEqual(result["recall"], 0.5)
         self.assertEqual(result["per_cve"], {"CVE-1": 1.0, "CVE-2": 0.0})
 
+    def test_regression_verdicts_follow_shared_current_and_legacy_contract(self):
+        cases = (
+            ("legacy error", "found", "error", {"CVE-1": 0.0}, 0),
+            ("unsupported miss", "verdict", "miss", {}, 1),
+        )
+        for label, field, verdict, expected_scores, expected_errors in cases:
+            with self.subTest(label=label):
+                result = self.aggregate_rows(
+                    ["cve", field],
+                    [{"cve": "CVE-1", field: verdict}],
+                )
+                self.assertEqual(result["per_cve"], expected_scores)
+                self.assertEqual(result["judge_errors"], expected_errors)
+
     def test_current_verdict_and_dual_phase_score_are_supported(self):
         result = self.aggregate_rows(
             ["cve", "verdict", "confidence", "build_verdict", "combined_score"],

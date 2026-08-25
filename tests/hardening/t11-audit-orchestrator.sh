@@ -49,8 +49,10 @@ scenario="valid"
 if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
   module=\$(printf '%s\n' "\$prompt" | grep '^AUDIT_MODULE: ' | head -1 | sed 's/^AUDIT_MODULE: //')
   report_path=\$(printf '%s\n' "\$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
+  capability=\$(printf '%s\n' "\$prompt" | awk -F': ' '/^OCTOCODE_STATUS: /{print \$2}')
   mkdir -p "\$(dirname "\$report_path")"
   printf 'worker:%s\n' "\$module" >> "\$LOG_FILE"
+  printf 'capability:%s:%s\n' "\$module" "\$capability" >> "\$LOG_FILE"
   if [[ "\$prompt" == *"immutable candidate commit"* ]] \
     && [[ "\$prompt" == *"git show"* ]] \
     && [[ "\$prompt" == *"changed gitlink"* ]] \
@@ -136,12 +138,19 @@ echo "MOCK ERROR: unrecognized prompt: \$prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<MOCK
+#!/usr/bin/env bash
+printf 'probe\n' >> "$TMPDIR_T11/octocode-log"
+[ "\${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 # ── helper: set up a minimal git repo + optionally pre-existing context ──────
 setup_repo() {
   local with_context="$1"
   rm -rf "$TMPDIR_T11/repo"
-  rm -f "$TMPDIR_T11/audit-log"
+  rm -f "$TMPDIR_T11/audit-log" "$TMPDIR_T11/octocode-log"
   mkdir -p "$TMPDIR_T11/repo"
   cd "$TMPDIR_T11/repo"
   export GIT_CONFIG_GLOBAL=/dev/null
@@ -213,6 +222,23 @@ if [ "$result" -eq 0 ] && [ -f edc-context/reports/complexity.md ] && [ -f edc-c
   echo "PASS: stale-context recovery → per-module audit + synthesis produced both reports"
 else
   echo "FAIL (11b): stale-context path. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11b2: one immutable Octocode capability state per coordinator run ──────
+setup_repo "fresh"
+echo "valid" > "$TMPDIR_T11/scenario"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+probe_count=$(wc -l < "$TMPDIR_T11/octocode-log" 2>/dev/null | tr -d ' ' || echo 0)
+capabilities=$(grep '^capability:' "$TMPDIR_T11/audit-log" 2>/dev/null | sort || true)
+expected_capabilities=$(printf 'capability:lib:available\ncapability:root:available')
+if [ "$result" -eq 0 ] && [ "$probe_count" -eq 1 ] && [ "$capabilities" = "$expected_capabilities" ]; then
+  echo "PASS: multi-prompt audit probes Octocode once and shares immutable capability state"
+else
+  echo "FAIL (11b2): expected one Octocode probe and identical available state. exit=$result probes=$probe_count"
+  echo "capabilities=$capabilities"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi

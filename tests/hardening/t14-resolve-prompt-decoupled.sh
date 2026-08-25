@@ -55,6 +55,7 @@ OCTOCODE_BIN="$TMP/octocode-bin"
 mkdir -p "$OCTOCODE_BIN"
 cat > "$OCTOCODE_BIN/octocode" <<'MOCK'
 #!/usr/bin/env bash
+[ -z "${OCTOCODE_PROBE_LOG:-}" ] || printf 'probe\n' >> "$OCTOCODE_PROBE_LOG"
 if [ "${OCTOCODE_FAKE_FAIL:-0}" = "1" ]; then
   exit 1
 fi
@@ -237,6 +238,18 @@ if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
   unavailable_contract=0
 fi
 check "broken Octocode CLI emits unavailable fallback state" "$unavailable_contract"
+
+preseeded_probe_log="$TMP/preseeded-probes"
+out=$(EDC_OCTOCODE_CAPABILITY_STATE=available OCTOCODE_PROBE_LOG="$preseeded_probe_log" OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+preseeded_contract=1
+preseeded_probe_count=0
+[ ! -f "$preseeded_probe_log" ] || preseeded_probe_count=$(wc -l < "$preseeded_probe_log" | tr -d ' ')
+[ "$preseeded_probe_count" -eq 1 ] || preseeded_contract=0
+echo "$out" | grep -qF "OCTOCODE_STATUS: unavailable" || preseeded_contract=0
+if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
+  preseeded_contract=0
+fi
+check "caller-preseeded Octocode state is ignored and probed once" "$preseeded_contract"
 
 SECONDS=0
 out=$(OCTOCODE_FAKE_HANG=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)

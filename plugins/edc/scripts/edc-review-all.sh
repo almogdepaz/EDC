@@ -198,6 +198,7 @@ main() {
   trap edc_result_on_exit EXIT
   edc_runtime_preflight_or_exit
   parse_args "$@"
+  edc_octocode_capability_init
 
   local candidate_target="" security_script delivery_script audit_script
   local security_public delivery_public parallel_run_dir parallel_run_id
@@ -239,6 +240,10 @@ main() {
   # Candidate resolution happens before recovery so generated context cannot
   # silently enter the candidate. Recovery completes once before any lens starts.
   prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit 1
+
+  # Child lens coordinators reuse this run's normalized state, then consume the
+  # marker so their workers cannot mistake it for a new top-level run.
+  export EDC_OCTOCODE_CAPABILITY_INHERIT=1
 
   security_script=$(find_phase_script edc-review.sh) || { echo "ERROR: edc-review.sh not found" >&2; exit 2; }
   delivery_script=$(find_phase_script edc-delivery-review.sh) || { echo "ERROR: edc-delivery-review.sh not found" >&2; exit 2; }

@@ -17,6 +17,10 @@ import statistics
 import sys
 from pathlib import Path
 
+BENCHMARK_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BENCHMARK_DIR))
+from scoring_helpers import UnresolvedVerdictError, review_verdict, verdict_to_score
+
 ROOT = Path(__file__).resolve().parent / "results"
 RESULT_FILES = ("build-metrics.tsv", "review-metrics.tsv", "review-results.tsv")
 
@@ -86,11 +90,10 @@ def aggregate(sha: str, repo: str, mode: str | None = None, label: str | None = 
 
     # Recall is verdict-derived. Dual-phase rows carry their weighted score in
     # combined_score; legacy rows use `found`, while current rows use `verdict`.
-    verdict_scores = {"exact": 1.0, "partial": 0.5, "missed": 0.0, "miss": 0.0}
     by_cve: dict[str, list[float]] = {}
     judge_errors = 0
     for row in scores:
-        verdict = (row.get("verdict") or row.get("found") or "").strip()
+        verdict = review_verdict(row).strip()
         build_verdict = (row.get("build_verdict") or "").strip()
         combined = (row.get("combined_score") or "").strip()
         if "judge_error" in (verdict, build_verdict):
@@ -106,10 +109,11 @@ def aggregate(sha: str, repo: str, mode: str | None = None, label: str | None = 
                 judge_errors += 1
                 continue
         else:
-            value = verdict_scores.get(verdict)
-        if value is None:
-            judge_errors += 1
-            continue
+            try:
+                value = verdict_to_score(verdict, context=f"regression result {row.get('cve') or '<unknown>'}")
+            except UnresolvedVerdictError:
+                judge_errors += 1
+                continue
         cve = (row.get("cve") or "").strip()
         if not cve:
             judge_errors += 1

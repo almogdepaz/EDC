@@ -1032,6 +1032,9 @@ _find_skill_for_agent() {
 }
 
 EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
+EDC_OCTOCODE_CAPABILITY_STATE="${EDC_OCTOCODE_CAPABILITY_STATE:-}"
+unset _EDC_OCTOCODE_CAPABILITY_INITIALIZED
+_EDC_OCTOCODE_CAPABILITY_INITIALIZED=0
 
 # _octocode_is_available
 # Capability probe used only by coordinators before source-research prompts.
@@ -1041,10 +1044,38 @@ _octocode_is_available() {
     octocode --version >/dev/null 2>&1
 }
 
-# _emit_octocode_research_guidance
-# Emit explicit per-run capability state without making Octocode a dependency.
-_emit_octocode_research_guidance() {
+# edc_octocode_capability_init
+# Probe once in this process. Only review-all children may inherit a normalized
+# parent state; ordinary coordinators ignore caller-preseeded state.
+edc_octocode_capability_init() {
+  [ "$_EDC_OCTOCODE_CAPABILITY_INITIALIZED" = "1" ] && return 0
+
+  local inherit_state="${EDC_OCTOCODE_CAPABILITY_INHERIT:-0}"
+  unset EDC_OCTOCODE_CAPABILITY_INHERIT
+  if [ "$inherit_state" = "1" ]; then
+    case "$EDC_OCTOCODE_CAPABILITY_STATE" in
+      available|unavailable)
+        _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
+        export EDC_OCTOCODE_CAPABILITY_STATE
+        return 0
+        ;;
+    esac
+  fi
+
   if _octocode_is_available; then
+    EDC_OCTOCODE_CAPABILITY_STATE=available
+  else
+    EDC_OCTOCODE_CAPABILITY_STATE=unavailable
+  fi
+  _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
+  export EDC_OCTOCODE_CAPABILITY_STATE
+}
+
+# _emit_octocode_research_guidance
+# Render the coordinator-initialized per-run state without re-probing.
+_emit_octocode_research_guidance() {
+  edc_octocode_capability_init
+  if [ "$EDC_OCTOCODE_CAPABILITY_STATE" = "available" ]; then
     cat <<'EOF'
 ================================================================================
 OCTOCODE RESEARCH CAPABILITY

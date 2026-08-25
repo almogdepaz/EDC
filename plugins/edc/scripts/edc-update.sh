@@ -147,6 +147,7 @@ update_main() {
   done
 
   edc_require_agent_cli
+  edc_octocode_capability_init
 
   # Preflight: shell decides whether the on-disk state is updateable.
   if ! preflight_check; then

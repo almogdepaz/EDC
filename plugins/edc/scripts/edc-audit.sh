@@ -215,6 +215,7 @@ audit_main() {
   fi
 
   edc_require_agent_cli
+  edc_octocode_capability_init
 
   # Gate on freshness once for standalone review. review-all prepares it before
   # launching all lenses so parallel children must not race recovery.

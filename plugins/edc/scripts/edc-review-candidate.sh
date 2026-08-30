@@ -3,8 +3,12 @@
 # Source only after edc_runtime_preflight_or_exit has validated the runtime.
 
 edc_candidate_is_operational_untracked() {
-  case "$1" in
-    .edc|.edc/*|.edc.install.lock|.edc.install.lock/*|edc-context|edc-context/*|review-*.md|delivery-review-*.md) return 0 ;;
+  local path="$1" context_dir="${EDC_CONTEXT_DIR:-edc-context}"
+  case "$path" in
+    .edc|.edc/*|.edc.install.lock|.edc.install.lock/*|review-*.md|delivery-review-*.md) return 0 ;;
+  esac
+  case "$path" in
+    "$context_dir"|"$context_dir"/*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -25,6 +29,21 @@ edc_candidate_gitlinks() {
     mode=${entry%% *}
     [ "$mode" = 160000 ] || continue
     path=${entry#*$'\t'}
+    printf '%s\0' "$path"
+  done < <(git ls-files --stage -z 2>/dev/null)
+}
+
+edc_candidate_force_addable_tracked() {
+  local entry mode path
+  while IFS= read -r -d '' entry; do
+    mode=${entry%% *}
+    path=${entry#*$'\t'}
+    # `git add` recurses into directories. Keep the deletion recorded by
+    # `git add -u` unless this is a real initialized submodule gitlink.
+    if [ -d "$path" ] && [ ! -L "$path" ] \
+      && { [ "$mode" != 160000 ] || ! edc_candidate_is_initialized_submodule "$path"; }; then
+      continue
+    fi
     printf '%s\0' "$path"
   done < <(git ls-files --stage -z 2>/dev/null)
 }
@@ -104,6 +123,7 @@ edc_candidate_export_full_scope() {
 
 edc_candidate_add_paths_from_nul_file() {
   local index_file="$1" paths_file="$2" path count=0
+  shift 2
   local -a paths=()
   while IFS= read -r -d '' path; do
     # `git add -u` already represented tracked deletions by removing them from
@@ -112,13 +132,13 @@ edc_candidate_add_paths_from_nul_file() {
     paths+=("$path")
     count=$((count + 1))
     if [ "$count" -eq 100 ]; then
-      GIT_INDEX_FILE="$index_file" git add -- "${paths[@]}" || return 1
+      GIT_INDEX_FILE="$index_file" git add "$@" -- "${paths[@]}" || return 1
       paths=()
       count=0
     fi
   done < "$paths_file"
   if [ "$count" -gt 0 ]; then
-    GIT_INDEX_FILE="$index_file" git add -- "${paths[@]}" || return 1
+    GIT_INDEX_FILE="$index_file" git add "$@" -- "${paths[@]}" || return 1
   fi
 }
 
@@ -138,8 +158,15 @@ edc_candidate_snapshot_repo() {
     return 1
   fi
 
-  git ls-files --cached -z > "$paths_file"
-  edc_candidate_selected_untracked >> "$paths_file"
+  edc_candidate_force_addable_tracked > "$paths_file"
+  if ! edc_candidate_add_paths_from_nul_file "$index_file" "$paths_file" --force; then
+    rm -f "$index_file" "$paths_file" "$gitlinks_file"
+    echo "ERROR: could not add every selected path to the review candidate" >&2
+    echo "next step: fix the unreadable path above, then rerun with --include-working-tree" >&2
+    return 1
+  fi
+
+  edc_candidate_selected_untracked > "$paths_file"
   if ! edc_candidate_add_paths_from_nul_file "$index_file" "$paths_file"; then
     rm -f "$index_file" "$paths_file" "$gitlinks_file"
     echo "ERROR: could not add every selected path to the review candidate" >&2

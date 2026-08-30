@@ -398,7 +398,8 @@ TMPDIR_T15H=$(mktemp -d)
     && grep -q 'git show' edc-context/review-tasks/ignore-context.md \
     && grep -q 'mutable working tree' edc-context/review-tasks/ignore-context.md \
     && grep -q 'changed gitlink' edc-context/review-tasks/ignore-context.md \
-    && grep -q 'git -C <submodule-path> diff' edc-context/review-tasks/ignore-context.md; then
+    && grep -q 'git -C <submodule-path> diff' edc-context/review-tasks/ignore-context.md \
+    && grep -Fq "':(top,exclude,literal)edc-context'" edc-context/review-tasks/ignore-context.md; then
     check "15.8d: differential security task pins immutable candidate evidence" 1
   else
     check "15.8d: differential security task pins immutable candidate evidence" 0
@@ -660,6 +661,30 @@ TMPDIR_T15Q=$(mktemp -d)
     cat edc-context/review-tasks/core.md 2>/dev/null || true
   fi
   rm -rf "$TMPDIR_T15Q"
+)
+
+# ── 15.17b: configured context directory remains excluded ────────────────
+TMPDIR_T15R=$(mktemp -d)
+(
+  setup_repo "$TMPDIR_T15R"
+  mkdir -p src
+  echo "source" > src/app.ts
+  git add src/app.ts
+  git commit -q -m "add source"
+
+  out=$(EDC_CONTEXT_DIR='generated-docs' "$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --ignore-context 2>&1)
+  rc=$?
+  task='generated-docs/review-tasks/ignore-context.md'
+  if [ "$rc" -eq 0 ] \
+     && grep -q 'src/app.ts' "$task" \
+     && grep -Fq "':(top,exclude,literal)generated-docs'" "$task"; then
+    check "15.17b: configured context directory remains excluded" 1
+  else
+    check "15.17b: configured context directory remains excluded" 0
+    echo "$out"
+    cat "$task" 2>/dev/null || true
+  fi
+  rm -rf "$TMPDIR_T15R"
 )
 
 # ── 15.18: no committed or dirty tracked changes gives actionable error ───

@@ -100,6 +100,68 @@ prepare_dirty_candidate() {
 
 prepare_plugin
 
+# Tracked context output remains recoverable in the immutable candidate even
+# when Git ignores its parent directory. It is excluded later from review.
+setup_repo
+mkdir -p edc-context
+printf 'tracked original\n' > edc-context/tracked.md
+printf 'deleted original\n' > edc-context/deleted.md
+printf 'tracked vault\n' > vault
+git add edc-context vault
+git commit -q -m 'add tracked context'
+printf 'edc-context/\nvault/\nmalicious/\n' >> .gitignore
+git add .gitignore
+git commit -q -m 'ignore generated context'
+printf 'tracked modified\n' > edc-context/tracked.md
+rm edc-context/deleted.md
+printf 'ignored sibling\n' > edc-context/untracked.md
+rm vault
+mkdir vault
+printf 'ignored secret\n' > vault/secret.txt
+mkdir malicious
+printf 'ignored malicious secret\n' > malicious/secret.txt
+git update-index --add --cacheinfo "160000,$(git rev-parse HEAD),malicious"
+head_before=$(git rev-parse HEAD)
+index_before=$(git write-tree)
+refs_before=$(git show-ref | LC_ALL=C sort)
+worktree_before=$(for path in edc-context/tracked.md edc-context/deleted.md edc-context/untracked.md vault/secret.txt malicious/secret.txt; do if [ -e "$path" ]; then printf '%s=' "$path"; git hash-object "$path"; else printf '%s=<absent>\n' "$path"; fi; done)
+set +e
+candidate_sha=$(bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_snapshot_working_tree "$(git rev-parse HEAD)"' 2>"$TMP/ignored-tracked.err")
+rc=$?
+set -e
+head_after=$(git rev-parse HEAD)
+index_after=$(git write-tree)
+refs_after=$(git show-ref | LC_ALL=C sort)
+worktree_after=$(for path in edc-context/tracked.md edc-context/deleted.md edc-context/untracked.md vault/secret.txt malicious/secret.txt; do if [ -e "$path" ]; then printf '%s=' "$path"; git hash-object "$path"; else printf '%s=<absent>\n' "$path"; fi; done)
+if [ "$rc" -eq 0 ] \
+  && [ "$(git show "$candidate_sha:edc-context/tracked.md")" = 'tracked modified' ] \
+  && ! git cat-file -e "$candidate_sha:edc-context/deleted.md" 2>/dev/null \
+  && ! git cat-file -e "$candidate_sha:edc-context/untracked.md" 2>/dev/null \
+  && ! git cat-file -e "$candidate_sha:vault" 2>/dev/null \
+  && ! git cat-file -e "$candidate_sha:malicious" 2>/dev/null \
+  && [ "$head_after" = "$head_before" ] \
+  && [ "$index_after" = "$index_before" ] \
+  && [ "$refs_after" = "$refs_before" ] \
+  && [ "$worktree_after" = "$worktree_before" ]; then
+  pass 'ignored context includes dirty tracked files only without mutating user state'
+else
+  fail 'ignored context candidate omitted tracked dirt, included ignored untracked content, or mutated user state' "rc=$rc candidate=$candidate_sha\n$(cat "$TMP/ignored-tracked.err")"
+fi
+
+# Untracked files in a configured context directory remain operational output.
+setup_repo
+mkdir -p generated-docs
+printf 'generated\n' > generated-docs/index.md
+set +e
+candidate_sha=$(EDC_CONTEXT_DIR='generated-docs' bash -c 'source .edc/scripts/edc-review-candidate.sh; edc_candidate_snapshot_working_tree "$(git rev-parse HEAD)"' 2>"$TMP/configured-context.err")
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] && ! git cat-file -e "$candidate_sha:generated-docs/index.md" 2>/dev/null; then
+  pass 'configured context directory excludes untracked generated files'
+else
+  fail 'configured context directory entered the candidate' "rc=$rc candidate=$candidate_sha\n$(cat "$TMP/configured-context.err")"
+fi
+
 # Dirty state without a policy must stop before any phase starts.
 setup_repo
 prepare_dirty_candidate

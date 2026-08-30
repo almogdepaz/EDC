@@ -55,6 +55,9 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
     && [[ "\$prompt" == *"git -C <submodule-path> diff"* ]]; then
     printf 'candidate-contract:%s\n' "\$module" >> "\$LOG_FILE"
   fi
+  if [[ "\$prompt" == *"':(top,exclude,literal)edc-context'"* ]]; then
+    printf 'context-excluded:%s\n' "\$module" >> "\$LOG_FILE"
+  fi
   if [ "\${AUDIT_PARALLEL_PROBE:-0}" = "1" ]; then
     mkdir -p "$TMPDIR_T11/active"
     : > "$TMPDIR_T11/active/\$module"
@@ -303,6 +306,61 @@ else
   echo "FAIL (11e2): ignored lib.py still selected an audit module. exit=$result"
   echo "workers=$workers"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11e2b: generated-context exclusion preserves .edcignore loading ────────
+setup_repo "fresh"
+base_ref=$(git rev-parse HEAD)
+printf 'src changed\n' > src.py
+printf 'lib changed\n' > lib.py
+printf 'lib.py\n' > .edcignore
+git add src.py lib.py
+echo "valid" > "$TMPDIR_T11/scenario"
+result=0
+out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1) || result=$?
+workers=$(grep '^worker:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)
+if [ "$result" -eq 0 ] && [ "$workers" = "worker:root" ]; then
+  echo "PASS: quality-review context exclusion preserves .edcignore filtering"
+else
+  echo "FAIL (11e2b): context exclusion suppressed .edcignore. exit=$result workers=$workers"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11e3: generated context is never differential audit evidence ───────────
+setup_repo "fresh"
+base_ref=$(git rev-parse HEAD)
+printf 'mixed source\n' > src.py
+printf '\ncontext refresh\n' >> edc-context/index.md
+git add src.py edc-context
+echo "valid" > "$TMPDIR_T11/scenario"
+result=0
+mixed_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1) || result=$?
+mixed_workers=$(grep '^worker:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)
+mixed_context_contract=$(grep '^context-excluded:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)
+setup_repo "fresh"
+base_ref=$(git rev-parse HEAD)
+printf '\ncontext only refresh\n' >> edc-context/index.md
+git add edc-context
+echo "valid" > "$TMPDIR_T11/scenario"
+set +e
+context_only_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1)
+context_only_rc=$?
+set -e
+context_only_workers=$(grep '^worker:' "$TMPDIR_T11/audit-log" 2>/dev/null || true)
+if [ "$result" -eq 0 ] \
+  && [ "$mixed_workers" = 'worker:root' ] \
+  && [ "$mixed_context_contract" = 'context-excluded:root' ] \
+  && [ "$context_only_rc" -ne 0 ] \
+  && [ -z "$context_only_workers" ] \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.reasonCode === "no-reviewable-files" ? 0 : 1)'; then
+  echo "PASS: quality-review excludes generated context from mixed and context-only differential scope"
+else
+  echo "FAIL (11e3): quality-review treated generated context as changed evidence. mixed_exit=$result context_only_exit=$context_only_rc"
+  echo "mixed_workers=$mixed_workers context_contract=$mixed_context_contract context_only_workers=$context_only_workers"
+  echo "--- mixed output ---"; echo "$mixed_out"
+  echo "--- context-only output ---"; echo "$context_only_out"; echo "--- end ---"
   exit 1
 fi
 

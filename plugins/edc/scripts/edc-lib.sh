@@ -279,6 +279,30 @@ edc_filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
+edc_filter_context_files() {
+  local files="$1" file
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    case "$file" in
+      "$EDC_CONTEXT_DIR"|"$EDC_CONTEXT_DIR"/*) continue ;;
+    esac
+    printf '%s\n' "$file"
+  done <<< "$files"
+}
+
+edc_context_exclude_pathspec() {
+  printf '%s%s' ':(top,exclude,literal)' "$EDC_CONTEXT_DIR"
+}
+
+edc_diff_reviewable_files() {
+  local base="$1" target="$2" context_exclude_pathspec
+  context_exclude_pathspec=$(edc_context_exclude_pathspec)
+  git diff -z --name-only --diff-filter=ACDMRTUXB "$base...$target" \
+    -- . "$context_exclude_pathspec" 2>/dev/null \
+    | tr '\0' '\n' \
+    | sed '/^$/d'
+}
+
 edc_result_on_exit() {
   local rc=$?
   if [ "${EDC_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then

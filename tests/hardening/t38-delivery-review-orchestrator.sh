@@ -109,6 +109,103 @@ else
 fi
 unset EDC_REVIEW_MODEL
 
+# Mixed differential scope reviews source but never treats generated context as
+# changed evidence; context-only scope must stop before spawning a worker.
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+base_ref=$(git rev-parse HEAD)
+printf 'mixed source\n' > src/app.ts
+printf '\ncontext refresh\n' >> edc-context/index.md
+git add src/app.ts edc-context
+rm -f "$TMPDIR_T38/last-prompt"
+result=0
+mixed_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1) || result=$?
+cp "$TMPDIR_T38/last-prompt" "$TMPDIR_T38/mixed-prompt" 2>/dev/null || true
+reviewable_files=$(awk '/^DELIVERY_REVIEWABLE_FILES:/{capture=1; next} capture && /^$/{exit} capture' "$TMPDIR_T38/mixed-prompt" 2>/dev/null || true)
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+base_ref=$(git rev-parse HEAD)
+printf '\ncontext only refresh\n' >> edc-context/index.md
+git add edc-context
+rm -f "$TMPDIR_T38/last-prompt"
+set +e
+context_only_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1)
+context_only_rc=$?
+set -e
+if [ "$result" -eq 0 ] \
+  && [ "$reviewable_files" = '- src/app.ts' ] \
+  && grep -Fq "':(top,exclude,literal)edc-context'" "$TMPDIR_T38/mixed-prompt" \
+  && [ "$context_only_rc" -ne 0 ] \
+  && [ ! -f "$TMPDIR_T38/last-prompt" ] \
+  && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.reasonCode === "no-reviewable-files" ? 0 : 1)'; then
+  echo "PASS: delivery-review excludes generated context from mixed and context-only differential scope"
+else
+  echo "FAIL: delivery-review treated generated context as changed evidence. mixed_exit=$result context_only_exit=$context_only_rc"
+  echo "reviewable_files=$reviewable_files"
+  echo "--- mixed output ---"; echo "$mixed_out"
+  echo "--- context-only output ---"; echo "$context_only_out"; echo "--- end ---"
+  exit 1
+fi
+
+# The authoritative delivery file list must apply .edcignore and parsed
+# --ignore patterns, not merely pass them to context recovery.
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+printf 'src/ignored.ts\n' > .edcignore
+git add .edcignore
+git commit -q -m 'add delivery ignore'
+head=$(git rev-parse HEAD)
+node -e 'const fs=require("fs"); const path="edc-context/manifest.json"; const value=JSON.parse(fs.readFileSync(path,"utf8")); value.sourceCommit=process.argv[1]; fs.writeFileSync(path, `${JSON.stringify(value)}\n`)' "$head"
+base_ref=$head
+printf 'kept change\n' > src/app.ts
+printf 'ignored change\n' > src/ignored.ts
+rm -f "$TMPDIR_T38/last-prompt"
+result=0
+file_ignore_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1) || result=$?
+file_ignore_reviewable=$(awk '/^DELIVERY_REVIEWABLE_FILES:/{capture=1; next} capture && /^$/{exit} capture' "$TMPDIR_T38/last-prompt" 2>/dev/null || true)
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+base_ref=$(git rev-parse HEAD)
+printf 'kept change\n' > src/app.ts
+printf 'ignored change\n' > src/ignored.ts
+rm -f "$TMPDIR_T38/last-prompt"
+cli_result=0
+cli_ignore_out=$(bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree --ignore 'src/ignored.ts' 2>&1) || cli_result=$?
+cli_ignore_reviewable=$(awk '/^DELIVERY_REVIEWABLE_FILES:/{capture=1; next} capture && /^$/{exit} capture' "$TMPDIR_T38/last-prompt" 2>/dev/null || true)
+if [ "$result" -eq 0 ] && [ "$file_ignore_reviewable" = '- src/app.ts' ] \
+  && [ "$cli_result" -eq 0 ] && [ "$cli_ignore_reviewable" = '- src/app.ts' ]; then
+  echo "PASS: delivery-review applies .edcignore and --ignore to reviewable evidence"
+else
+  echo "FAIL: delivery-review ignored filters did not constrain reviewable evidence"
+  echo "file_exit=$result file_reviewable=$file_ignore_reviewable"
+  echo "cli_exit=$cli_result cli_reviewable=$cli_ignore_reviewable"
+  echo "--- file ignore output ---"; echo "$file_ignore_out"
+  echo "--- cli ignore output ---"; echo "$cli_ignore_out"; echo "--- end ---"
+  exit 1
+fi
+
+# The configured context directory is excluded independently of its name.
+setup_repo
+echo valid > "$TMPDIR_T38/scenario"
+mv edc-context generated-docs
+base_ref=$(git rev-parse HEAD)
+printf 'changed source\n' > src/app.ts
+printf '\ncontext refresh\n' >> generated-docs/index.md
+rm -f "$TMPDIR_T38/last-prompt"
+result=0
+configured_out=$(EDC_CONTEXT_DIR='generated-docs' bash "$SCRIPT" HEAD --base "$base_ref" --include-working-tree 2>&1) || result=$?
+configured_reviewable=$(awk '/^DELIVERY_REVIEWABLE_FILES:/{capture=1; next} capture && /^$/{exit} capture' "$TMPDIR_T38/last-prompt" 2>/dev/null || true)
+if [ "$result" -eq 0 ] \
+  && [ "$configured_reviewable" = '- src/app.ts' ] \
+  && grep -Fq "':(top,exclude,literal)generated-docs'" "$TMPDIR_T38/last-prompt"; then
+  echo "PASS: delivery-review excludes the configured context directory"
+else
+  echo "FAIL: delivery-review included the configured context directory. exit=$result"
+  echo "reviewable_files=$configured_reviewable"
+  echo "$configured_out"
+  exit 1
+fi
+
 setup_repo
 echo valid > "$TMPDIR_T38/scenario"
 printf 'dirty\n' >> src/app.ts

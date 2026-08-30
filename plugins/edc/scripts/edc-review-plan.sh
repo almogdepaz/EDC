@@ -10,6 +10,8 @@ build_mode_impl() {
   local context_available=1
   local full_scope=0 policy=""
   local candidate_evidence_contract="Full review: inspect the repository source directly."
+  local context_exclude_pathspec
+  context_exclude_pathspec=$(edc_context_exclude_pathspec)
   local -a ignore_patterns=()
 
   while [[ $# -gt 0 ]]; do
@@ -60,13 +62,13 @@ build_mode_impl() {
     target=$(cat "$candidate_file")
     rm -f "$candidate_file"
     evidence_base="${baseline:-${target}^}"
-    candidate_evidence_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${evidence_base}...${target}\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
+    candidate_evidence_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${evidence_base}...${target} -- . '${context_exclude_pathspec}'\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Paths under \`${EDC_CONTEXT_DIR}/\` are generated architecture input, not changed review evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
   elif [ "$candidate_pre_resolved" -ne 1 ] && [ "$full_scope" -ne 1 ]; then
     edc_candidate_resolve_external "$target" "$baseline" "$policy" || exit $?
     candidate_evidence_contract="The external target/diff named above is the sole differential authority. Do not incorporate local working-tree changes into the review."
   elif [ "$full_scope" -ne 1 ] && git rev-parse --verify "${target}^{commit}" >/dev/null 2>&1; then
     evidence_base="${baseline:-${target}^}"
-    candidate_evidence_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${evidence_base}...${target}\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
+    candidate_evidence_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${evidence_base}...${target} -- . '${context_exclude_pathspec}'\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Paths under \`${EDC_CONTEXT_DIR}/\` are generated architecture input, not changed review evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
   elif [ "$full_scope" -ne 1 ]; then
     candidate_evidence_contract="The external target/diff named above is the sole differential authority. Do not incorporate local working-tree changes into the review."
   fi
@@ -149,7 +151,7 @@ build_mode_impl() {
     fi
   else
     local base="${baseline:-${target}^}"
-    files=$(git diff -z "${base}...${target}" --name-only | tr '\0' '\n')
+    files=$(edc_diff_reviewable_files "$base" "$target")
   fi
 
   if [ -z "$files" ]; then
@@ -167,7 +169,8 @@ build_mode_impl() {
   # them would make the tool eat its own tail (review the context dir,
   # $EDC_REVIEW_TASKS_DIR/ - itself under $EDC_CONTEXT_DIR/ - or prior
   # review-*.md files as if they were source).
-  files=$(echo "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\.md$)" || true)
+  files=$(edc_filter_context_files "$files")
+  files=$(printf '%s\n' "$files" | grep -Ev '^review-[^/]+\.md$' || true)
   files=$(edc_filter_ignored_files "$files" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
 
   if [ -z "$files" ]; then

@@ -62,7 +62,7 @@ manifest_audit_modules() {
 
 changed_files_for_audit_scope() {
   local target="$1" base="$2"
-  git diff --name-only --diff-filter=ACDMRTUXB "$base...$target" 2>/dev/null | sed '/^$/d'
+  edc_diff_reviewable_files "$base" "$target"
 }
 
 manifest_audit_modules_for_files() {
@@ -92,8 +92,10 @@ assert_audit_report_pair_valid() {
 build_audit_worker_prompt() {
   local module="$1" module_doc="$2" report_path="$3"
   local candidate_contract="Full audit: inspect the repository source directly."
+  local context_exclude_pathspec
+  context_exclude_pathspec=$(edc_context_exclude_pathspec)
   if [ -n "${target:-}" ]; then
-    candidate_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${base}...${target}\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
+    candidate_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${base}...${target} -- . '${context_exclude_pathspec}'\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Paths under \`${EDC_CONTEXT_DIR}/\` are generated architecture input, not changed review evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
   fi
   cat <<EOF
 AUDIT WORKER TASK

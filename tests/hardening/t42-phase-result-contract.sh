@@ -204,7 +204,45 @@ case "$RECOVERY_ARGS_MODE" in
 esac
 EOS
   chmod +x "$script"
-  TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
+  local confirmation="${6:-}"
+  if [ -n "$confirmation" ]; then
+    TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" python3 - "$script" "$confirmation" <<'PY'
+import os
+import pty
+import select
+import signal
+import sys
+
+script, confirmation = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script])
+
+output = b""
+sent_confirmation = False
+while True:
+    ready, _, _ = select.select([fd], [], [], 10)
+    if not ready:
+        os.kill(pid, signal.SIGKILL)
+        _, status = os.waitpid(pid, 0)
+        sys.stdout.buffer.write(output)
+        raise SystemExit(124)
+    try:
+        chunk = os.read(fd, 4096)
+    except OSError:
+        chunk = b""
+    if not chunk:
+        _, status = os.waitpid(pid, 0)
+        sys.stdout.buffer.write(output)
+        raise SystemExit(os.waitstatus_to_exitcode(status))
+    output += chunk
+    if b"Type rebuild to continue" in output and not sent_confirmation:
+        os.write(fd, confirmation.encode("utf-8") + b"\n")
+        sent_confirmation = True
+PY
+  else
+    TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
+  fi
 }
 
 default_repo="$TMP/default-repo"
@@ -290,12 +328,11 @@ fi
 
 unrelated_tree=$(git -C "$stale_repo" mktree < /dev/null)
 unrelated_source=$(printf 'unrelated\n' | git -C "$stale_repo" commit-tree "$unrelated_tree")
-for source_case in missing invalid symbolic nonancestor; do
+for source_case in missing invalid symbolic; do
   case "$source_case" in
     missing) unsafe_source="" ;;
     invalid) unsafe_source="not-a-commit" ;;
     symbolic) unsafe_source="HEAD~1" ;;
-    nonancestor) unsafe_source="$unrelated_source" ;;
   esac
   unsafe_spawn_log="$TMP/$source_case-spawns.log"
   if ! unsafe_output=$(run_stale_recovery "$stale_repo" "$unsafe_source" build-only-succeeds "$unsafe_spawn_log"); then
@@ -313,6 +350,63 @@ for source_case in missing invalid symbolic nonancestor; do
     exit 1
   fi
 done
+
+divergent_spawn_log="$TMP/nonancestor-spawns.log"
+set +e
+divergent_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$divergent_spawn_log")
+divergent_rc=$?
+set -e
+divergent_head=$(git -C "$stale_repo" rev-parse HEAD)
+if grep -F "$unrelated_source" <<< "$divergent_output" >/dev/null \
+  && grep -F "$divergent_head" <<< "$divergent_output" >/dev/null \
+  && grep -F 'consequence:' <<< "$divergent_output" >/dev/null \
+  && grep -F 'next step:' <<< "$divergent_output" >/dev/null; then
+  divergent_message_valid=1
+else
+  divergent_message_valid=0
+fi
+if [ "$divergent_rc" -ne 0 ] && [ ! -s "$divergent_spawn_log" ] && [ "$divergent_message_valid" -eq 1 ]; then
+  echo "PASS: non-interactive divergent context fails without mutation or model spawn"
+else
+  echo "FAIL: non-interactive divergent context should require an explicit rebuild"
+  printf '%s\n' "$divergent_output"
+  cat "$divergent_spawn_log" 2>/dev/null || true
+  exit 1
+fi
+
+interactive_spawn_log="$TMP/nonancestor-interactive-spawns.log"
+if interactive_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$interactive_spawn_log" review-base rebuild); then
+  if grep -Fq 'Type rebuild to continue' <<< "$interactive_output" \
+    && grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$interactive_spawn_log" \
+    && [ "$(wc -l < "$interactive_spawn_log" | tr -d ' ')" -eq 1 ]; then
+    echo "PASS: interactive divergent context requires and accepts rebuild confirmation"
+  else
+    echo "FAIL: interactive divergent context did not require the expected confirmation"
+    printf '%s\n' "$interactive_output"
+    cat "$interactive_spawn_log"
+    exit 1
+  fi
+else
+  echo "FAIL: confirmed interactive divergent context did not rebuild"
+  printf '%s\n' "$interactive_output"
+  exit 1
+fi
+
+cancelled_spawn_log="$TMP/nonancestor-cancelled-spawns.log"
+set +e
+cancelled_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$cancelled_spawn_log" review-base cancel)
+cancelled_rc=$?
+set -e
+if [ "$cancelled_rc" -ne 0 ] \
+  && [ ! -s "$cancelled_spawn_log" ] \
+  && grep -F 'Context recovery cancelled' <<< "$cancelled_output" >/dev/null; then
+  echo "PASS: interactive divergent context cancels without a model spawn"
+else
+  echo "FAIL: cancelled interactive divergent context should not rebuild"
+  printf '%s\n' "$cancelled_output"
+  cat "$cancelled_spawn_log" 2>/dev/null || true
+  exit 1
+fi
 
 repo="$TMP/repo"
 setup_repo "$repo"

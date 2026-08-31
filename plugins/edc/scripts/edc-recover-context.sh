@@ -7,10 +7,12 @@
 #   1. If context already fresh (via assert_context_fresh) → return 0 immediately.
 #   2. Otherwise classify state: MISSING (no manifest / no index.md / structureless)
 #      vs STALE (manifest sourceCommit != HEAD).
-#   3. Clean-slate any v1 / partial-v2 leftovers.
-#   4. Spawn build (for MISSING) or update (for STALE) via edc_spawn.
-#   5. Re-check freshness. If still not fresh, wipe + force-rebuild once.
-#   6. Re-check. Return 0 on success, 1 with a copy-pasteable hint on failure.
+#   3. Refuse automatic recovery when a valid sourceCommit diverges from HEAD;
+#      an interactive operator must explicitly confirm the model-backed rebuild.
+#   4. Clean-slate any v1 / partial-v2 leftovers.
+#   5. Spawn build (for MISSING) or update (for STALE) via edc_spawn.
+#   6. Re-check freshness. If still not fresh, wipe + force-rebuild once.
+#   7. Re-check. Return 0 on success, 1 with a copy-pasteable hint on failure.
 #
 # Caller contract:
 #   - EDC_AGENT_CLI, edc_spawn, assert_context_fresh, run_with_timeout,
@@ -80,6 +82,39 @@ _edc_split_recovery_args() {
   if [ "$seen_sep" -eq 0 ]; then
     # No separator: same args go to both phases.
     _edc_update_args=(${_edc_build_args[@]+"${_edc_build_args[@]}"})
+  fi
+}
+
+_edc_divergent_context_commits() {
+  local source_commit canonical_commit head
+  source_commit=$(read_manifest_source_commit 2>/dev/null || true)
+  [ -n "$source_commit" ] || return 1
+  case "$source_commit" in
+    -*) return 1 ;;
+  esac
+  canonical_commit=$(git rev-parse --verify "${source_commit}^{commit}" 2>/dev/null) || return 1
+  [ "$source_commit" = "$canonical_commit" ] || return 1
+  head=$(git rev-parse --verify HEAD 2>/dev/null) || return 1
+  git merge-base --is-ancestor "$canonical_commit" "$head" 2>/dev/null && return 1
+  printf '%s %s\n' "$canonical_commit" "$head"
+}
+
+_edc_confirm_divergent_context_rebuild() {
+  local source_commit="$1" head="$2" confirmation
+  echo "ERROR: context sourceCommit $source_commit is not an ancestor of HEAD $head." >&2
+  echo "reason: this context belongs to divergent history and will not be used as review evidence." >&2
+  echo "consequence: continuing requires a full model-backed rebuild, which may take time and consume model quota." >&2
+
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    echo "next step: run edc build --agent $EDC_AGENT_CLI --force explicitly, then retry this command." >&2
+    return 1
+  fi
+
+  printf 'Type rebuild to continue, or press Enter to cancel: ' >&2
+  IFS= read -r confirmation || confirmation=""
+  if [ "$confirmation" != "rebuild" ]; then
+    echo "Context recovery cancelled; divergent context was left unchanged." >&2
+    return 1
   fi
 }
 
@@ -166,8 +201,17 @@ recover_context_if_needed() {
 
   _edc_split_recovery_args "$@"
 
-  local state spawn_rc=0
+  local state spawn_rc=0 divergent_context divergent_source divergent_head
   state=$(_edc_classify_context_state)
+
+  if [ "$state" = "STALE" ]; then
+    divergent_context=$(_edc_divergent_context_commits || true)
+    if [ -n "$divergent_context" ]; then
+      divergent_source=${divergent_context%% *}
+      divergent_head=${divergent_context#* }
+      _edc_confirm_divergent_context_rebuild "$divergent_source" "$divergent_head" || return 1
+    fi
+  fi
 
   # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
   # state and route to update by mistake.

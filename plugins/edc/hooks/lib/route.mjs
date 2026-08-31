@@ -10,12 +10,16 @@
  */
 
 import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  openSync,
   readFileSync,
+  realpathSync,
+  statSync,
   writeFileSync,
-  existsSync,
 } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { isAbsolute, join, relative, resolve, sep } from "path";
 import { tmpdir } from "os";
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
@@ -25,43 +29,13 @@ import {
   EDC_INDEX_REL,
   EDC_MODULES_DIR_REL,
 } from "./paths.mjs";
-import { installRuntime } from "./runtime-manifest.mjs";
-
-// --- plugin layout ---
-
-/**
- * Resolve the plugin root (directory containing scripts/, hooks/, skills/).
- * `metaUrl` is `import.meta.url` of the importing file under hooks/.
- * Falls back to env override when called from outside the plugin tree
- * (e.g. the pi extension shipped from repo root).
- */
-export function resolvePluginRoot(metaUrl) {
-  if (process.env.EDC_PLUGIN_ROOT) return process.env.EDC_PLUGIN_ROOT;
-  // metaUrl points at .../hooks/lib/route.mjs OR .../hooks/<file>.mjs
-  // Walk up until we find the dir containing scripts/ + skills/.
-  let dir = dirname(fileURLToPath(metaUrl));
-  for (let i = 0; i < 6; i++) {
-    if (
-      existsSync(join(dir, "scripts", "edc-review.sh")) &&
-      existsSync(join(dir, "skills"))
-    ) {
-      return dir;
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  // last-resort: assume two-up from this file
-  return dirname(dirname(fileURLToPath(metaUrl)));
-}
-
 // --- manifest ---
 
 function loadManifest(projectRoot) {
-  const manifestPath = join(projectRoot, EDC_MANIFEST_REL);
-  if (!existsSync(manifestPath)) return null;
+  const manifestContent = readContainedRegularFile(projectRoot, EDC_CONTEXT_DIR, EDC_MANIFEST_REL);
+  if (manifestContent === null) return null;
   try {
-    return JSON.parse(readFileSync(manifestPath, "utf-8"));
+    return JSON.parse(manifestContent);
   } catch {
     return null;
   }
@@ -91,15 +65,10 @@ export function getContextFreshness(projectRoot) {
   const manifest = loadManifest(projectRoot);
   if (!manifest) return { state: "missing", reason: "manifest" };
 
-  const indexPath = join(projectRoot, EDC_INDEX_REL);
-  if (!existsSync(indexPath)) return { state: "missing", reason: "index" };
-
-  try {
-    if (!/^##/m.test(readFileSync(indexPath, "utf-8"))) {
-      return { state: "missing", reason: "index-structure" };
-    }
-  } catch {
-    return { state: "missing", reason: "index" };
+  const indexContent = readContainedRegularFile(projectRoot, EDC_CONTEXT_DIR, EDC_INDEX_REL);
+  if (indexContent === null) return { state: "missing", reason: "index" };
+  if (!/^##/m.test(indexContent)) {
+    return { state: "missing", reason: "index-structure" };
   }
 
   let headCommit;
@@ -176,6 +145,22 @@ export function normalizePath(p, projectRoot) {
 
 // --- routing ---
 
+const MAX_GLOB_DIAGNOSTIC_CHARS = 200;
+
+function formatGlobPatternForDiagnostic(pattern) {
+  const text = String(pattern);
+  const bounded = text.length > MAX_GLOB_DIAGNOSTIC_CHARS ? `${text.slice(0, MAX_GLOB_DIAGNOSTIC_CHARS)}…` : text;
+  return JSON.stringify(bounded);
+}
+
+export class InvalidGlobPatternError extends Error {
+  constructor(pattern, cause) {
+    super(`invalid glob pattern ${formatGlobPatternForDiagnostic(pattern)}`, { cause });
+    this.name = "InvalidGlobPatternError";
+    this.pattern = String(pattern);
+  }
+}
+
 /**
  * Convert an EDC manifest glob pattern into a RegExp. Supports `*` (no slash),
  * `**` (any), `?` (single non-slash),
@@ -209,7 +194,22 @@ function globToRegex(glob) {
     }
   }
   re += "$";
-  return new RegExp(re);
+  try {
+    return new RegExp(re);
+  } catch (error) {
+    throw new InvalidGlobPatternError(glob, error);
+  }
+}
+
+export function validateClassifierGlobs(manifest, ignorePatterns = []) {
+  for (const pattern of ignorePatterns) globToRegex(pattern);
+  for (const mod of manifest?.modules || []) {
+    for (const pattern of mod?.match?.globs || []) globToRegex(pattern);
+  }
+  for (const entry of manifest?.contextless?.entries || []) {
+    for (const pattern of entry?.globs || []) globToRegex(pattern);
+  }
+  for (const pattern of manifest?.unmapped?.allowedGlobs || []) globToRegex(pattern);
 }
 
 function pathMatchesPattern(filePath, pattern) {
@@ -338,7 +338,60 @@ export function routeFileSync(manifest, filePath) {
 function moduleDocPath(manifest, moduleName) {
   const mod = (manifest.modules || []).find((m) => m.name === moduleName);
   if (!mod) return null;
-  return mod.doc || `${EDC_MODULES_DIR_REL}/${moduleName}.md`;
+  return Object.prototype.hasOwnProperty.call(mod, "doc")
+    ? mod.doc
+    : `${EDC_MODULES_DIR_REL}/${moduleName}.md`;
+}
+
+function isPathInside(root, candidate) {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function readContainedRegularFile(projectRoot, containmentRootRel, fileRel) {
+  let fd;
+  try {
+    const physicalProjectRoot = realpathSync(projectRoot);
+    const expectedContainmentRoot = resolve(physicalProjectRoot, containmentRootRel);
+    const physicalContainmentRoot = realpathSync(join(projectRoot, containmentRootRel));
+    if (physicalContainmentRoot !== expectedContainmentRoot) return null;
+
+    const declaredFilePath = resolve(projectRoot, fileRel);
+    const physicalFilePath = realpathSync(declaredFilePath);
+    if (!isPathInside(physicalContainmentRoot, physicalFilePath)) return null;
+
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    fd = openSync(physicalFilePath, fsConstants.O_RDONLY | noFollow);
+    const openedStat = fstatSync(fd);
+    if (!openedStat.isFile()) return null;
+
+    const freshPhysicalFilePath = realpathSync(declaredFilePath);
+    if (!isPathInside(physicalContainmentRoot, freshPhysicalFilePath)) return null;
+    const declaredStat = statSync(declaredFilePath);
+    if (declaredStat.dev !== openedStat.dev || declaredStat.ino !== openedStat.ino) return null;
+
+    return readFileSync(fd, "utf-8");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best effort: the descriptor may already have been closed after an I/O error.
+      }
+    }
+  }
+}
+
+function readModuleDoc(projectRoot, docRel) {
+  if (typeof docRel !== "string"
+    || isAbsolute(docRel)
+    || !docRel.startsWith(`${EDC_MODULES_DIR_REL}/`)
+    || docRel.split(/[\\/]/).includes("..")) {
+    return null;
+  }
+  return readContainedRegularFile(projectRoot, EDC_MODULES_DIR_REL, docRel);
 }
 
 // --- dedup ---
@@ -379,32 +432,6 @@ function isDuplicate(sessionId, moduleName) {
   return false;
 }
 
-// --- project-local runtime install ---
-
-function isEdcProject(projectRoot) {
-  return (
-    existsSync(join(projectRoot, ".git")) ||
-    existsSync(join(projectRoot, EDC_MANIFEST_REL))
-  );
-}
-
-/**
- * Copy runtime scripts and private prompt bundles into <projectRoot>/.edc/ if
- * missing or stale. Idempotent. Best-effort (logs warnings, never throws).
- *
- * The project-local .edc/skills tree is intentionally NOT a pi skill location;
- * it is private prompt material consumed by edc-lib.sh in spawned subprocesses.
- */
-export function installOrchestratorScript(projectRoot, pluginRoot) {
-  if (!isEdcProject(projectRoot)) return;
-
-  try {
-    installRuntime(projectRoot, pluginRoot);
-  } catch (err) {
-    process.stderr.write(`[edc] WARNING: could not install project runtime: ${err.message}\n`);
-  }
-}
-
 // --- composite helper for session_start ---
 
 /**
@@ -416,14 +443,17 @@ export function installOrchestratorScript(projectRoot, pluginRoot) {
  */
 export function buildSessionStartContent(projectRoot) {
   const manifest = loadManifest(projectRoot);
-  const indexPath = join(projectRoot, EDC_INDEX_REL);
 
   if (!manifest) {
     return { mode: "no-context", content: "" };
   }
 
-  if (manifest.policy?.defaultMode === "advisory") {
+  const defaultMode = manifest.policy?.defaultMode;
+  if (defaultMode === "advisory") {
     return { mode: "advisory", content: "" };
+  }
+  if (defaultMode !== "inject") {
+    return { mode: "no-context", content: "" };
   }
 
   const parts = [];
@@ -438,13 +468,8 @@ export function buildSessionStartContent(projectRoot) {
       ].join("\n"),
     );
   }
-  if (existsSync(indexPath)) {
-    try {
-      parts.push(readFileSync(indexPath, "utf-8"));
-    } catch {
-      // file disappeared between check and read
-    }
-  }
+  const indexContent = readContainedRegularFile(projectRoot, EDC_CONTEXT_DIR, EDC_INDEX_REL);
+  if (indexContent !== null) parts.push(indexContent);
   return { mode: "inject", content: parts.join("\n\n") };
 }
 
@@ -462,36 +487,37 @@ export function buildToolCallInjection({
 }) {
   const manifest = loadManifest(projectRoot);
   if (!manifest) return null;
-  if (manifest.policy?.defaultMode === "advisory") return null;
+  if (manifest.policy?.defaultMode !== "inject") return null;
 
   const filePaths = extractFilePaths(toolName, toolInput);
   if (filePaths.length === 0) return null;
 
   const seen = new Set();
+  const injections = [];
   for (const fp of filePaths) {
     const normalized = normalizePath(fp, projectRoot);
     const moduleName = routeFileSync(manifest, normalized);
     if (!moduleName || seen.has(moduleName)) continue;
     seen.add(moduleName);
 
-    if (isDuplicate(sessionId, moduleName)) continue;
-
     const docRel = moduleDocPath(manifest, moduleName);
     if (!docRel) continue;
-    const docPath = join(projectRoot, docRel);
-    if (!existsSync(docPath)) continue;
+    const content = readModuleDoc(projectRoot, docRel);
+    if (content === null) continue;
 
-    try {
-      const content = readFileSync(docPath, "utf-8");
-      const header = `[edc] Auto-injected context for module "${moduleName}" (touching ${normalized})`;
-      return {
-        moduleName,
-        normalizedPath: normalized,
-        content: `${header}\n\n${content}`,
-      };
-    } catch {
-      continue;
-    }
+    if (isDuplicate(sessionId, moduleName)) continue;
+
+    const header = `[edc] Auto-injected context for module "${moduleName}" (touching ${normalized})`;
+    injections.push({
+      moduleName,
+      normalizedPath: normalized,
+      content: `${header}\n\n${content}`,
+    });
   }
-  return null;
+  if (injections.length === 0) return null;
+  return {
+    moduleName: injections[0].moduleName,
+    normalizedPath: injections[0].normalizedPath,
+    content: injections.map((injection) => injection.content).join("\n\n"),
+  };
 }

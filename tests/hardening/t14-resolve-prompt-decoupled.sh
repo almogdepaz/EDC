@@ -13,7 +13,7 @@ set -uo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-lib.sh"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
-SCRIPT_ABS="$(pwd)/$SCRIPT"
+SOURCE_ROOT="$(pwd)/plugins/edc"
 
 # shellcheck source=lib/check.sh
 . "$(dirname "$0")/lib/check.sh"
@@ -21,45 +21,68 @@ check_init
 
 echo "=== T14: resolve_prompt CLI/plugin decoupling ==="
 
-# Set up a hermetic skills tree so we don't depend on the user's install state.
+# Set up a hermetic trusted package layout so prompt resolution cannot depend
+# on the user's global install or a repo-local legacy cache.
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-SKILLS_DIR="$TMP/skills"
-mkdir -p "$SKILLS_DIR/edc-build-impl" "$SKILLS_DIR/edc-update-impl" \
-         "$SKILLS_DIR/edc-context-curator-impl" "$SKILLS_DIR/edc-context-curator-edit-impl" \
-         "$SKILLS_DIR/edc-audit" "$SKILLS_DIR/edc-review"
+TRUSTED_PACKAGE="$TMP/trusted-package"
+PROMPT_BUNDLES_DIR="$TRUSTED_PACKAGE/prompt-bundles"
+PUBLIC_SKILLS_DIR="$TRUSTED_PACKAGE/skills"
+mkdir -p "$TRUSTED_PACKAGE/scripts" "$TRUSTED_PACKAGE/hooks/lib" \
+         "$PROMPT_BUNDLES_DIR/edc-build-impl" "$PROMPT_BUNDLES_DIR/edc-update-impl" \
+         "$PROMPT_BUNDLES_DIR/edc-context-curator-impl" "$PROMPT_BUNDLES_DIR/edc-context-curator-edit-impl" \
+         "$PUBLIC_SKILLS_DIR/edc-audit/references" "$PUBLIC_SKILLS_DIR/edc-review"
+cp "$SOURCE_ROOT/scripts/edc-lib.sh" "$TRUSTED_PACKAGE/scripts/edc-lib.sh"
+cp "$SOURCE_ROOT/hooks/lib/runtime-manifest.mjs" "$TRUSTED_PACKAGE/hooks/lib/runtime-manifest.mjs"
+SCRIPT_ABS="$TRUSTED_PACKAGE/scripts/edc-lib.sh"
 
-echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"
-echo "UPDATE_SKILL_MARKER" > "$SKILLS_DIR/edc-update-impl/SKILL.md"
-echo "CURATOR_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-impl/SKILL.md"
-echo "CURATOR_EDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-context-curator-edit-impl/SKILL.md"
-echo "AUDIT_SKILL_MARKER" > "$SKILLS_DIR/edc-audit/SKILL.md"
-mkdir -p "$SKILLS_DIR/edc-audit/references"
-echo "AUDIT_SCOPE_MARKER" > "$SKILLS_DIR/edc-audit/references/scope-and-standards.md"
-echo "AUDIT_SMELL_MARKER" > "$SKILLS_DIR/edc-audit/references/smell-baseline.md"
-echo "AUDIT_CHECKS_MARKER" > "$SKILLS_DIR/edc-audit/references/quality-checks.md"
-echo "AUDIT_REPORTING_MARKER" > "$SKILLS_DIR/edc-audit/references/reporting.md"
-echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"
-echo "METHODOLOGY_MARKER" > "$SKILLS_DIR/edc-review/methodology.md"
-echo "ADVERSARIAL_MARKER" > "$SKILLS_DIR/edc-review/adversarial.md"
-echo "REPORTING_MARKER" > "$SKILLS_DIR/edc-review/reporting.md"
-echo "PATTERNS_MARKER" > "$SKILLS_DIR/edc-review/patterns.md"
+echo "BUILD_SKILL_MARKER" > "$PROMPT_BUNDLES_DIR/edc-build-impl/SKILL.md"
+echo "UPDATE_SKILL_MARKER" > "$PROMPT_BUNDLES_DIR/edc-update-impl/SKILL.md"
+echo "CURATOR_SKILL_MARKER" > "$PROMPT_BUNDLES_DIR/edc-context-curator-impl/SKILL.md"
+echo "CURATOR_EDIT_SKILL_MARKER" > "$PROMPT_BUNDLES_DIR/edc-context-curator-edit-impl/SKILL.md"
+echo "AUDIT_SKILL_MARKER" > "$PUBLIC_SKILLS_DIR/edc-audit/SKILL.md"
+echo "AUDIT_SCOPE_MARKER" > "$PUBLIC_SKILLS_DIR/edc-audit/references/scope-and-standards.md"
+echo "AUDIT_SMELL_MARKER" > "$PUBLIC_SKILLS_DIR/edc-audit/references/smell-baseline.md"
+echo "AUDIT_CHECKS_MARKER" > "$PUBLIC_SKILLS_DIR/edc-audit/references/quality-checks.md"
+echo "AUDIT_REPORTING_MARKER" > "$PUBLIC_SKILLS_DIR/edc-audit/references/reporting.md"
+echo "REVIEW_SKILL_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/SKILL.md"
+echo "METHODOLOGY_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/methodology.md"
+echo "ADVERSARIAL_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/adversarial.md"
+echo "REPORTING_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/reporting.md"
+echo "PATTERNS_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/patterns.md"
 
 TASK_FILE="$TMP/task.md"
 echo "TASK_CONTENT_MARKER" > "$TASK_FILE"
 WORK="$TMP/work"
-mkdir -p "$WORK"
+mkdir -p "$WORK/.edc/skills/edc-build-impl"
+echo "REPO_SKILL_DECOY" > "$WORK/.edc/skills/edc-build-impl/SKILL.md"
 
-# Override HOME so find_*_skill resolves into our hermetic tree.
-# All three agents look at $HOME/.<runtime>/skills (claude also at .edc/skills)
-# or $HOME/.edc/skills. Symlink each into our temp tree.
-mkdir -p "$TMP/home"
-ln -s "$SKILLS_DIR" "$TMP/home/.edc-skills-real"
-mkdir -p "$TMP/home/.edc" "$TMP/home/.cursor" "$TMP/home/.codex"
-ln -s "$TMP/home/.edc-skills-real" "$TMP/home/.edc/skills"
-ln -s "$TMP/home/.edc-skills-real" "$TMP/home/.cursor/skills"
-ln -s "$TMP/home/.edc-skills-real" "$TMP/home/.codex/skills"
+OCTOCODE_BIN="$TMP/octocode-bin"
+mkdir -p "$OCTOCODE_BIN"
+cat > "$OCTOCODE_BIN/octocode" <<'MOCK'
+#!/usr/bin/env bash
+[ -z "${OCTOCODE_PROBE_LOG:-}" ] || printf 'probe\n' >> "$OCTOCODE_PROBE_LOG"
+if [ "${OCTOCODE_FAKE_FAIL:-0}" = "1" ]; then
+  exit 1
+fi
+if [ "${OCTOCODE_FAKE_HANG:-0}" = "1" ]; then
+  while :; do :; done
+fi
+[ "${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$OCTOCODE_BIN/octocode"
+
+# HOME agent skill trees contain only decoys; expected markers exist solely in
+# the trusted package fixture above.
+HOME_DECOY_SKILLS="$TMP/home-decoy-skills"
+mkdir -p "$TMP/home/.edc/skills" "$TMP/home/.cursor/skills" "$TMP/home/.codex/skills" \
+         "$HOME_DECOY_SKILLS/edc-build-impl"
+echo "HOME_SKILL_DECOY" > "$HOME_DECOY_SKILLS/edc-build-impl/SKILL.md"
+cp -R "$HOME_DECOY_SKILLS/." "$TMP/home/.edc/skills/"
+cp -R "$HOME_DECOY_SKILLS/." "$TMP/home/.cursor/skills/"
+cp -R "$HOME_DECOY_SKILLS/." "$TMP/home/.codex/skills/"
 
 run_resolve() {
   local agent="$1"; shift
@@ -116,6 +139,11 @@ check "claude audit: embeds full audit bundle (5 markers)" "$all_audit_present"
 
 # ── 14.3: build/update arg-string forwarding ────────────────────────────────
 out=$(run_resolve claude build --force --focus broker)
+if echo "$out" | grep -Eq "HOME_SKILL_DECOY|REPO_SKILL_DECOY"; then
+  check "claude build: ignores HOME and repo skill decoys" 0
+else
+  check "claude build: ignores HOME and repo skill decoys" 1
+fi
 if echo "$out" | grep -qF "CLI ARGUMENTS: --force --focus broker"; then
   check "claude build: arg-string prefixed when args provided" 1
 else
@@ -187,8 +215,84 @@ for agent in cursor codex; do
   check "$agent review: embeds full skill bundle (6 markers)" "$all_present"
 done
 
-# ── 14.7: missing skill produces clear error ────────────────────────────────
-rm "$SKILLS_DIR/edc-build-impl/SKILL.md"
+# ── 14.7: coordinator emits actionable Octocode capability state ────────────
+for action in update audit; do
+  out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude "$action")
+  available_contract=1
+  for marker in "OCTOCODE_STATUS: available" \
+                'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
+                'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color' \
+                "existing Read, Grep, Glob, and Bash tools"; do
+    echo "$out" | grep -qF "$marker" || available_contract=0
+  done
+  echo "$out" | grep -qF 'octocode --help' && available_contract=0
+  echo "$out" | grep -qF -- '--scheme' && available_contract=0
+  check "claude $action: emits actionable available Octocode state" "$available_contract"
+done
+
+out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude review "$TASK_FILE")
+review_available=1
+for marker in "OCTOCODE_STATUS: available" \
+              'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
+              'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color'; do
+  echo "$out" | grep -qF "$marker" || review_available=0
+done
+check "claude review: emits actionable available Octocode state" "$review_available"
+
+out=$(OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+unavailable_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || unavailable_contract=0
+done
+if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
+  unavailable_contract=0
+fi
+check "broken Octocode CLI emits unavailable fallback state" "$unavailable_contract"
+
+preseeded_probe_log="$TMP/preseeded-probes"
+out=$(EDC_OCTOCODE_CAPABILITY_STATE=available OCTOCODE_PROBE_LOG="$preseeded_probe_log" OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+preseeded_contract=1
+preseeded_probe_count=0
+[ ! -f "$preseeded_probe_log" ] || preseeded_probe_count=$(wc -l < "$preseeded_probe_log" | tr -d ' ')
+[ "$preseeded_probe_count" -eq 1 ] || preseeded_contract=0
+echo "$out" | grep -qF "OCTOCODE_STATUS: unavailable" || preseeded_contract=0
+if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
+  preseeded_contract=0
+fi
+check "caller-preseeded Octocode state is ignored and probed once" "$preseeded_contract"
+
+SECONDS=0
+out=$(OCTOCODE_FAKE_HANG=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+hanging_duration=$SECONDS
+hanging_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || hanging_contract=0
+done
+[ "$hanging_duration" -lt 5 ] || hanging_contract=0
+check "hanging Octocode CLI promptly emits unavailable fallback state" "$hanging_contract"
+
+NO_OCTOCODE_PATH="$TMP/no-octocode-bin"
+mkdir -p "$NO_OCTOCODE_PATH"
+out=$(EDC_AGENT_CLI=claude bash -c '
+  . "$1"
+  cat() { /bin/cat "$@"; }
+  PATH="$2"
+  _emit_octocode_research_guidance
+' bash "$SCRIPT_ABS" "$NO_OCTOCODE_PATH")
+absent_contract=1
+for marker in "OCTOCODE_STATUS: unavailable" \
+              "Do not install or configure Octocode" \
+              "existing Read, Grep, Glob, and Bash tools"; do
+  echo "$out" | grep -qF "$marker" || absent_contract=0
+done
+check "absent Octocode command emits unavailable fallback state" "$absent_contract"
+
+# ── 14.8: missing skill produces clear error ────────────────────────────────
+rm "$PROMPT_BUNDLES_DIR/edc-build-impl/SKILL.md"
 out=$(run_resolve claude build 2>&1 || true)
 if echo "$out" | grep -q "skill 'edc-build-impl' not found"; then
   check "claude build: missing skill produces clear error" 1
@@ -196,10 +300,10 @@ else
   check "claude build: missing skill produces clear error" 0
 fi
 
-# ── 14.8: missing review supporting file produces clear error ───────────────
-echo "REVIEW_SKILL_MARKER" > "$SKILLS_DIR/edc-review/SKILL.md"  # restore
-echo "BUILD_SKILL_MARKER" > "$SKILLS_DIR/edc-build-impl/SKILL.md"   # restore
-rm "$SKILLS_DIR/edc-review/methodology.md"
+# ── 14.9: missing review supporting file produces clear error ───────────────
+echo "REVIEW_SKILL_MARKER" > "$PUBLIC_SKILLS_DIR/edc-review/SKILL.md"  # restore
+echo "BUILD_SKILL_MARKER" > "$PROMPT_BUNDLES_DIR/edc-build-impl/SKILL.md"   # restore
+rm "$PUBLIC_SKILLS_DIR/edc-review/methodology.md"
 out=$(run_resolve claude review "$TASK_FILE" 2>&1 || true)
 if echo "$out" | grep -q "review skill bundle incomplete"; then
   check "claude review: missing methodology.md produces clear error" 1

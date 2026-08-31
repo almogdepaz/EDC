@@ -115,6 +115,7 @@
           "benchmark/results.tsv",
           "benchmark/run.sh",
           "benchmark/score.py",
+          "benchmark/scoring_helpers.py",
           "benchmark/transcript_utils.py",
           "benchmark/tried-hashes.tsv"
         ],
@@ -165,10 +166,10 @@
       }
     ]
   },
-  "generatedAt": "2026-08-13T21:23:42Z",
-  "sourceCommit": "57181079f05359d014da95efde5fdc16b79d9deb",
+  "generatedAt": "2026-08-30T19:42:40Z",
+  "sourceCommit": "a24f208ef942febe30c9679077a4f9b94f151a70",
   "coverage": {
-    "contextMappedFileCount": 200,
+    "contextMappedFileCount": 204,
     "contextlessFileCount": 18,
     "uncoveredFileCount": 0,
     "ambiguousPathCount": 0,
@@ -178,7 +179,7 @@
       "benchmark/curl/**",
       "benchmark/redis/**"
     ],
-    "mappedFileCount": 200,
+    "mappedFileCount": 204,
     "unmappedFileCount": 18
   }
 }

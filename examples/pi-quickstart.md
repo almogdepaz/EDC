@@ -20,7 +20,8 @@ pi
 In a plain repository with no EDC context yet, startup should be quiet:
 
 - no EDC prompt is injected
-- no `.edc/` runtime cache is created
+- workflows use the installed package or managed `~/.edc` runtime
+- repo-local `.edc/` is ignored and never created; remove old caches manually
 - EDC skills are still available globally
 
 ## 3. Build context

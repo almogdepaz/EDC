@@ -33,6 +33,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from scoring_helpers import review_verdict, review_verdict_field
 from transcript_utils import (
     find_issues_for_row,
     find_transcript_for_row,
@@ -68,9 +69,9 @@ def write_rows(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
 
 
 def is_judge_error(row: dict) -> bool:
-    # Either phase may be judge_error. We surface both — `found` is the
-    # review-phase verdict; `build_verdict` is the build-phase verdict.
-    return row.get("found") == "judge_error" or row.get("build_verdict") == "judge_error"
+    # Either phase may be judge_error. Review verdicts may use canonical
+    # `verdict` or legacy `found`; build verdicts use `build_verdict`.
+    return review_verdict(row) == "judge_error" or row.get("build_verdict") == "judge_error"
 
 
 def show_analysis(text: str) -> None:
@@ -133,7 +134,7 @@ def find_analysis_text(row: dict, tsv_path: Path,
 
 
 def format_row_header(row: dict, phase: str) -> str:
-    verdict_field = "found" if phase == "review" else "build_verdict"
+    current_verdict = review_verdict(row) if phase == "review" else row.get("build_verdict", "?")
     notes_field = "notes" if phase == "review" else "build_notes"
     return (
         f"\n{'=' * 72}\n"
@@ -141,7 +142,7 @@ def format_row_header(row: dict, phase: str) -> str:
         f"cve:         {row.get('cve', '?')}\n"
         f"category:    {row.get('category', '?')}\n"
         f"severity:    {row.get('severity', '?')}\n"
-        f"current:     {row.get(verdict_field, '?')}\n"
+        f"current:     {current_verdict}\n"
         f"notes:       {row.get(notes_field, '')[:400]}\n"
         f"timestamp:   {row.get('timestamp', '?')}\n"
         f"{'=' * 72}"
@@ -151,7 +152,7 @@ def format_row_header(row: dict, phase: str) -> str:
 def rejudge_phase(row: dict, phase: str, tsv_path: Path,
                   issues_root: Path | None, dry_run: bool) -> bool:
     """Re-judge a single (row, phase). Returns False on quit."""
-    verdict_field = "found" if phase == "review" else "build_verdict"
+    verdict_field = review_verdict_field(row) if phase == "review" else "build_verdict"
     confidence_field = "confidence" if phase == "review" else "build_confidence"
     notes_field = "notes" if phase == "review" else "build_notes"
 
@@ -185,16 +186,17 @@ def rejudge_phase(row: dict, phase: str, tsv_path: Path,
             f"manual=1; reason=judge_error_resolved; "
             f"original={original_notes[:300]}"
         )
-        # Recompute combined_score if both phases now have non-error verdicts.
-        bv = row.get("build_verdict", "")
-        rv = row.get("found", "")
-        if rv and rv != "judge_error" and bv and bv != "judge_error":
-            from score import combine_scores
-            row["combined_score"] = f"{combine_scores(bv, rv)}"
-        elif rv and rv != "judge_error" and not bv:
-            row["combined_score"] = str(
-                {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(rv, 0.0)
-            )
+        # Recompute combined_score when the input schema already carries it.
+        if "combined_score" in row:
+            bv = row.get("build_verdict", "")
+            rv = review_verdict(row)
+            if rv and rv != "judge_error" and bv and bv != "judge_error":
+                from score import combine_scores
+                row["combined_score"] = f"{combine_scores(bv, rv)}"
+            elif rv and rv != "judge_error" and not bv:
+                row["combined_score"] = str(
+                    {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(rv, 0.0)
+                )
         action = "would write" if dry_run else "wrote"
         print(f"  {action} verdict={ans} for {row.get('cve')} ({phase})")
         return True
@@ -230,7 +232,7 @@ def main() -> int:
     print(f"found {len(err_rows)} judge_error row(s) in {args.tsv}")
     for r in err_rows:
         which = []
-        if r.get("found") == "judge_error":
+        if review_verdict(r) == "judge_error":
             which.append("review")
         if r.get("build_verdict") == "judge_error":
             which.append("build")
@@ -249,7 +251,8 @@ def main() -> int:
         if not keep_going:
             break
         for phase in ("review", "build"):
-            if row.get("found" if phase == "review" else "build_verdict") != "judge_error":
+            phase_verdict = review_verdict(row) if phase == "review" else row.get("build_verdict")
+            if phase_verdict != "judge_error":
                 continue
             keep_going = rejudge_phase(row, phase, args.tsv, args.issues_root,
                                        args.dry_run)

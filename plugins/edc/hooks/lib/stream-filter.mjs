@@ -1,24 +1,76 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
+import { constants } from "node:os";
+import { processGroupIsRunning, signalProcessGroup, spawnProcessGroup } from "./process-group.mjs";
+import { SUBPROCESS_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 const agent = process.env.STREAM_FILTER_AGENT || process.env.EDC_AGENT_CLI || "agent";
 const model = process.env.STREAM_FILTER_MODEL || "";
 const capture = process.env.STREAM_FILTER_CAPTURE || "";
 let childToKill = null;
+let commandTimer = null;
+let escalationTimer = null;
 let exiting = false;
+let requestedExitCode = null;
+let exited = false;
 
-function finish(code) {
+function signalExitCode(signal) {
+  const signalNumber = signal ? constants.signals[signal] : 0;
+  return signalNumber ? 128 + signalNumber : 1;
+}
+
+function childIsRunning() {
+  return processGroupIsRunning(childToKill);
+}
+
+function clearLifecycleTimers() {
+  if (commandTimer) clearTimeout(commandTimer);
+  if (escalationTimer) clearTimeout(escalationTimer);
+  commandTimer = null;
+  escalationTimer = null;
+}
+
+function exitOnce(code) {
+  if (exited) return;
+  exited = true;
+  clearLifecycleTimers();
+  process.exit(code);
+}
+
+function waitForKilledGroup() {
+  const poll = () => {
+    if (!childIsRunning()) {
+      exitOnce(requestedExitCode ?? 1);
+      return;
+    }
+    escalationTimer = setTimeout(poll, 10);
+  };
+  poll();
+}
+
+function finish(code, signal = "SIGTERM") {
   if (exiting) return;
   exiting = true;
-  if (childToKill && childToKill.exitCode === null && childToKill.signalCode === null) {
-    childToKill.kill("SIGTERM");
-    setTimeout(() => {
-      if (childToKill && childToKill.exitCode === null && childToKill.signalCode === null) childToKill.kill("SIGKILL");
-    }, 5000).unref();
+  requestedExitCode = code;
+  if (commandTimer) {
+    clearTimeout(commandTimer);
+    commandTimer = null;
   }
-  process.exit(code);
+  if (!signalProcessGroup(childToKill, signal)) {
+    exitOnce(code);
+    return;
+  }
+
+  escalationTimer = setTimeout(() => {
+    signalProcessGroup(childToKill, "SIGKILL");
+    waitForKilledGroup();
+  }, SUBPROCESS_TERMINATION_GRACE_MS);
+}
+
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(signal, () => finish(signalExitCode(signal), signal));
 }
 
 function isCodexAuthFailure(text) {
@@ -209,7 +261,7 @@ function processLine(line) {
 function filterStdin() {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
   rl.on("line", processLine);
-  rl.on("close", () => process.exit(0));
+  rl.on("close", () => finish(0));
 }
 
 function runCommand() {
@@ -227,10 +279,15 @@ function runCommand() {
     process.exit(64);
   }
 
-  childToKill = spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+  childToKill = spawnProcessGroup(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+  childToKill.stdin.on("error", (error) => {
+    if (error?.code === "EPIPE") return;
+    console.error(`ERROR: stdin: ${error.message}`);
+    if (!exiting) finish(1);
+  });
   const stdinText = process.env.EDC_STREAM_STDIN_FILE ? readFileSync(process.env.EDC_STREAM_STDIN_FILE, "utf8") : (process.env.EDC_STREAM_STDIN || "");
   childToKill.stdin.end(stdinText);
-  const timer = setTimeout(() => {
+  commandTimer = setTimeout(() => {
     console.error(`ERROR: phase '${phase}' timed out after ${timeoutSeconds}s`);
     finish(1);
   }, timeoutSeconds * 1000);
@@ -239,13 +296,25 @@ function runCommand() {
   createInterface({ input: childToKill.stderr, crlfDelay: Infinity }).on("line", processLine);
 
   childToKill.on("error", (error) => {
-    clearTimeout(timer);
+    if (commandTimer) clearTimeout(commandTimer);
+    commandTimer = null;
     console.error(`ERROR: ${error.message}`);
-    finish(1);
+    if (!exiting) finish(1);
+    else if (!childIsRunning()) exitOnce(requestedExitCode ?? 1);
   });
-  childToKill.on("close", (code) => {
-    clearTimeout(timer);
-    if (!exiting) process.exit(code || 0);
+  childToKill.on("exit", () => {
+    if (exiting) {
+      childToKill.stdout.destroy();
+      childToKill.stderr.destroy();
+    }
+  });
+  childToKill.on("close", (code, signal) => {
+    if (exiting && childIsRunning()) return;
+    const finalCode = exiting
+      ? (requestedExitCode ?? 1)
+      : (typeof code === "number" ? code : signalExitCode(signal));
+    if (!exiting && childIsRunning()) finish(finalCode);
+    else exitOnce(finalCode);
   });
 }
 

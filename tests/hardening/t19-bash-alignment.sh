@@ -24,7 +24,6 @@ setup_repo() {
   printf 'two\n' > src/a.txt
   git add src/a.txt
   git commit -q -m change
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_fake_pi() {
@@ -72,9 +71,8 @@ else
   check "19.2: EDC_BASH stays unset in test process" 1
 fi
 
-mkdir -p "$TMP/runtime/scripts" "$TMP/runtime/hooks/lib" "$TMP/edc-context"
-cp "$ROOT/plugins/edc/scripts/edc" "$TMP/runtime/scripts/edc"
-cp -R "$ROOT/plugins/edc/hooks/lib/." "$TMP/runtime/hooks/lib/"
+cp -R "$ROOT/plugins/edc" "$TMP/runtime"
+mkdir -p "$TMP/edc-context"
 cat >"$TMP/runtime/scripts/edc-audit.sh" <<'FAKE_AUDIT'
 #!/usr/bin/env bash
 printf '%s\n' "$*" > "$EDC_PI_INJECT_ARGS"

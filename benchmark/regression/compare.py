@@ -2,22 +2,26 @@
 """Compare pre vs post regression runs.
 
 Usage:
-    compare.py --pre <sha> --post <sha> [--repo curl|redis|all] [--build-headroom 1.10] [--review-headroom 1.10]
+    compare.py --pre <sha> --post <sha> [--repo curl|redis|all] [--mode <mode>] [--label <label>] [--build-headroom 1.10] [--review-headroom 1.10]
 
-Reads benchmark/regression/results/<sha>/<repo>/{build-metrics.tsv,review-metrics.tsv,review-results.tsv}
-and prints a verdict. Exit 0 if all criteria pass, 1 otherwise.
+Reads canonical benchmark/regression/results/<sha>/<mode>/<label>/<repo>/ results
+and evidenced legacy <sha>/<label>/<repo>/ and <sha>/<repo>/ layouts. Exit 0 if all criteria pass, 1 otherwise.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import math
 import statistics
 import sys
 from pathlib import Path
 
+BENCHMARK_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BENCHMARK_DIR))
+from scoring_helpers import UnresolvedVerdictError, result_row_score
+
 ROOT = Path(__file__).resolve().parent / "results"
+RESULT_FILES = ("build-metrics.tsv", "review-metrics.tsv", "review-results.tsv")
 
 
 def short(sha: str) -> str:
@@ -36,50 +40,69 @@ def median_or_none(xs):
     return statistics.median(xs) if xs else None
 
 
-def repos_under(sha_dir: Path) -> list[str]:
-    return sorted(p.name for p in sha_dir.iterdir() if p.is_dir())
+def result_dirs(
+    sha_dir: Path,
+    repo: str | None = None,
+    mode: str | None = None,
+    label: str | None = None,
+) -> list[Path]:
+    candidates = (p for pattern in ("*", "*/*", "*/*/*") for p in sha_dir.glob(pattern))
+    matches = []
+    for path in candidates:
+        parts = path.relative_to(sha_dir).parts
+        if mode is not None or label is not None:
+            if len(parts) != 3:
+                continue
+            if mode is not None and parts[0] != mode:
+                continue
+            if label is not None and parts[1] != label:
+                continue
+        if path.is_dir() and (repo is None or path.name == repo) and any((path / name).is_file() for name in RESULT_FILES):
+            matches.append(path)
+    return sorted(matches)
 
 
-def aggregate(sha: str, repo: str):
-    d = ROOT / short(sha) / repo
-    builds = load_tsv(d / "build-metrics.tsv")
-    reviews = load_tsv(d / "review-metrics.tsv")
-    scores = load_tsv(d / "review-results.tsv")
+def repos_under(sha_dir: Path, mode: str | None = None, label: str | None = None) -> list[str]:
+    return sorted({p.name for p in result_dirs(sha_dir, mode=mode, label=label)})
+
+
+def resolve_result_dir(sha: str, repo: str, mode: str | None, label: str | None) -> Path:
+    dirs = result_dirs(ROOT / short(sha), repo, mode, label)
+    selection = " ".join(part for part in (f"--mode {mode}" if mode else "", f"--label {label}" if label else "") if part)
+    if not dirs:
+        suffix = f" with {selection}" if selection else ""
+        raise ValueError(f"missing result directory for SHA {short(sha)} repo {repo}{suffix}; verify the result path or selectors")
+    if len(dirs) > 1:
+        matches = ", ".join(str(path.relative_to(ROOT)) for path in dirs)
+        raise ValueError(f"ambiguous result directories for SHA {short(sha)} repo {repo}: {matches}; pass --mode and --label")
+    return dirs[0]
+
+
+def aggregate(sha: str, repo: str, mode: str | None = None, label: str | None = None):
+    result_dir = resolve_result_dir(sha, repo, mode, label)
+    builds = load_tsv(result_dir / "build-metrics.tsv")
+    reviews = load_tsv(result_dir / "review-metrics.tsv")
+    scores = load_tsv(result_dir / "review-results.tsv")
 
     build_costs = [float(b["total_cost_usd"]) for b in builds if b.get("status") == "ok"]
     review_costs = [float(r["total_cost_usd"]) for r in reviews if r.get("status") == "ok"]
 
-    # Recall is verdict-derived. Dual-phase rows carry their weighted score in
-    # combined_score; legacy rows use `found`, while current rows use `verdict`.
-    verdict_scores = {"exact": 1.0, "partial": 0.5, "missed": 0.0, "miss": 0.0}
+    # Recall is verdict-derived from the shared single-/dual-phase rules.
     by_cve: dict[str, list[float]] = {}
     judge_errors = 0
+    usable_score_rows = 0
     for row in scores:
-        verdict = (row.get("verdict") or row.get("found") or "").strip()
-        build_verdict = (row.get("build_verdict") or "").strip()
-        combined = (row.get("combined_score") or "").strip()
-        if "judge_error" in (verdict, build_verdict):
-            judge_errors += 1
-            continue
-        if combined:
-            try:
-                value = float(combined)
-            except ValueError:
-                judge_errors += 1
-                continue
-            if not math.isfinite(value) or value < 0:
-                judge_errors += 1
-                continue
-        else:
-            value = verdict_scores.get(verdict)
-        if value is None:
-            judge_errors += 1
-            continue
         cve = (row.get("cve") or "").strip()
         if not cve:
             judge_errors += 1
             continue
+        try:
+            value = result_row_score(row, context=f"regression result {cve}")
+        except UnresolvedVerdictError:
+            judge_errors += 1
+            continue
         by_cve.setdefault(cve, []).append(value)
+        usable_score_rows += 1
 
     per_cve = {cve: max(values) for cve, values in by_cve.items()}
     recall = sum(per_cve.values()) / len(per_cve) if per_cve else 0.0
@@ -97,6 +120,11 @@ def aggregate(sha: str, repo: str):
         "per_cve": per_cve,
         "judge_errors": judge_errors,
         "module_ok": module_ok,
+        "row_counts": {
+            "build": len(build_costs),
+            "review": len(review_costs),
+            "score": usable_score_rows,
+        },
     }
 
 
@@ -115,6 +143,8 @@ def main():
     ap.add_argument("--pre", required=True)
     ap.add_argument("--post", required=True)
     ap.add_argument("--repo", default="all")
+    ap.add_argument("--mode")
+    ap.add_argument("--label")
     ap.add_argument("--build-headroom", type=float, default=1.10)
     ap.add_argument("--review-headroom", type=float, default=1.10)
     args = ap.parse_args()
@@ -127,16 +157,22 @@ def main():
         print(f"missing post dir: {post_dir}", file=sys.stderr); sys.exit(2)
 
     if args.repo == "all":
-        repos = sorted(set(repos_under(pre_dir)) & set(repos_under(post_dir)))
+        repos = sorted(set(repos_under(pre_dir, args.mode, args.label)) & set(repos_under(post_dir, args.mode, args.label)))
     else:
         repos = [args.repo]
+    if not repos:
+        print("no common repos with results", file=sys.stderr); sys.exit(1)
 
     overall_pass = True
     print(f"\n=== Regression compare: pre={short(args.pre)} post={short(args.post)} ===\n")
 
     for repo in repos:
-        pre = aggregate(args.pre, repo)
-        post = aggregate(args.post, repo)
+        try:
+            pre = aggregate(args.pre, repo, args.mode, args.label)
+            post = aggregate(args.post, repo, args.mode, args.label)
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            sys.exit(1)
         print(f"── {repo} ──")
         print(f"  build attempts:  pre={pre['build_ok']}/{pre['build_attempts']}  post={post['build_ok']}/{post['build_attempts']}")
         print(f"  median build $:  pre={fmt_money(pre['median_build_cost'])}  post={fmt_money(post['median_build_cost'])}  Δ={pct_delta(pre['median_build_cost'], post['median_build_cost'])!r}")
@@ -153,9 +189,15 @@ def main():
 
         # Verdict
         repo_pass = True
-        if post["judge_errors"] > 0:
-            print(f"  ✗ FAIL unresolved judge/scoring errors: {post['judge_errors']}")
-            repo_pass = False
+        for side, result in (("pre", pre), ("post", post)):
+            missing = [kind for kind, count in result["row_counts"].items() if not count]
+            if missing:
+                print(f"  ✗ FAIL {side} has no usable {', '.join(missing)} rows")
+                repo_pass = False
+        for side, result in (("pre", pre), ("post", post)):
+            if result["judge_errors"] > 0:
+                print(f"  ✗ FAIL {side} unresolved judge/scoring errors: {result['judge_errors']}")
+                repo_pass = False
         if post["recall"] < pre["recall"]:
             print(f"  ✗ FAIL recall: {post['recall']:.3f} < {pre['recall']:.3f}")
             repo_pass = False

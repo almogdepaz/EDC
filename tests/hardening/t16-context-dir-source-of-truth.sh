@@ -79,7 +79,7 @@ fi
 #          few helpers that still load only the PATHS subset) ───────────────
 expected_sources=(
   edc-review.sh edc-delivery-review.sh edc-clean-slate.sh edc-audit.sh edc-build.sh edc-update.sh
-  edc-assert-fresh.sh edc-recover-context.sh edc-doctor.sh edc-build-plan.sh
+  edc-assert-fresh.sh edc-recover-context.sh edc-doctor.sh
 )
 missing_source=()
 for s in "${expected_sources[@]}"; do

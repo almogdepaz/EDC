@@ -42,7 +42,6 @@ setup_repo() {
   echo "seed" > seed.txt
   git add seed.txt
   git commit -q -m "init"
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ORIG_DIR/plugins/edc" >/dev/null
 }
 
 write_manifest() {
@@ -489,7 +488,11 @@ TMPDIR_T15J=$(mktemp -d)
 {"target":"HEAD","baseline":"","head":"dummy","contextMode":"ignored","modules":[{"name":"ignore-context","doc":"","files":["src/a.ts"]}]}
 EOF
   printf '## Findings\n\nnone\n' > edc-context/review-tasks/report-ignore-context.md
-  printf '# Review\n' > review-HEAD.md
+  cat > review-HEAD.md <<'EOF'
+# Review: HEAD
+
+## Module: `ignore-context`
+EOF
 
   out=$("$BASH_BIN" "$SCRIPT" --verify 2>&1)
   rc=$?

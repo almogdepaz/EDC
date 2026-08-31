@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -24,6 +25,25 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+try:
+    from scoring_helpers import (
+        CANONICAL_RESULT_FIELDS,
+        UnresolvedVerdictError,
+        combine_scores,
+        review_verdict,
+        review_verdict_field,
+        verdict_to_score,
+    )
+except ModuleNotFoundError:
+    from benchmark.scoring_helpers import (
+        CANONICAL_RESULT_FIELDS,
+        UnresolvedVerdictError,
+        combine_scores,
+        review_verdict,
+        review_verdict_field,
+        verdict_to_score,
+    )
 
 RESULTS_FILE = Path(os.environ.get("EDC_RESULTS_FILE", Path(__file__).parent / "results.tsv"))
 KEYWORD_THRESHOLD = 0.3  # minimum keyword score to trigger LLM judge
@@ -362,6 +382,13 @@ def score_cve(issues_text: str, cve_id: str, bug_pattern: str,
     return verdict, confidence, f"judge: {explanation}; keywords({kw_notes})"
 
 
+def initialize_results_file(path: Path) -> None:
+    """Create an empty canonical results TSV without replacing existing data."""
+    if path.exists() and path.stat().st_size > 0:
+        return
+    path.write_text("\t".join(CANONICAL_RESULT_FIELDS) + "\n")
+
+
 def append_result(cve_id: str, category: str, severity: str,
                   verdict: str, confidence: float, duration: int, notes: str,
                   build_verdict: str = "", build_confidence: float = 0.0,
@@ -375,16 +402,7 @@ def append_result(cve_id: str, category: str, severity: str,
     """
     timestamp = datetime.now().isoformat(timespec="seconds")
 
-    # Header. Always write the extended 12-column header for new files.
-    # Old TSVs created before this change will keep their 8-column layout; the
-    # new columns are appended cleanly when older rows are mixed with newer.
-    if not RESULTS_FILE.exists() or RESULTS_FILE.stat().st_size == 0:
-        with open(RESULTS_FILE, "w") as f:
-            f.write(
-                "timestamp\tcve\tcategory\tseverity\t"
-                "verdict\tconfidence\tduration\tnotes\t"
-                "build_verdict\tbuild_confidence\tcombined_score\tbuild_notes\n"
-            )
+    initialize_results_file(RESULTS_FILE)
 
     # combined_score = -1 sentinel means "single-phase row, use verdict mapping".
     # judge_error is excluded from aggregates and gets a sentinel score of -1.0
@@ -395,13 +413,29 @@ def append_result(cve_id: str, category: str, severity: str,
         else:
             combined_score = {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(verdict, 0.0)
 
-    line = (
-        f"{timestamp}\t{cve_id}\t{category}\t{severity}\t"
-        f"{verdict}\t{confidence}\t{duration}\t{notes}\t"
-        f"{build_verdict}\t{build_confidence}\t{combined_score}\t{build_notes}\n"
-    )
-    with open(RESULTS_FILE, "a") as f:
-        f.write(line)
+    with RESULTS_FILE.open(newline="") as handle:
+        fieldnames = next(csv.reader(handle, delimiter="\t"), [])
+    verdict_field = review_verdict_field(fieldnames)
+    row = {
+        "timestamp": timestamp,
+        "cve": cve_id,
+        "category": category,
+        "severity": severity,
+        verdict_field: verdict,
+        "confidence": confidence,
+        "duration": duration,
+        "notes": notes,
+        "build_verdict": build_verdict,
+        "build_confidence": build_confidence,
+        "combined_score": combined_score,
+        "build_notes": build_notes,
+    }
+    with RESULTS_FILE.open("a", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=fieldnames, delimiter="\t",
+            lineterminator="\n", extrasaction="ignore",
+        )
+        writer.writerow(row)
 
     icon = {"exact": "HIT", "partial": "PARTIAL", "missed": "MISS",
             "judge_error": "JUDGE_ERR"}.get(verdict, "???")
@@ -411,22 +445,42 @@ def append_result(cve_id: str, category: str, severity: str,
         print(f"    [{icon}] {cve_id} ({verdict}, confidence={confidence}) — {notes}")
 
 
+def mean_result_score(results_path: Path, expected_count=None) -> float:
+    """Return the weighted mean for a fully resolved benchmark results TSV."""
+    with results_path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    if not rows:
+        raise UnresolvedVerdictError(f"no benchmark result rows in {results_path}")
+    if expected_count is not None and len(rows) != expected_count:
+        raise UnresolvedVerdictError(
+            f"expected {expected_count} benchmark result rows in {results_path}, found {len(rows)}"
+        )
+    scores = []
+    for line_number, row in enumerate(rows, start=2):
+        verdict = review_verdict(row)
+        context = f"{results_path}:{line_number} {row.get('cve') or '<unknown-cve>'}"
+        scores.append(verdict_to_score(verdict, context=context))
+    return sum(scores) / len(scores)
+
+
 def print_summary():
     """Print summary of all results."""
     if not RESULTS_FILE.exists():
         print("No results yet.")
         return
 
-    lines = RESULTS_FILE.read_text().strip().split("\n")
-    if len(lines) <= 1:
+    with open(RESULTS_FILE, newline="") as handle:
+        rows = list(csv.DictReader(handle, delimiter="\t"))
+    if not rows:
         print("No results yet.")
         return
 
-    total = len(lines) - 1
-    exact = sum(1 for l in lines[1:] if "\texact\t" in l)
-    partial = sum(1 for l in lines[1:] if "\tpartial\t" in l)
-    missed = sum(1 for l in lines[1:] if "\tmissed\t" in l)
-    judge_errors = sum(1 for l in lines[1:] if "\tjudge_error\t" in l)
+    total = len(rows)
+    verdicts = [review_verdict(row) for row in rows]
+    exact = sum(1 for verdict in verdicts if verdict == "exact")
+    partial = sum(1 for verdict in verdicts if verdict == "partial")
+    missed = sum(1 for verdict in verdicts if verdict == "missed")
+    judge_errors = sum(1 for verdict in verdicts if verdict == "judge_error")
     other = total - exact - partial - missed - judge_errors
 
     # judge_error rows are excluded from recall — they need human resolution.
@@ -448,52 +502,19 @@ def print_summary():
 
     # Per-category
     categories: dict[str, dict] = {}
-    for line in lines[1:]:
-        parts = line.split("\t")
-        if len(parts) >= 5:
-            cat = parts[2]
-            v = parts[4]
+    for row, verdict in zip(rows, verdicts):
+        cat = row.get("category")
+        if cat:
             if cat not in categories:
                 categories[cat] = {"exact": 0, "partial": 0, "missed": 0, "total": 0}
             categories[cat]["total"] += 1
-            if v in ("exact", "partial", "missed"):
-                categories[cat][v] += 1
+            if verdict in ("exact", "partial", "missed"):
+                categories[cat][verdict] += 1
 
     if categories:
         print(f"\nPer-category:")
         for cat, s in sorted(categories.items()):
             print(f"  {cat}: {s['exact']}e/{s['partial']}p/{s['missed']}m (total {s['total']})")
-
-
-# Dual-phase scoring matrix. Detects when the build phase pre-identifies a CVE
-# and weights the row accordingly so a leak from build into review's reading
-# context doesn't masquerade as a review win. See: combine_scores().
-# Source-of-truth: discussed and agreed in STATUS.md → "dual-phase scoring".
-COMBINED_MATRIX = {
-    ("exact",   "exact"):   0.5,   # build leaked the answer, review echoed
-    ("exact",   "partial"): 0.5,
-    ("exact",   "missed"):  0.5,   # build saw it, review didn't pick up
-    ("partial", "exact"):   0.75,  # build hinted at area, review nailed it
-    ("partial", "partial"): 0.4,
-    ("partial", "missed"):  0.25,
-    ("missed",  "exact"):   1.0,   # pure review win, strongest signal
-    ("missed",  "partial"): 0.5,
-    ("missed",  "missed"):  0.0,
-}
-
-
-def combine_scores(build_verdict: str, review_verdict: str) -> float:
-    """Apply the dual-phase scoring matrix. Returns -1.0 sentinel when either
-    phase is `judge_error` so the row can be filtered out of aggregates.
-    Falls back to the review-only mapping when build_verdict is empty."""
-    if "judge_error" in (build_verdict, review_verdict):
-        return -1.0
-    if not build_verdict:
-        return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
-    key = (build_verdict, review_verdict)
-    if key in COMBINED_MATRIX:
-        return COMBINED_MATRIX[key]
-    return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
 
 
 def main():
@@ -511,7 +532,29 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Analysis duration in seconds")
     parser.add_argument("--skip-judge", action="store_true", help="Skip LLM judge, keyword-only")
     parser.add_argument("--summary", action="store_true", help="Print results summary")
+    parser.add_argument("--score-results", type=Path, help="Print the weighted mean for a resolved results TSV")
+    parser.add_argument("--expected-count", type=int, help="Require this many result rows when scoring a TSV")
+    parser.add_argument("--init-results", type=Path, help="Initialize a canonical results TSV if empty or absent")
     args = parser.parse_args()
+
+    if args.expected_count is not None and args.expected_count < 0:
+        parser.error("--expected-count must be non-negative")
+    if args.expected_count is not None and not args.score_results:
+        parser.error("--expected-count requires --score-results")
+
+    if args.init_results:
+        try:
+            initialize_results_file(args.init_results)
+        except OSError as exc:
+            parser.exit(1, f"ERROR: {exc}\n")
+        return
+
+    if args.score_results:
+        try:
+            print(f"{mean_result_score(args.score_results, args.expected_count):.3f}")
+        except (OSError, UnresolvedVerdictError) as exc:
+            parser.exit(1, f"ERROR: {exc}\n")
+        return
 
     if args.summary:
         print_summary()

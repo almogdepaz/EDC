@@ -9,5 +9,6 @@
     { "category": "security" },
     { "category": "delivery" }
   ],
-  "requiredEvidence": ["src/status.ts", "parseWorkerStatus", "isTerminalStatus"]
+  "requiredFiles": ["src/status.ts"],
+  "requiredEvidence": ["parseWorkerStatus", "isTerminalStatus"]
 }

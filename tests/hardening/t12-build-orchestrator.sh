@@ -17,6 +17,8 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-build.sh"
 TMPDIR_T12=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T12/bin"
+export EDC_CONFIG_FILE="$TMPDIR_T12/missing-config"
+unset EDC_PARALLEL
 trap 'rm -rf "$TMPDIR_T12"' EXIT
 
 echo "=== T12: build orchestrator (mocked agent) ==="
@@ -52,6 +54,13 @@ if [[ "$prompt" == *"BUILD DISCOVERY TASK"* ]]; then
 fi
 
 if [[ "$prompt" == *"MODULE CONTEXT TASK"* ]]; then
+  if [ -n "${EDC_T12_MODULE_PROMPT_LOG:-}" ]; then
+    printf '%s\n' "$prompt" > "$EDC_T12_MODULE_PROMPT_LOG"
+  fi
+  if [ -n "${EDC_T12_MANIFEST_CONCURRENCY_LOG:-}" ]; then
+    manifest="$(git rev-parse --absolute-git-dir)/edc/runs/${EDC_RUN_ID:?}/module-manifest.json"
+    node -e 'const j=require(process.argv[1]); process.stdout.write(String(j.maxConcurrency))' "$manifest" > "$EDC_T12_MANIFEST_CONCURRENCY_LOG"
+  fi
   output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | head -1 | sed 's/^OUTPUT: //')
   module=$(printf '%s\n' "$prompt" | grep '^MODULE: ' | head -1 | sed 's/^MODULE: //')
   if [ "${EDC_T12_PARALLEL:-0}" = "1" ]; then
@@ -117,6 +126,10 @@ if [[ "$prompt" == *"AUDIT WORKER TASK"* ]]; then
 fi
 
 if [[ "$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
+  if [[ "$prompt" == *"OCTOCODE_STATUS:"* ]]; then
+    echo "MOCK ERROR: synthesis prompt received source-research capability guidance" >&2
+    exit 31
+  fi
   complexity=$(printf '%s\n' "$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
   issues=$(printf '%s\n' "$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
   mkdir -p "$(dirname "$complexity")" "$(dirname "$issues")"
@@ -171,6 +184,12 @@ echo "MOCK ERROR: unrecognized prompt: $prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<'MOCK'
+#!/usr/bin/env bash
+[ "${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 context_semantic_digest() {
   node -e '
@@ -214,7 +233,6 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T12/log"
@@ -237,6 +255,8 @@ EOF
 export PATH="$MOCK_BIN:$PATH"
 export EDC_AGENT_CLI=claude
 export EDC_T12_LOG="$TMPDIR_T12/log"
+export EDC_T12_MODULE_PROMPT_LOG="$TMPDIR_T12/module-prompt"
+export EDC_T12_MANIFEST_CONCURRENCY_LOG="$TMPDIR_T12/manifest-concurrency"
 
 # ── 12a: no edc-context/ → BUILD path ───────────────────────────────────────────
 setup_repo
@@ -251,6 +271,14 @@ if grep -qx "build" "$EDC_T12_LOG" \
   echo "PASS: no edc-context/ → BUILD"
 else
   echo "FAIL (12a): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1
+fi
+if grep -qF 'OCTOCODE_STATUS: available' "$EDC_T12_MODULE_PROMPT_LOG" \
+  && grep -qF 'octocode tools localViewStructure --queries' "$EDC_T12_MODULE_PROMPT_LOG" \
+  && grep -qF 'octocode tools localSearchCode --queries' "$EDC_T12_MODULE_PROMPT_LOG"; then
+  echo "PASS: build module worker receives coordinator-detected Octocode guidance"
+else
+  echo "FAIL: build module worker missing coordinator-detected Octocode guidance"
+  exit 1
 fi
 
 # ── 12b: healthy v2, no --force → UPDATE path ────────────────────────────────
@@ -399,7 +427,7 @@ fi
 # ── 12i: coordinator fans out module work at the configured bound ───────────
 setup_repo
 result=0
-out=$(EDC_T12_PARALLEL=1 EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" 2>&1) || result=$?
+out=$(EDC_T12_PARALLEL=1 EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" 2>&1) || result=$?
 max_overlap=$(sort -nr .git/t12-overlap 2>/dev/null | head -1 || echo 0)
 module_docs=$(find edc-context/modules -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 if [ "$result" -eq 0 ] && [ "$max_overlap" -eq 2 ] && [ "$module_docs" -eq 3 ] && ! grep -R -qE '(^|[[:space:]])(pi|claude|codex)[[:space:]].*(--print|-p|exec)' .git/edc/runs/*/prompts; then
@@ -413,16 +441,18 @@ parallel_digest=$(context_semantic_digest)
 rm -rf "$TMPDIR_T12/parallel-context"
 cp -R edc-context "$TMPDIR_T12/parallel-context"
 
-# ── 12j: concurrency 1 preserves the validated semantic layout ─────────────
+# ── 12j: absent opt-in stays serial and preserves the validated layout ──────
 setup_repo
+rm -f "$EDC_T12_MANIFEST_CONCURRENCY_LOG"
 result=0
-out=$(EDC_T12_PARALLEL=1 EDC_MAX_CONCURRENCY=1 bash "$SCRIPT" 2>&1) || result=$?
+out=$(env -u EDC_PARALLEL EDC_T12_PARALLEL=1 EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" 2>&1) || result=$?
 serial_overlap=$(sort -nr .git/t12-overlap 2>/dev/null | head -1 || echo 0)
 serial_digest=$(context_semantic_digest 2>/dev/null || true)
-if [ "$result" -eq 0 ] && [ "$serial_overlap" -eq 1 ] && [ "$serial_digest" = "$parallel_digest" ]; then
-  echo "PASS: concurrency 1 preserves the parallel build layout"
+serial_manifest_concurrency=$(cat "$EDC_T12_MANIFEST_CONCURRENCY_LOG" 2>/dev/null || true)
+if [ "$result" -eq 0 ] && [ "$serial_overlap" -eq 1 ] && [ "$serial_manifest_concurrency" = "1" ] && [ "$serial_digest" = "$parallel_digest" ]; then
+  echo "PASS: absent EDC_PARALLEL ignores legacy max concurrency and preserves the parallel build layout"
 else
-  echo "FAIL (12j): serial and parallel build layouts differ. exit=$result overlap=$serial_overlap"
+  echo "FAIL (12j): default serial and opt-in parallel build layouts differ. exit=$result overlap=$serial_overlap manifest=$serial_manifest_concurrency"
   echo "$out"
   diff -ru "$TMPDIR_T12/parallel-context" edc-context || true
   exit 1
@@ -431,7 +461,7 @@ fi
 # ── 12k: failed module blocks assembly and canonical promotion ──────────────
 setup_repo
 result=0
-out=$(EDC_T12_PARALLEL=1 EDC_T12_FAIL_MODULE=lib EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" 2>&1) || result=$?
+out=$(EDC_T12_PARALLEL=1 EDC_T12_FAIL_MODULE=lib EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && [ ! -f edc-context/manifest.json ] && [ ! -f edc-context/index.md ] && [ ! -d edc-context/modules ] && echo "$out" | grep -q 'coordinator-owned edc-build dag failed'; then
   echo "PASS: failed build module blocks canonical promotion"
 else

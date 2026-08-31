@@ -58,6 +58,8 @@ If one issue is found, run a variant sweep for that pattern class across the cha
 
 ## Phase 1: changed-code security analysis
 
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries for targeted reachability, blast-radius, dependency-source, and permitted history research. Remote history remains allowed only when the assigned workflow already permits it.
+
 For each security-relevant diff region:
 
 1. Read surrounding current code and, when needed, the baseline version.

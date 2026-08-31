@@ -9,26 +9,29 @@ Owns the CVE benchmark harness, scoring tools, judge audits, transcript recovery
 ## Purpose
 This module measures whether EDC review/build prompts find known security vulnerabilities. It runs agent analyses against vulnerable historical revisions, scores findings against ground truth, audits judge failures, and supports autoresearch loops that mutate review methodology and keep only changes that improve benchmark outcomes.
 
-Deterministic scorer/regression unit tests now run in normal CI, while live model/CVE runs remain opt-in. The module remains coupled through prompt bundles, subprocess/model propagation, and review-routing semantics. Benchmark scoring should evaluate the security/adversarial lens (`edc-review` skill or `security-review` command), not the CLI's combined `review`/`review-all` command. Delivery/spec review and code-quality audit findings belong to separate workflows and should not be treated as security benchmark wins. If a benchmark starts invoking production build/security/quality pipelines directly, it must account for worker artifacts under `.git/edc/runs/<run-id>/`, `EDC_MAX_CONCURRENCY`, staged-output validation, and structured phase results.
+Deterministic scorer/regression unit tests run in normal CI, while live model/CVE runs remain opt-in. The module remains coupled through prompt bundles, subprocess/model propagation, review-routing semantics, and now the coordinator-detected optional Octocode capability supplied to source-research workers. Benchmark scoring should evaluate the security/adversarial lens (`edc-review` skill or `security-review` command), not the CLI's combined `review`/`review-all` command. Delivery/spec review and code-quality audit findings belong to separate workflows and should not be treated as security benchmark wins. If a benchmark invokes production build/security/quality pipelines directly, it must account for worker artifacts under `.git/edc/runs/<run-id>/`, serial-vs-`EDC_PARALLEL` execution, `EDC_MAX_CONCURRENCY` when enabled, staged-output validation, structured phase results, and whether Octocode availability was held constant across compared attempts.
 
 ## Key files and flows
 - `benchmark/run.sh`: legacy per-CVE runner. It clones/reuses target repos, checks out vulnerable revisions, prompts Claude over affected files, writes/falls back to `edc-context/reports/issues.md`, then invokes `score.py`.
-- `benchmark/score.py`: two-phase scorer. Literal category keywords and explicitly declared category regexes are evaluated separately; empty affected-file entries cannot match everything. Keyword prefilter gates an LLM judge; judge refusals/parse failures become explicit `judge_error` rows rather than silent misses. Supports dual build/review scoring and combined-score weighting.
+- `benchmark/score.py`: two-phase scorer and canonical TSV initializer. It uses `csv.DictWriter` so judge notes round-trip tabs/newlines, supports existing canonical `verdict` and legacy `found` files without mutating their schema, and exposes `--score-results --expected-count` for a fully resolved weighted mean. Literal category keywords and declared regexes remain separate; empty affected-file entries cannot match everything. Judge refusals/parse failures persist as `judge_error`, never silent misses.
+- `benchmark/compute_baseline.py`: aggregates repeated runs with `csv.DictReader`, removes stale output, and exits nonzero when any review verdict is unresolved.
+- `benchmark/scoring_helpers.py`: single source for canonical result fields, current/legacy review-verdict access, field selection, and resolved score mapping. `UnresolvedVerdictError` prevents missing/invalid/judge-error values from becoming misses.
 - `benchmark/audit.py`: audits regression TSVs for suspicious miss/error rows where transcripts still contain CVE/file evidence.
 - `benchmark/transcript_utils.py`: reconstructs `issues.md` from Claude JSONL transcripts by replaying Write/Edit/MultiEdit/Bash heredoc events.
-- `benchmark/autoresearch.sh`: autonomous loop that lets an agent edit skill files, hashes attempts, commits, benchmarks fast CVEs, validates regressions, and reverts failed prompt mutations.
-- `benchmark/regression/*`: regression harness and result comparison utilities. `compare.py` adapts current `verdict`, legacy `found`, and valid nonnegative `combined_score` rows; unresolved judge/scoring errors are counted separately and fail post-comparison rather than becoming misses.
+- `benchmark/autoresearch.sh`: autonomous loop that lets an agent edit skill files, hashes attempts, commits, benchmarks fast CVEs, validates regressions, and reverts failed prompt mutations. Result files are initialized by `score.py`; attempt scoring requires the exact expected row count and all resolved verdicts.
+- `benchmark/regression/*`: regression harness and result comparison utilities. `run-regression.sh` initializes the shared canonical schema. `compare.py` discovers canonical `<sha>/<mode>/<label>/<repo>/` and evidenced legacy layouts, requires selectors when multiple runs are ambiguous, adapts current/legacy verdicts plus valid nonnegative `combined_score`, and fails on empty row families or unresolved scoring. `rejudge.py` and `rescore.py` preserve whichever current/legacy verdict field already exists and recompute combined score only when that schema carries it.
 - `benchmark/gepa/*`: GEPA adapter/runner/template material for prompt optimization experiments.
 - `benchmark/pr-review/*`: Cursor PR benchmark harness.
 
 ## Invariants
-- Scoring failure modes must remain explicit: `judge_error` is not a miss and should not be folded into recall until resolved; regression comparison must report and fail on unresolved post-run judge/scoring errors.
+- Scoring failure modes must remain explicit: `judge_error`, missing/invalid verdicts, empty result sets, and expected-row-count mismatches are unresolved states, not misses. Autoresearch scoring, regression comparison, and baseline computation must fail without publishing a misleading score/output.
 - The LLM judge must quote evidence from analysis output before issuing a verdict.
 - Dual-phase scoring distinguishes build-context leakage from true review-phase discovery.
-- Autoresearch must hash tried prompt states, keep logs, and revert unsuccessful prompt mutations without losing unrelated work.
+- Autoresearch/GEPA prompt optimization must hash tried prompt states, keep logs, and revert unsuccessful prompt mutations without losing unrelated work; optimization scores should not treat unresolved judge/scoring states as ordinary misses.
 - Benchmark worktrees/transcripts are scratch artifacts and should not be treated as source modules or production context.
 - Security benchmark prompts should stay aligned with the `edc-review` skill / `security-review` command; delivery-review, quality-review, audit, and combined review-all outputs are different products unless a benchmark explicitly opts into those lenses.
 - Production pipeline benchmarks should preserve worker-run artifacts and structured results when debugging failures instead of scraping only canonical reports.
+- Comparative runs should pin or record optional research capability state. A working, broken/hanging, or absent Octocode executable changes prompt guidance and available evidence even though EDC treats it as optional.
 - npm/package publication must not include large benchmark corpora, generated context, tests, or review-task scratch output.
 
 ## Trust boundaries
@@ -40,7 +43,7 @@ Deterministic scorer/regression unit tests now run in normal CI, while live mode
 
 ## Coupling
 - Mutates/evaluates `canonical-skills`, especially security review methodology. Skill-boundary changes can affect benchmark comparability by reducing generic findings that are no longer security-scored.
-- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL`). Production pipeline invocation now also depends on worker-pool concurrency, staged validation, and run-artifact retention.
+- Invokes `runtime-cli`/agent subprocesses and relies on model propagation (`EDC_BUILD_MODEL`, `EDC_REVIEW_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL`; Pi support adds `EDC_PI_MODEL`). Production pipeline invocation also depends on worker-pool concurrency, staged validation, run-artifact retention, timeout behavior, and optional source-research capability detection from `PATH`.
 - Review-routing changes such as direct context-skip modes, allowed-unmapped/contextless accounting, default-base/scope selection, dirty-file inclusion, delivery/quality split-outs, or worker-stage validation can affect benchmark comparability if the harness uses production review directly.
 - Transcript reconstruction knows Claude Code JSONL shapes also consumed by EDC spawn/transcript logging.
 - Benchmark status/launch notes such as `benchmark/PI_EDC_X_THREAD.md` are mapped here when tracked, while large target corpora remain ignored/contextless.
@@ -48,8 +51,9 @@ Deterministic scorer/regression unit tests now run in normal CI, while live mode
 
 ## Fragility points
 - `benchmark/run.sh` still asks for legacy `edc-context/full-context.md`; this is benchmark-specific and does not reflect v2 production layout.
-- Automated scoring is only as good as the judge model and evidence reconstruction; refusals and parse errors require human rejudging.
+- Automated scoring is only as good as the judge model and evidence reconstruction; refusals and parse errors require human rejudging. Rejudge/rescore must preserve current versus legacy TSV schemas rather than silently renaming durable columns.
 - Large scratch directories can dominate local filesystem scans if accidentally tracked or added to manifest coverage.
 - Live benchmark workflows can be expensive and long-running and are not part of normal hardening execution; only deterministic scorer/comparator unit fixtures run in `npm test`.
 - Prompt-scope boundaries now matter: if autoresearch edits delivery/audit wording or invokes combined `review` while optimizing security CVE recall, it may produce changes irrelevant to the scored security workflow.
-- Worker-pool concurrency can change timing, retry, and transcript layout for production pipeline benchmarks; set `EDC_MAX_CONCURRENCY=1` when serial comparability matters.
+- Worker-pool concurrency can change timing, retry, and transcript layout for production pipeline benchmarks; leave default serial mode on or set `EDC_PARALLEL=0` when serial comparability matters, and use exact `EDC_PARALLEL=1`/`EDC_MAX_CONCURRENCY` only as an experimental variable. Keep Octocode availability identical too; EDC now probes once per coordinator run, so a changed executable affects every source worker consistently.
+- Result directory discovery intentionally fails on ambiguous canonical runs. Automation comparing multiple modes/labels must pass both selectors instead of relying on directory ordering.

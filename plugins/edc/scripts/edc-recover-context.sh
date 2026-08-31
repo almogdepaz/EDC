@@ -7,10 +7,12 @@
 #   1. If context already fresh (via assert_context_fresh) → return 0 immediately.
 #   2. Otherwise classify state: MISSING (no manifest / no index.md / structureless)
 #      vs STALE (manifest sourceCommit != HEAD).
-#   3. Clean-slate any v1 / partial-v2 leftovers.
-#   4. Spawn build (for MISSING) or update (for STALE) via edc_spawn.
-#   5. Re-check freshness. If still not fresh, wipe + force-rebuild once.
-#   6. Re-check. Return 0 on success, 1 with a copy-pasteable hint on failure.
+#   3. Update from a valid manifest sourceCommit to HEAD, even if histories diverge.
+#      Missing or invalid provenance refuses with an explicit force-rebuild hint.
+#   4. Clean-slate any v1 / partial-v2 leftovers.
+#   5. Spawn build (for MISSING) or update (for STALE) via edc_spawn.
+#   6. Re-check freshness. If still not fresh, wipe + force-rebuild once.
+#   7. Re-check. Return 0 on success, 1 with a copy-pasteable hint on failure.
 #
 # Caller contract:
 #   - EDC_AGENT_CLI, edc_spawn, assert_context_fresh, run_with_timeout,
@@ -18,10 +20,10 @@
 #   - CLEAN_SLATE_SH may override the sibling edc-clean-slate.sh path.
 #
 # resolve_prompt is auto-sourced from this directory if not already defined.
-#   - Pass build/update args (e.g. --ignore, --base) as positional arguments.
-#     Build args are forwarded unchanged. For stale context, any update --base
-#     is replaced with the manifest sourceCommit so review scope cannot control
-#     context freshness.
+#   - Pass build/update args (e.g. --ignore) as positional arguments.
+#     Build args are forwarded unchanged. For stale context, the canonical
+#     manifest sourceCommit is appended as --context-source. Legacy update
+#     --base arguments are discarded so review scope cannot control freshness.
 #
 # Args layout:
 #   recover_context_if_needed [build_args... -- update_args...]
@@ -29,7 +31,6 @@
 # `--` separator is OPTIONAL. If absent, all positional args are passed to
 # both build and update prompts (typical case: --ignore applies to both).
 # If present, args before `--` go to build only, args after to update only.
-# Review-style callers that want --base on update only use the `--` form.
 
 # Auto-source edc-lib.sh (paths + runtime + spawn + prompt resolution)
 # if caller didn't.
@@ -37,6 +38,10 @@ _edc_recover_dir="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "${EDC_CONTEXT_DIR:-}" ] || ! command -v resolve_prompt >/dev/null 2>&1; then
   # shellcheck source=edc-lib.sh
   . "$_edc_recover_dir/edc-lib.sh"
+fi
+if ! command -v read_canonical_context_source_commit >/dev/null 2>&1; then
+  # shellcheck source=edc-assert-fresh.sh
+  . "$_edc_recover_dir/edc-assert-fresh.sh"
 fi
 CLEAN_SLATE_SH="${CLEAN_SLATE_SH:-$_edc_recover_dir/edc-clean-slate.sh}"
 
@@ -83,22 +88,17 @@ _edc_split_recovery_args() {
   fi
 }
 
-_edc_set_manifest_update_base() {
-  local source_commit canonical_commit idx
-  source_commit=$(read_manifest_source_commit 2>/dev/null || true)
+_edc_set_context_update_source() {
+  local source_commit idx
+  source_commit=$(read_canonical_context_source_commit 2>/dev/null || true)
   [ -n "$source_commit" ] || return 1
-  case "$source_commit" in
-    -*) return 1 ;;
-  esac
-  canonical_commit=$(git rev-parse --verify "${source_commit}^{commit}" 2>/dev/null) || return 1
-  [ "$source_commit" = "$canonical_commit" ] || return 1
-  git merge-base --is-ancestor "$canonical_commit" HEAD 2>/dev/null || return 1
 
   local -a normalized_args=()
   idx=0
   while [ "$idx" -lt "${#_edc_update_args[@]}" ]; do
     case "${_edc_update_args[$idx]}" in
       --base)
+        [ $((idx + 1)) -lt "${#_edc_update_args[@]}" ] || return 1
         idx=$((idx + 2))
         ;;
       --ignore)
@@ -112,7 +112,7 @@ _edc_set_manifest_update_base() {
         ;;
     esac
   done
-  _edc_update_args=(${normalized_args[@]+"${normalized_args[@]}"} "--base" "$canonical_commit")
+  _edc_update_args=(${normalized_args[@]+"${normalized_args[@]}"} "--context-source" "$source_commit")
 }
 
 _edc_recovery_outputs_complete() {
@@ -169,6 +169,12 @@ recover_context_if_needed() {
   local state spawn_rc=0
   state=$(_edc_classify_context_state)
 
+  if [ "$state" = "STALE" ] && ! _edc_set_context_update_source; then
+    echo "ERROR: context update requires a canonical, locally available manifest sourceCommit." >&2
+    echo "next step: run edc build --agent $EDC_AGENT_CLI --force explicitly, then retry this command." >&2
+    return 1
+  fi
+
   # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
   # state and route to update by mistake.
   if [ -x "$CLEAN_SLATE_SH" ]; then
@@ -186,25 +192,21 @@ recover_context_if_needed() {
       fi
       ;;
     STALE)
-      if _edc_set_manifest_update_base; then
-        echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
-        local update_prompt
-        if update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}); then
-          spawn_rc=0
-          edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" || spawn_rc=$?
-          if [ "$spawn_rc" -eq 124 ]; then
-            _edc_recovery_handle_failed_spawn "edc-update" "$spawn_rc" || return 1
-          elif [ "$spawn_rc" -ne 0 ]; then
-            if _edc_recovery_success_with_warning_if_complete "edc-update"; then
-              return 0
-            fi
-            echo "→ edc-update failed; retrying context recovery with a force build..." >&2
+      echo "→ context stale, spawning $EDC_AGENT_CLI for edc-update..." >&2
+      local update_prompt
+      if update_prompt=$(resolve_prompt update ${_edc_update_args[@]+"${_edc_update_args[@]}"}); then
+        spawn_rc=0
+        edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$update_prompt" || spawn_rc=$?
+        if [ "$spawn_rc" -eq 124 ]; then
+          _edc_recovery_handle_failed_spawn "edc-update" "$spawn_rc" || return 1
+        elif [ "$spawn_rc" -ne 0 ]; then
+          if _edc_recovery_success_with_warning_if_complete "edc-update"; then
+            return 0
           fi
-        else
-          echo "→ edc-update prompt resolution failed; retrying context recovery with a force build..." >&2
+          echo "→ edc-update failed; retrying context recovery with a force build..." >&2
         fi
       else
-        echo "→ context sourceCommit is not a valid HEAD ancestor; skipping update..." >&2
+        echo "→ edc-update prompt resolution failed; retrying context recovery with a force build..." >&2
       fi
       ;;
   esac

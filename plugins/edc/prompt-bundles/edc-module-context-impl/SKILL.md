@@ -79,6 +79,10 @@ Before deep analysis, the agent performs a minimal mapping:
 
 This establishes anchors for detailed analysis.
 
+### Coordinator-provided targeted source research
+
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted query patterns for focused repository structure, exact source reads, structural search, symbol definitions/references/callers, installed dependency source, and history evidence already permitted by the assigned workflow. Keep research within the assigned target and existing evidence permissions.
+
 ---
 
 ## 5. Phase 2 — Ultra-Granular Function Analysis (Default Mode)

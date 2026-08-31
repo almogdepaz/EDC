@@ -23,22 +23,6 @@ DEFAULT_BENCH_WORKDIR = Path("/private/tmp/edc-bench-regression")
 DEFAULT_CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 
 
-def _short_sha_from_tsv_path(tsv_path: Path) -> str | None:
-    """Pull the 10-char SHA out of a path like
-    benchmark/regression/results/<sha>/<mode>/<label>/<repo>/review-results.tsv.
-    """
-    parts = tsv_path.resolve().parts
-    try:
-        idx = parts.index("results")
-    except ValueError:
-        return None
-    if idx + 1 < len(parts):
-        candidate = parts[idx + 1]
-        if re.fullmatch(r"[0-9a-f]{6,40}", candidate):
-            return candidate
-    return None
-
-
 def _path_parts_from_tsv(tsv_path: Path) -> dict[str, str]:
     """Parse <sha>/<mode>/<label>/<repo> out of the canonical layout."""
     parts = tsv_path.resolve().parts

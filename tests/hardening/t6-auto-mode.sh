@@ -22,6 +22,7 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
 TMPDIR_T6=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T6/bin"
+export EDC_CONFIG_FILE="$TMPDIR_T6/missing-config"
 trap 'rm -rf "$TMPDIR_T6"' EXIT
 
 echo "=== T6: end-to-end auto_mode pipeline (mocked agent) ==="
@@ -98,6 +99,13 @@ echo "MOCK ERROR: unrecognized prompt: $prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<MOCK
+#!/usr/bin/env bash
+printf 'probe\n' >> "$TMPDIR_T6/octocode-log"
+[ "\${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 # ── set up a minimal git repo with valid pre-existing context ────────────────
 cd "$TMPDIR_T6"
@@ -113,8 +121,6 @@ git config commit.gpgsign false
 echo "initial" > seed.txt
 git add seed.txt
 git commit -q -m "init"
-
-node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T6" "$ORIG_DIR/plugins/edc" >/dev/null
 
 # Pre-populate valid context (already-fresh: lastCommit == HEAD-of-base, but we
 # add another commit below and rely on auto_mode's CONTEXT_STALE → edc-update
@@ -147,7 +153,7 @@ echo "→ using mock claude at: $which_claude"
 # Run the full pipeline. The explicit review base must not replace the manifest
 # sourceCommit used for context recovery. Capture output for diagnostics.
 result=0
-out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
+out=$(REVIEW_PARALLEL_PROBE=1 REVIEW_PROBE_DIR="$TMPDIR_T6/.git/probe" EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_REVIEW_TASKS=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only 2>&1) || result=$?
 
 if [ "$result" -ne 0 ]; then
   echo "FAIL: orchestrator exited non-zero ($result)"
@@ -158,14 +164,22 @@ if [ "$result" -ne 0 ]; then
 fi
 
 # ── assertions ───────────────────────────────────────────────────────────────
-if [ ! -f .mock-update-prompt ] || ! grep -q -- "--base $base_head" .mock-update-prompt; then
-  echo "FAIL: stale-context recovery did not use manifest.sourceCommit for edc-update"
+if [ ! -f .mock-update-prompt ] || ! grep -q -- "--context-source $base_head" .mock-update-prompt; then
+  echo "FAIL: stale-context recovery did not pass manifest.sourceCommit to edc-update"
   echo "--- update prompt ---"
   cat .mock-update-prompt 2>/dev/null || true
   echo "--- end update prompt ---"
   exit 1
 fi
-echo "PASS: stale-context recovery uses manifest.sourceCommit for edc-update"
+echo "PASS: stale-context recovery passes manifest.sourceCommit to edc-update"
+
+probe_count=0
+[ ! -f "$TMPDIR_T6/octocode-log" ] || probe_count=$(wc -l < "$TMPDIR_T6/octocode-log" | tr -d ' ')
+if [ "$probe_count" -ne 1 ]; then
+  echo "FAIL: stale standalone security review probed Octocode $probe_count times (expected 1)"
+  exit 1
+fi
+echo "PASS: stale standalone security review probes Octocode once"
 
 final=$(ls review-*.md 2>/dev/null | head -1 || true)
 if [ -z "$final" ]; then

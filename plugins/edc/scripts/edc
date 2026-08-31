@@ -40,7 +40,8 @@ Notes:
   build defaults path to the current directory.
   --ignore may be repeated. If any --ignore flags are passed, .edcignore is ignored for that run.
   Dirty differential reviews require --include-working-tree or --committed-only.
-  Combined review runs security, delivery, and quality concurrently against one candidate.
+  EDC runs orchestration serially by default. Set EDC_PARALLEL=1 to run combined
+  review lenses and module workers concurrently; EDC_MAX_CONCURRENCY applies only then.
   All commands delegate to shared deterministic orchestrators.
 EOF
 }
@@ -71,24 +72,11 @@ require_command() {
   esac
 }
 
-# Locate a helper script via the standard lookup:
-#   1. sibling of this script (works for in-repo dev AND installed at ~/.edc/scripts)
-#   2. project-local install (.edc/scripts/<name>)
-#   3. user install ($HOME/.edc/scripts/<name>)
-# Args: <script-name>
-find_script() {
-  local name="$1" candidate
-  for candidate in \
-    "$SCRIPT_DIR/$name" \
-    ".edc/scripts/$name" \
-    "$HOME/.edc/scripts/$name"
-  do
-    if [ -f "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
+run_orchestrator() {
+  [ -f "$SCRIPT_DIR/../hooks/lib/runtime-bootstrap.mjs" ] \
+    || die "runtime-bootstrap.mjs not found at $SCRIPT_DIR/../hooks/lib/runtime-bootstrap.mjs"
+  command -v node > /dev/null 2>&1 || die "node is required to run EDC orchestrators"
+  exec node "$SCRIPT_DIR/../hooks/lib/runtime-bootstrap.mjs" "$@"
 }
 
 read_manifest_default_mode() {
@@ -360,14 +348,8 @@ build_cmd() {
   local target="${PARSED_POSITIONAL_TARGET:-.}"
   [ -d "$target" ] || die "build target directory not found: $target"
 
-  local build_script
-  build_script="$(cd "$target" && find_script edc-build.sh)" \
-    || die "edc-build.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-build.sh"
-
-  (
-    cd "$target"
-    EDC_AGENT_CLI="$PARSED_AGENT" bash "$build_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
-  )
+  cd "$target"
+  EDC_AGENT_CLI="$PARSED_AGENT" run_orchestrator edc-build.sh ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 
 security_review_cmd() {
@@ -375,11 +357,7 @@ security_review_cmd() {
   finalize_agent_context 1
   normalize_scope_args security-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
-  local review_script
-  review_script="$(find_script edc-review.sh)" \
-    || die "edc-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review.sh"
-
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-review.sh ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 review_all_cmd() {
@@ -387,11 +365,7 @@ review_all_cmd() {
   finalize_agent_context 1
   normalize_scope_args review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
-  local review_all_script
-  review_all_script="$(find_script edc-review-all.sh)" \
-    || die "edc-review-all.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-review-all.sh"
-
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$review_all_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-review-all.sh ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 delivery_review_cmd() {
@@ -399,11 +373,7 @@ delivery_review_cmd() {
   finalize_agent_context 1
   normalize_scope_args delivery-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
-  local delivery_script
-  delivery_script="$(find_script edc-delivery-review.sh)" \
-    || die "edc-delivery-review.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-delivery-review.sh"
-
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$delivery_script" ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-delivery-review.sh ${PARSED_SCOPE_ARGS[@]+"${PARSED_SCOPE_ARGS[@]}"}
 }
 
 quality_review_cmd() {
@@ -411,14 +381,10 @@ quality_review_cmd() {
   finalize_agent_context 1
   normalize_scope_args quality-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
-  local audit_script
-  audit_script="$(find_script edc-audit.sh)" \
-    || die "edc-audit.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-audit.sh"
-
   if [ "${#PARSED_SCOPE_ARGS[@]}" -gt 0 ]; then
-    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script" "${PARSED_SCOPE_ARGS[@]}"
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-audit.sh "${PARSED_SCOPE_ARGS[@]}"
   else
-    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$audit_script"
+    EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-audit.sh
   fi
 }
 
@@ -426,17 +392,10 @@ update_cmd() {
   parse_agent_context_args update 1 none strict "" "--base" "$@"
   finalize_agent_context 1
 
-  local update_script
-  update_script="$(find_script edc-update.sh)" \
-    || die "edc-update.sh not found. Install EDC first or run from a repo with .edc/scripts/edc-update.sh"
-
-  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" bash "$update_script" ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
+  EDC_AGENT_CLI="$PARSED_AGENT" EDC_CONTEXT_MODE="$PARSED_CONTEXT_MODE" run_orchestrator edc-update.sh ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 }
 doctor_cmd() {
-  local doctor_script
-  doctor_script="$(find_script edc-doctor.sh)" \
-    || die "edc-doctor.sh not found. Install EDC first or run from the repo root."
-  bash "$doctor_script"
+  run_orchestrator edc-doctor.sh
 }
 
 mode_cmd() {
@@ -468,22 +427,21 @@ mode_cmd() {
   echo "policy.defaultMode set to $mode in $manifest"
 }
 
-# Load ~/.edc/config (recognized keys include model/backend settings and the
-# optional EDC_PI_EXTENSION_PATH). Caller's env always wins.
+# Load ~/.edc/config (recognized keys include model/backend settings,
+# concurrency mode, and optional EDC_PI_EXTENSION_PATH). Caller's env wins.
 _load_config() {
-  local lib
-  for lib in \
-    "$SCRIPT_DIR/edc-lib.sh" \
-    ".edc/scripts/edc-lib.sh" \
-    "$HOME/.edc/scripts/edc-lib.sh"
-  do
-    if [ -f "$lib" ]; then
-      # shellcheck disable=SC1090
-      . "$lib"
-      command -v edc_load_config >/dev/null 2>&1 && edc_load_config
-      return 0
-    fi
-  done
+  local lib="$SCRIPT_DIR/edc-lib.sh"
+  local runtime_cli="$SCRIPT_DIR/../hooks/lib/runtime-manifest.mjs"
+  local runtime_root="$SCRIPT_DIR/.." validation
+  [ -f "$lib" ] || die "edc-lib.sh not found at $lib"
+  [ -f "$runtime_cli" ] || die "runtime-manifest.mjs not found at $runtime_cli"
+  validation=$(node "$runtime_cli" source-preflight "$runtime_root" 2>&1) || {
+    echo "$validation" >&2
+    die "trusted EDC runtime validation failed"
+  }
+  # shellcheck disable=SC1090
+  . "$lib"
+  command -v edc_load_config >/dev/null 2>&1 && edc_load_config
 }
 
 # Prompt-or-fail when no model has been resolved. Called once at top-level

@@ -11,5 +11,6 @@
     { "category": "security" },
     { "category": "code quality" }
   ],
-  "requiredEvidence": ["spec.md", "src/status.ts", "Requirement"]
+  "requiredFiles": ["spec.md", "src/status.ts"],
+  "requiredEvidence": ["Requirement"]
 }

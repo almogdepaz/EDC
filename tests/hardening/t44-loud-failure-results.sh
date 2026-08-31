@@ -34,14 +34,15 @@ setup_repo() {
   echo one > src/app.ts
   git add src/app.ts
   git commit -q -m init
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$repo" "$ROOT/plugins/edc" >/dev/null
 }
 
 write_stale_context() {
+  local source_commit
+  source_commit=$(git rev-parse HEAD)
   mkdir -p edc-context/modules
   printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
   printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md
-  printf '{"schemaVersion":2,"sourceCommit":"deadbeef","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' > edc-context/manifest.json
+  printf '{"schemaVersion":2,"sourceCommit":"%s","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' "$source_commit" > edc-context/manifest.json
   cat > AGENTS.md <<'AGENTS'
 # Agent Instructions
 
@@ -72,7 +73,7 @@ fi
 setup_repo "$TMP/update-repo"
 write_stale_context
 result=0
-out=$(bash "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD 2>&1) || result=$?
+out=$(bash "$ROOT/plugins/edc/scripts/edc-update.sh" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && assert_result update agent-failed 'edc update'; then
   echo "PASS: update agent failure writes specific structured result"
 else
@@ -94,6 +95,9 @@ fi
 
 setup_repo "$TMP/audit-repo"
 write_stale_context
+echo two > src/app.ts
+git add src/app.ts
+git commit -q -m change
 result=0
 out=$(bash "$ROOT/plugins/edc/scripts/edc-audit.sh" 2>&1) || result=$?
 if [ "$result" -ne 0 ] && assert_result audit context-recovery-failed 'edc update'; then

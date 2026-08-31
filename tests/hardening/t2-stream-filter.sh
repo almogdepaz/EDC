@@ -7,6 +7,9 @@ SCRIPT="plugins/edc/scripts/edc-review.sh"
 # Stream filtering lives in edc-lib; backend argv construction is extracted.
 RUNTIME="plugins/edc/scripts/edc-lib.sh"
 SPAWN="plugins/edc/scripts/edc-agent-backends.sh"
+TMPDIR_T2=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_T2"' EXIT
+T2_FILTER_ERR="$TMPDIR_T2/filter-err.txt"
 
 echo "=== T2: Stream-json visibility ==="
 
@@ -27,7 +30,7 @@ source_and_test() {
   local output errors
 
   # assistant text event
-  output=$(printf '{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}\n' | stream_filter 2>/tmp/t2-filter-err.txt)
+  output=$(printf '{"type":"assistant","message":{"content":[{"type":"text","text":"hello world"}]}}\n' | stream_filter 2>"$T2_FILTER_ERR")
   if [ "$output" = "hello world" ]; then
     echo "PASS: assistant text event rendered"
   else
@@ -36,7 +39,7 @@ source_and_test() {
   fi
 
   # tool_use event
-  output=$(printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/some/path/to/file.md"}}]}}\n' | stream_filter 2>/tmp/t2-filter-err.txt)
+  output=$(printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/some/path/to/file.md"}}]}}\n' | stream_filter 2>"$T2_FILTER_ERR")
   if echo "$output" | grep -q '→ Read('; then
     echo "PASS: tool_use event rendered: $output"
   else

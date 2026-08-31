@@ -41,4 +41,4 @@ That makes reviews less generic. Instead of treating a diff as isolated text, ED
 
 ## Quiet startup behavior
 
-Installing EDC does not mean every Pi session gets injected with EDC context. In repositories without `edc-context/manifest.json`, startup is quiet: no `.edc/` runtime cache is created and no EDC context prompt is sent. Run `/edc` explicitly when you want EDC to build or use context.
+Installing EDC does not mean every Pi session gets injected with EDC context. In repositories without `edc-context/manifest.json`, startup is quiet and no EDC context prompt is sent. Workflows execute only the installed package or managed `~/.edc` runtime; repo-local `.edc/` is ignored and never created. Run `/edc` explicitly when you want EDC to build or use context.

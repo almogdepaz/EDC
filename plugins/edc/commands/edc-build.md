@@ -18,14 +18,15 @@ You have no other tools.
 
 ```bash
 set -- $ARGUMENTS
-if [ -f ".edc/scripts/edc-build.sh" ]; then
-  bash .edc/scripts/edc-build.sh "$@"
-elif [ -f "$HOME/.edc/scripts/edc-build.sh" ]; then
-  bash "$HOME/.edc/scripts/edc-build.sh" "$@"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "$CLAUDE_PLUGIN_ROOT/hooks/lib/runtime-bootstrap.mjs" ]; then
+  bootstrap="$CLAUDE_PLUGIN_ROOT/hooks/lib/runtime-bootstrap.mjs"
+elif [ -f "$HOME/.edc/hooks/lib/runtime-bootstrap.mjs" ]; then
+  bootstrap="$HOME/.edc/hooks/lib/runtime-bootstrap.mjs"
 else
-  echo "SCRIPT_MISSING: install EDC orchestrator first"
+  echo "SCRIPT_MISSING: trusted EDC runtime bootstrap is unavailable; reinstall EDC"
   exit 1
 fi
+node "$bootstrap" edc-build.sh "$@"
 ```
 
 If the script exits non-zero, surface its error message verbatim and stop.

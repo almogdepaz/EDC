@@ -22,8 +22,9 @@ check "audit fixtures cover simplification tags and antipattern overlap" "$(grep
 node_ok=0
 if node --input-type=module - "$FIXTURES" <<'NODE'
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const root = process.argv[2];
 const lensSkill = new Map([
@@ -38,18 +39,63 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, "utf8")); }
   catch (error) { fail(`${relative(root, path)} invalid json: ${error.message}`); return null; }
 }
-function hasTextUnder(dir, needle) {
+function pathWithin(parent, candidate) {
+  const rel = relative(parent, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+function hasTextUnder(dir, needle, excludedPath) {
   const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (hasTextUnder(path, needle)) return true;
-    } else if (entry.isFile()) {
+      if (hasTextUnder(path, needle, excludedPath)) return true;
+    } else if (entry.isFile() && resolve(path) !== resolve(excludedPath)) {
       const text = readFileSync(path, "utf8");
       if (text.includes(needle)) return true;
     }
   }
   return false;
+}
+function requiredFileFailure(fixtureDir, expectedPath, requiredFile) {
+  if (typeof requiredFile !== "string" || requiredFile.length === 0) return "requiredFiles has non-string value";
+  if (isAbsolute(requiredFile) || requiredFile.split(/[\\/]/).includes("..")) return `required file must be fixture-relative: ${requiredFile}`;
+  const candidate = resolve(fixtureDir, requiredFile);
+  if (!pathWithin(resolve(fixtureDir), candidate) || candidate === resolve(expectedPath)) return `required file is outside fixture inputs: ${requiredFile}`;
+  try {
+    if (!statSync(candidate).isFile()) return `required file is not regular: ${requiredFile}`;
+    const candidateReal = realpathSync(candidate);
+    if (!pathWithin(realpathSync(fixtureDir), candidateReal) || candidateReal === realpathSync(expectedPath)) {
+      return `required file resolves outside fixture inputs: ${requiredFile}`;
+    }
+  } catch {
+    return `required file is missing: ${requiredFile}`;
+  }
+  return "";
+}
+function requiredEvidenceFailure(fixtureDir, expectedPath, evidence) {
+  if (typeof evidence !== "string" || evidence.length === 0) return "requiredEvidence has non-string value";
+  if (hasTextUnder(fixtureDir, evidence, expectedPath)) return "";
+  return `evidence not found in fixture input files: ${evidence}`;
+}
+
+const regressionRoot = mkdtempSync(join(tmpdir(), "edc-t37-evidence-"));
+try {
+  const regressionDir = join(regressionRoot, "fixture");
+  mkdirSync(join(regressionDir, "src"), { recursive: true });
+  const regressionExpected = join(regressionDir, "expected.json");
+  const outsideFile = join(regressionRoot, "outside.ts");
+  writeFileSync(regressionExpected, JSON.stringify({ requiredEvidence: ["SELF_ONLY_ASSERTION"] }));
+  writeFileSync(join(regressionDir, "src", "input.ts"), "export const value = 'REAL_SOURCE_TOKEN';\n");
+  writeFileSync(outsideFile, "outside\n");
+  symlinkSync(outsideFile, join(regressionDir, "src", "outside-link.ts"));
+  if (requiredFileFailure(regressionDir, regressionExpected, "src/input.ts")) fail("file regression rejected existing regular file");
+  for (const requiredFile of ["src/missing.ts", outsideFile, "../outside.ts", "src/outside-link.ts"]) {
+    if (!requiredFileFailure(regressionDir, regressionExpected, requiredFile)) fail(`file regression accepted invalid file: ${requiredFile}`);
+  }
+  if (requiredEvidenceFailure(regressionDir, regressionExpected, "REAL_SOURCE_TOKEN")) fail("evidence regression rejected real source token");
+  if (!requiredEvidenceFailure(regressionDir, regressionExpected, "SELF_ONLY_ASSERTION")) fail("evidence regression accepted token found only in expected.json");
+} finally {
+  rmSync(regressionRoot, { recursive: true });
 }
 
 for (const [lens, skill] of lensSkill) {
@@ -73,6 +119,8 @@ for (const [lens, skill] of lensSkill) {
       assert.equal(expected.fixture, name);
       assert.ok(Array.isArray(expected.requiredFindings));
       assert.ok(Array.isArray(expected.forbiddenFindings));
+      assert.ok(Array.isArray(expected.requiredFiles));
+      assert.ok(expected.requiredFiles.length > 0);
       assert.ok(Array.isArray(expected.requiredEvidence));
       assert.ok(expected.requiredEvidence.length > 0);
     } catch (error) {
@@ -89,12 +137,13 @@ for (const [lens, skill] of lensSkill) {
       }
       if (!item.category && !item.evidence) fail(`${lens}/${name} finding assertion lacks category/evidence`);
     }
-    for (const evidence of expected.requiredEvidence) {
-      if (typeof evidence !== "string" || evidence.length === 0) {
-        fail(`${lens}/${name} requiredEvidence has non-string value`);
-      } else if (evidence !== "No security findings" && evidence !== "Requirement" && !hasTextUnder(fixtureDir, evidence)) {
-        fail(`${lens}/${name} evidence not found in fixture files: ${evidence}`);
-      }
+    for (const requiredFile of Array.isArray(expected.requiredFiles) ? expected.requiredFiles : []) {
+      const fileFailure = requiredFileFailure(fixtureDir, expectedPath, requiredFile);
+      if (fileFailure) fail(`${lens}/${name} ${fileFailure}`);
+    }
+    for (const evidence of Array.isArray(expected.requiredEvidence) ? expected.requiredEvidence : []) {
+      const evidenceFailure = requiredEvidenceFailure(fixtureDir, expectedPath, evidence);
+      if (evidenceFailure) fail(`${lens}/${name} ${evidenceFailure}`);
     }
 
     if (lens === "audit") {

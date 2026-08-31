@@ -29,14 +29,22 @@ SH
 set -euo pipefail
 printf 'delivery|agent=%s|ctx=%s|args=%s\n' "${EDC_AGENT_CLI:-}" "${EDC_CONTEXT_MODE:-}" "$*" >> "$EDC_T41_LOG"
 mkdir -p "$(dirname "$EDC_DELIVERY_REVIEW_OUTPUT")" "$(dirname "$EDC_RESULT_FILE")"
-printf '## delivery\n' > "$EDC_DELIVERY_REVIEW_OUTPUT"
 case "${EDC_T41_DELIVERY:-success}" in
   success)
+    printf '## delivery\n\nno findings\n' > "$EDC_DELIVERY_REVIEW_OUTPUT"
     cat > "$EDC_RESULT_FILE" <<'JSON'
 {"schemaVersion":1,"kind":"delivery-review","phase":"delivery","status":"success","exitCode":0,"reasonCode":"success","message":"delivery review succeeded","outputs":["delivery-review-HEAD.md"],"finalReview":"delivery-review-HEAD.md"}
 JSON
     ;;
   warning)
+    printf 'x' > "$EDC_DELIVERY_REVIEW_OUTPUT"
+    . "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)/edc-lib.sh"
+    if edc_file_has_substantive_content "$EDC_DELIVERY_REVIEW_OUTPUT"; then
+      echo 'truncated report was incorrectly accepted' >&2
+      exit 1
+    fi
+    edc_write_coverage_gap_report "$EDC_DELIVERY_REVIEW_OUTPUT" "Delivery Review Coverage Gap" \
+      "Delivery review unavailable; the reviewer produced truncated output."
     cat > "$EDC_RESULT_FILE" <<'JSON'
 {"schemaVersion":1,"kind":"delivery-review","phase":"delivery","status":"success-with-warning","exitCode":0,"reasonCode":"success-with-warning","message":"delivery review validated report after subprocess failure","hint":"inspect delivery log for transport diagnostics","outputs":["delivery-review-HEAD.md"],"finalReview":"delivery-review-HEAD.md"}
 JSON
@@ -78,7 +86,6 @@ SH
   git -C "$TMP/work" add tracked.txt
   git -C "$TMP/work" commit -q -m initial
   git -C "$TMP/work" branch -M main
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/work" "$TMP/plugin" >/dev/null
 }
 
 setup_runtime
@@ -88,7 +95,7 @@ setup_runtime
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-warning.log"
   export EDC_T41_DELIVERY=warning
-  bash .edc/scripts/edc-review-all.sh HEAD --base main --committed-only --ignore 'generated/**' --context-mode advisory > "$TMP/warning.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --committed-only --ignore 'generated/**' --context-mode advisory > "$TMP/warning.out" 2>&1
 )
 
 candidate_sha=$(git -C "$TMP/work" rev-parse HEAD)
@@ -123,6 +130,7 @@ assert.equal(result.untrackedIncluded, false);
 assert.equal(result.phases.length, 3);
 assert.equal(result.phases.find((phase) => phase.phase === 'delivery').status, 'success-with-warning');
 assert.deepEqual(result.outputs, ['review-HEAD.md', 'delivery-review-HEAD.md', 'edc-context/reports/issues.md', 'edc-context/reports/complexity.md']);
+assert.match(readFileSync('$TMP/work/delivery-review-HEAD.md', 'utf8'), /reviewer produced truncated output/);
 NODE
 if grep -q 'phases:' "$TMP/warning.out" && grep -q 'delivery: success-with-warning' "$TMP/warning.out"; then
   echo "PASS: review-all aggregates warning phase into structured success-with-warning"
@@ -138,7 +146,7 @@ setup_runtime
   export EDC_AGENT_CLI=pi
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-full.log"
-  bash .edc/scripts/edc-review-all.sh --full --ignore 'generated/**' --context-mode advisory > "$TMP/full.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" --full --ignore 'generated/**' --context-mode advisory > "$TMP/full.out" 2>&1
 )
 
 expected_full=$(printf '%s\n' \
@@ -173,7 +181,7 @@ set +e
   export EDC_CONTEXT_MODE=advisory
   export EDC_T41_LOG="$TMP/phases-fail.log"
   export EDC_T41_DELIVERY=fail
-  bash .edc/scripts/edc-review-all.sh HEAD --base main --committed-only > "$TMP/fail.out" 2>&1
+  bash "$TMP/plugin/scripts/edc-review-all.sh" HEAD --base main --committed-only > "$TMP/fail.out" 2>&1
 )
 rc=$?
 set -e

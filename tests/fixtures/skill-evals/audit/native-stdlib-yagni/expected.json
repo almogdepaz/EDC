@@ -12,5 +12,6 @@
     { "category": "security" },
     { "category": "delivery" }
   ],
-  "requiredEvidence": ["src/platform.ts", "Math.random", "document.execCommand", "edc-debt"]
+  "requiredFiles": ["src/platform.ts"],
+  "requiredEvidence": ["Math.random", "document.execCommand", "edc-debt"]
 }

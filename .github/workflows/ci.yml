@@ -46,8 +46,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Install shellcheck
-        run: brew install shellcheck
+      - name: Install system dependencies
+        run: brew install jq shellcheck
       - name: Run hardening suite with Apple Bash
         shell: /bin/bash {0}
         run: npm test

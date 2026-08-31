@@ -14,6 +14,8 @@ Audit workers:
 - must not scan the entire repo by default from a module-scoped task
 - must not report global/cross-module conclusions from a local worker; global/cross-module conclusions belong to synthesis
 
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries to verify references, callers, duplication, and dead-export claims.
+
 ## Standards sources
 
 Before scoring code quality, load documented standards sources when they exist:

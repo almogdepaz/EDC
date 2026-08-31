@@ -233,7 +233,7 @@ if ! stale_output=$(run_stale_recovery "$stale_repo" "$stale_source" update-succ
   exit 1
 fi
 if [ "$(git -C "$stale_repo" branch --show-current)" = main ] \
-  && grep -Fq "edc-update"$'\t'"prompt:update --base $stale_source" "$stale_spawn_log" \
+  && grep -Fq "edc-update"$'\t'"prompt:update --context-source $stale_source" "$stale_spawn_log" \
   && ! grep -Fq 'prompt:update --base HEAD' "$stale_spawn_log"; then
   echo "PASS: stale-main recovery updates from manifest sourceCommit"
 else
@@ -248,10 +248,10 @@ if ! option_arg_output=$(run_stale_recovery "$stale_repo" "$stale_source" update
   printf '%s\n' "$option_arg_output"
   exit 1
 fi
-if grep -Fq "edc-update"$'\t'"prompt:update --ignore --base --base $stale_source" "$option_arg_spawn_log"; then
-  echo "PASS: replacing recovery base preserves option-like argument values"
+if grep -Fq "edc-update"$'\t'"prompt:update --ignore --base --context-source $stale_source" "$option_arg_spawn_log"; then
+  echo "PASS: replacing review base preserves option-like argument values"
 else
-  echo "FAIL: replacing recovery base corrupted an option-like argument value"
+  echo "FAIL: replacing review base corrupted an option-like argument value"
   cat "$option_arg_spawn_log"
   exit 1
 fi
@@ -278,7 +278,7 @@ if ! fallback_output=$(run_stale_recovery "$stale_repo" "$stale_source" update-f
   printf '%s\n' "$fallback_output"
   exit 1
 fi
-if grep -Fq "edc-update"$'\t'"prompt:update --base $stale_source" "$fallback_spawn_log" \
+if grep -Fq "edc-update"$'\t'"prompt:update --context-source $stale_source" "$fallback_spawn_log" \
   && grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$fallback_spawn_log" \
   && [ "$(wc -l < "$fallback_spawn_log" | tr -d ' ')" -eq 2 ]; then
   echo "PASS: failed incremental recovery gets exactly one force-build fallback"
@@ -290,29 +290,46 @@ fi
 
 unrelated_tree=$(git -C "$stale_repo" mktree < /dev/null)
 unrelated_source=$(printf 'unrelated\n' | git -C "$stale_repo" commit-tree "$unrelated_tree")
-for source_case in missing invalid symbolic nonancestor; do
+for source_case in missing invalid symbolic; do
   case "$source_case" in
     missing) unsafe_source="" ;;
     invalid) unsafe_source="not-a-commit" ;;
     symbolic) unsafe_source="HEAD~1" ;;
-    nonancestor) unsafe_source="$unrelated_source" ;;
   esac
   unsafe_spawn_log="$TMP/$source_case-spawns.log"
-  if ! unsafe_output=$(run_stale_recovery "$stale_repo" "$unsafe_source" build-only-succeeds "$unsafe_spawn_log"); then
-    echo "FAIL: $source_case sourceCommit did not force-build"
-    printf '%s\n' "$unsafe_output"
-    exit 1
-  fi
-  if grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$unsafe_spawn_log" \
-    && ! grep -Fq 'edc-update' "$unsafe_spawn_log" \
-    && [ "$(wc -l < "$unsafe_spawn_log" | tr -d ' ')" -eq 1 ]; then
-    echo "PASS: $source_case sourceCommit skips update and force-builds once"
+  set +e
+  unsafe_output=$(run_stale_recovery "$stale_repo" "$unsafe_source" build-only-succeeds "$unsafe_spawn_log")
+  unsafe_rc=$?
+  set -e
+  if [ "$unsafe_rc" -ne 0 ] \
+    && [ ! -s "$unsafe_spawn_log" ] \
+    && grep -F 'edc build --agent pi --force' <<< "$unsafe_output" >/dev/null; then
+    echo "PASS: $source_case sourceCommit refuses update and requires an explicit rebuild"
   else
-    echo "FAIL: $source_case sourceCommit used an unsafe recovery path"
-    cat "$unsafe_spawn_log"
+    echo "FAIL: $source_case sourceCommit mutated context or spawned a model"
+    printf '%s\n' "$unsafe_output"
+    cat "$unsafe_spawn_log" 2>/dev/null || true
     exit 1
   fi
 done
+
+divergent_spawn_log="$TMP/nonancestor-spawns.log"
+if divergent_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" update-succeeds "$divergent_spawn_log"); then
+  if grep -Fq "edc-update"$'\t'"prompt:update --context-source $unrelated_source" "$divergent_spawn_log" \
+    && ! grep -Fq 'edc-build-retry' "$divergent_spawn_log" \
+    && [ "$(wc -l < "$divergent_spawn_log" | tr -d ' ')" -eq 1 ]; then
+    echo "PASS: divergent context updates from its recorded source commit"
+  else
+    echo "FAIL: divergent context did not use its recorded source commit"
+    printf '%s\n' "$divergent_output"
+    cat "$divergent_spawn_log"
+    exit 1
+  fi
+else
+  echo "FAIL: divergent context update was refused"
+  printf '%s\n' "$divergent_output"
+  exit 1
+fi
 
 repo="$TMP/repo"
 setup_repo "$repo"

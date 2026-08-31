@@ -8,5 +8,6 @@
     { "category": "maintainability" },
     { "category": "delivery" }
   ],
-  "requiredEvidence": ["src/render.diff", "No security findings"]
+  "requiredFiles": ["src/render.diff"],
+  "requiredEvidence": ["normalizedTitle"]
 }

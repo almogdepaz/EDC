@@ -7,8 +7,8 @@
 #   - missing context → orchestrator runs build recovery, then audit
 #   - stale context  → orchestrator runs update recovery, then audit
 #   - one audit worker runs per manifest module, then synthesis writes both reports
-#   - synthesis writes only one report → orchestrator exits non-zero
-#   - synthesis writes structureless report → orchestrator exits non-zero
+#   - synthesis writes only one report → missing coverage is marked explicitly
+#   - substantive noncanonical synthesis output remains usable
 #
 # Run from repo root: bash tests/hardening/t11-audit-orchestrator.sh
 set -euo pipefail
@@ -18,6 +18,8 @@ ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-audit.sh"
 TMPDIR_T11=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T11/bin"
+export EDC_CONFIG_FILE="$TMPDIR_T11/missing-config"
+unset EDC_PARALLEL
 trap 'rm -rf "$TMPDIR_T11"' EXIT
 
 echo "=== T11: audit orchestrator (mocked agent) ==="
@@ -47,8 +49,10 @@ scenario="valid"
 if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
   module=\$(printf '%s\n' "\$prompt" | grep '^AUDIT_MODULE: ' | head -1 | sed 's/^AUDIT_MODULE: //')
   report_path=\$(printf '%s\n' "\$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
+  capability=\$(printf '%s\n' "\$prompt" | awk -F': ' '/^OCTOCODE_STATUS: /{print \$2}')
   mkdir -p "\$(dirname "\$report_path")"
   printf 'worker:%s\n' "\$module" >> "\$LOG_FILE"
+  printf 'capability:%s:%s\n' "\$module" "\$capability" >> "\$LOG_FILE"
   if [[ "\$prompt" == *"immutable candidate commit"* ]] \
     && [[ "\$prompt" == *"git show"* ]] \
     && [[ "\$prompt" == *"changed gitlink"* ]] \
@@ -63,20 +67,28 @@ if [[ "\$prompt" == *"AUDIT WORKER TASK"* ]]; then
     sleep 0.4
     rm -f "$TMPDIR_T11/active/\$module"
   fi
-  printf '## Module Audit: %s\n\nScoped finding.\n' "\$module" > "\$report_path"
   if [ "\$scenario" = "valid-worker-exit-fail" ]; then
     exit 1
   fi
+  if [ "\$scenario" = "empty-worker-success" ]; then
+    : > "\$report_path"
+    exit 0
+  fi
+  printf 'module audit for %s completed without canonical headings\n' "\$module" > "\$report_path"
   exit 0
 fi
 
 if [[ "\$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
+  if [[ "\$prompt" == *"OCTOCODE_STATUS:"* ]]; then
+    echo "MOCK ERROR: synthesis prompt received source-research capability guidance" >&2
+    exit 31
+  fi
   printf 'synthesis\n' >> "\$LOG_FILE"
   complexity_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
   issues_path=\$(printf '%s\n' "\$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
   mkdir -p "\$(dirname "\$complexity_path")" "\$(dirname "\$issues_path")"
   case "\$scenario" in
-    valid|valid-worker-exit-fail)
+    valid|valid-worker-exit-fail|empty-worker-success)
       printf '## Summary\n\nSynthesized findings.\n' > "\$complexity_path"
       printf '## Known Issues\n\nSynthesized findings.\n' > "\$issues_path"
       ;;
@@ -126,12 +138,19 @@ echo "MOCK ERROR: unrecognized prompt: \$prompt" >&2
 exit 1
 MOCK
 chmod +x "$MOCK_BIN/claude"
+cat > "$MOCK_BIN/octocode" <<MOCK
+#!/usr/bin/env bash
+printf 'probe\n' >> "$TMPDIR_T11/octocode-log"
+[ "\${1:-}" = "--version" ] || exit 2
+printf 'octocode v-test\n'
+MOCK
+chmod +x "$MOCK_BIN/octocode"
 
 # ── helper: set up a minimal git repo + optionally pre-existing context ──────
 setup_repo() {
   local with_context="$1"
   rm -rf "$TMPDIR_T11/repo"
-  rm -f "$TMPDIR_T11/audit-log"
+  rm -f "$TMPDIR_T11/audit-log" "$TMPDIR_T11/octocode-log"
   mkdir -p "$TMPDIR_T11/repo"
   cd "$TMPDIR_T11/repo"
   export GIT_CONFIG_GLOBAL=/dev/null
@@ -144,15 +163,6 @@ setup_repo() {
   echo "lib" > lib.py
   git add src.py lib.py
   git commit -q -m "init"
-  mkdir -p .edc/skills/edc-build-impl .edc/skills/edc-update-impl .edc/skills/edc-audit/references
-  printf '# Build Context\nedc-build\n' > .edc/skills/edc-build-impl/SKILL.md
-  printf '# Update Context\nedc-update\n' > .edc/skills/edc-update-impl/SKILL.md
-  printf '# Audit Code Quality\nname: edc-audit\n' > .edc/skills/edc-audit/SKILL.md
-  printf '# Scope and Standards\n' > .edc/skills/edc-audit/references/scope-and-standards.md
-  printf '# Smell Baseline\n' > .edc/skills/edc-audit/references/smell-baseline.md
-  printf '# Quality Checks\n' > .edc/skills/edc-audit/references/quality-checks.md
-  printf '# Reporting\n' > .edc/skills/edc-audit/references/reporting.md
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMPDIR_T11/repo" "$ORIG_DIR/plugins/edc" >/dev/null
   if [ "$with_context" = "fresh" ]; then
     mkdir -p edc-context/modules
     head=$(git rev-parse HEAD)
@@ -161,9 +171,14 @@ setup_repo() {
     printf '<!-- t11 -->\n# root\n\n## Files\n\n- src.py\n' > edc-context/modules/root.md
     printf '<!-- t11 -->\n# lib\n\n## Files\n\n- lib.py\n' > edc-context/modules/lib.md
   elif [ "$with_context" = "stale" ]; then
+    local source_commit
+    source_commit=$(git rev-parse HEAD)
+    printf 'stale\n' >> src.py
+    git add src.py
+    git commit -q -m "stale context fixture"
     mkdir -p edc-context/modules
     printf '<!-- t11 -->\n# Stub\n\n## Module Map\n\n- root\n- lib\n' > edc-context/index.md
-    printf '{"schemaVersion":2,"sourceCommit":"deadbeef","modules":[{"name":"root","doc":"edc-context/modules/root.md","match":{"exactFiles":["src.py"]}},{"name":"lib","doc":"edc-context/modules/lib.md","match":{"exactFiles":["lib.py"]}}]}\n' > edc-context/manifest.json
+    printf '{"schemaVersion":2,"sourceCommit":"%s","modules":[{"name":"root","doc":"edc-context/modules/root.md","match":{"exactFiles":["src.py"]}},{"name":"lib","doc":"edc-context/modules/lib.md","match":{"exactFiles":["lib.py"]}}]}\n' "$source_commit" > edc-context/manifest.json
     printf '<!-- t11 -->\n# root\n\n## Files\n\n- src.py\n' > edc-context/modules/root.md
     printf '<!-- t11 -->\n# lib\n\n## Files\n\n- lib.py\n' > edc-context/modules/lib.md
   fi
@@ -207,17 +222,51 @@ else
   exit 1
 fi
 
+# ── 11b2: one immutable Octocode capability state per coordinator run ──────
+setup_repo "fresh"
+echo "valid" > "$TMPDIR_T11/scenario"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+probe_count=$(wc -l < "$TMPDIR_T11/octocode-log" 2>/dev/null | tr -d ' ' || echo 0)
+capabilities=$(grep '^capability:' "$TMPDIR_T11/audit-log" 2>/dev/null | sort || true)
+expected_capabilities=$(printf 'capability:lib:available\ncapability:root:available')
+if [ "$result" -eq 0 ] && [ "$probe_count" -eq 1 ] && [ "$capabilities" = "$expected_capabilities" ]; then
+  echo "PASS: multi-prompt audit probes Octocode once and shares immutable capability state"
+else
+  echo "FAIL (11b2): expected one Octocode probe and identical available state. exit=$result probes=$probe_count"
+  echo "capabilities=$capabilities"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
 # ── 11c: valid worker report + failed worker rc → warning, not failure ─────
 setup_repo "fresh"
 echo "valid-worker-exit-fail" > "$TMPDIR_T11/scenario"
 result=0
-out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported failure, but report validation passed" \
+out=$(EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit subprocess for module root reported status failed" \
+   && grep -Rq 'Quality review unavailable for module' .git/edc/runs/*/staged/audit-tasks \
    && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
-  echo "PASS: valid module audit report accepted after failed worker rc"
+  echo "PASS: missing failed-worker reports become explicit unavailable coverage"
 else
-  echo "FAIL (11c): valid worker report + failed rc should succeed with warning. exit=$result"
+  echo "FAIL (11c): missing worker reports should succeed with warning. exit=$result"
+  echo "--- output ---"; echo "$out"; echo "--- end ---"
+  exit 1
+fi
+
+# ── 11c2: empty successful worker output → explicit coverage gap ────────────
+setup_repo "fresh"
+echo "empty-worker-success" > "$TMPDIR_T11/scenario"
+result=0
+out=$(EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -eq 0 ] \
+   && echo "$out" | grep -q 'module root produced no substantive report' \
+   && grep -Rq 'Quality review unavailable for module' .git/edc/runs/*/staged/audit-tasks \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.status === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: empty successful-worker audit becomes explicit unavailable coverage"
+else
+  echo "FAIL (11c2): empty successful-worker audit aborted or hid incomplete coverage. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
@@ -227,7 +276,7 @@ setup_repo "fresh"
 echo "valid-synthesis-exit-fail" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but report validation passed" \
+if [ "$result" -eq 0 ] && echo "$out" | grep -q "audit synthesis subprocess reported failure, but its substantive reports were preserved" \
    && [ -f edc-context/reports/complexity.md ] && [ -f edc-context/reports/issues.md ] \
    && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
   echo "PASS: valid audit synthesis accepted after failed synthesis rc"
@@ -306,29 +355,31 @@ else
   exit 1
 fi
 
-# ── 11f: fresh context, audit subprocess skips issues.md → orchestrator fails ─
+# ── 11f: missing synthesis output becomes explicit unavailable coverage ───────
 setup_repo "fresh"
 echo "missing-issues" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] && echo "$out" | grep -q "audit report missing" \
-   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.exitCode === 1 && j.reasonCode === "audit-report-validation" ? 0 : 1)'; then
-  echo "PASS: missing report rejected with descriptive error"
+if [ "$result" -eq 0 ] \
+   && grep -q 'Quality review unavailable' edc-context/reports/issues.md \
+   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "audit" && j.status === "success-with-warning" && j.exitCode === 0 && j.reasonCode === "success-with-warning" ? 0 : 1)'; then
+  echo "PASS: missing synthesis report becomes explicit unavailable coverage"
 else
-  echo "FAIL (11f): expected non-zero exit + 'audit report missing'. exit=$result"
+  echo "FAIL (11f): missing synthesis report aborted or hid incomplete coverage. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
 
-# ── 11g: fresh context, audit subprocess writes structureless report → fails ─
+# ── 11g: substantive noncanonical synthesis output is accepted ────────────────
 setup_repo "fresh"
 echo "stub-complexity" > "$TMPDIR_T11/scenario"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] && echo "$out" | grep -q "no '## ' headings"; then
-  echo "PASS: structureless report rejected with descriptive error"
+if [ "$result" -eq 0 ] \
+   && grep -q 'no headings here just plain text' edc-context/reports/complexity.md; then
+  echo "PASS: substantive noncanonical synthesis output accepted"
 else
-  echo "FAIL (11g): expected non-zero exit + 'no ## headings' error. exit=$result"
+  echo "FAIL (11g): substantive synthesis output was rejected. exit=$result"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1
 fi
@@ -339,7 +390,7 @@ rm -rf "$TMPDIR_T11/active"
 rm -f "$TMPDIR_T11/overlap"
 echo "valid" > "$TMPDIR_T11/scenario"
 result=0
-out=$(AUDIT_PARALLEL_PROBE=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
+out=$(AUDIT_PARALLEL_PROBE=1 EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 EDC_KEEP_AUDIT_TASKS=1 bash "$SCRIPT" 2>&1) || result=$?
 max_overlap=$(sort -nr "$TMPDIR_T11/overlap" 2>/dev/null | head -1 || echo 0)
 run_reports=0
 if [ -d .git/edc/runs ]; then

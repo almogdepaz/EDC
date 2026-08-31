@@ -46,7 +46,7 @@ fi
 
 # ── 5c2: shellcheck is wired in package scripts and CI ─────────────────────
 if grep -q '"lint:shell": "shellcheck plugins/edc/scripts/edc plugins/edc/scripts/\*.sh"' package.json \
-  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh"' package.json \
+  && grep -q '"lint:hardening": "shellcheck -S error tests/hardening/\*.sh tests/hardening/lib/\*.sh"' package.json \
   && grep -q '"test:modules": "node --test tests/unit/\*.test.mjs"' package.json \
   && grep -q '"test": "npm run lint:hardening && npm run test:modules && npm run test:benchmark && bash tests/hardening/run-all.sh"' package.json \
   && grep -q 'npm run lint:shell' .github/workflows/ci.yml \
@@ -105,6 +105,15 @@ else
   exit 1
 fi
 
+if grep -Fq 'Marketplace installation provides the package-backed Claude commands, hooks, and skills' README.md \
+  && grep -Fq 'The standalone terminal CLI requires the direct installer' README.md \
+  && ! grep -Fq 'Both paths install the plugin surface' README.md; then
+  echo "PASS: README distinguishes marketplace plugin setup from terminal runtime install"
+else
+  echo "FAIL: README conflates marketplace setup with terminal runtime installation"
+  exit 1
+fi
+
 if [ -f CHANGELOG.md ] \
   && grep -q '^## \[1.1.5\]' CHANGELOG.md \
   && [ -f SECURITY.md ] \
@@ -145,10 +154,34 @@ if [ -f "$PLUGIN_SCRIPT" ] \
   && [ -f "plugins/edc/scripts/edc-review-all.sh" ] \
   && [ -f "plugins/edc/hooks/lib/classify-cli.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/json-cli.mjs" ] \
+  && [ -f "plugins/edc/hooks/lib/runtime-bootstrap.mjs" ] \
   && [ -f "plugins/edc/hooks/lib/stream-filter.mjs" ]; then
-  echo "PASS: plugin runtime includes review/review-all + node helper CLIs"
+  echo "PASS: plugin runtime includes review/review-all + trusted node bootstrap/helper CLIs"
 else
-  echo "FAIL: plugin runtime missing review/review-all/node helper CLI — install hook cannot copy"
+  echo "FAIL: plugin runtime missing review/review-all/trusted node bootstrap/helper CLI — install hook cannot copy"
+  exit 1
+fi
+
+# User-facing wrappers must enter through trusted package/global bootstrap code;
+# repo-local scripts are never execution targets.
+if grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-build.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-update.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-run-review.md \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/commands/edc-doctor.md \
+  && ! grep -R -E 'bash ("?\.edc/scripts|"?\$HOME/\.edc/scripts)' plugins/edc/commands >"$TMPDIR_T5/direct-command-runtime.txt"; then
+  echo "PASS: static slash wrappers never invoke project-local runtime directly"
+else
+  echo "FAIL: static slash wrappers bypass trusted runtime bootstrap"
+  cat "$TMPDIR_T5/direct-command-runtime.txt" 2>/dev/null || true
+  exit 1
+fi
+
+if grep -q '\$HOME/.edc/hooks/lib/runtime-bootstrap.mjs' install.sh \
+  && ! grep -E 'if \[ -f "?\.edc/scripts/edc-\$script\.sh"? \]' install.sh >"$TMPDIR_T5/direct-generated-runtime.txt"; then
+  echo "PASS: generated Cursor/Codex wrappers use trusted HOME bootstrap only"
+else
+  echo "FAIL: generated Cursor/Codex wrappers can invoke project-local runtime directly"
+  cat "$TMPDIR_T5/direct-generated-runtime.txt" 2>/dev/null || true
   exit 1
 fi
 
@@ -221,12 +254,14 @@ else
 fi
 rm -rf "$REMOTE_TMP"
 
-# ── 5f: session-start is inert; explicit Pi command installs runtime ────────
+# ── 5f: passive/help Pi paths are inert; execution uses trusted bootstrap ──
 if ! grep -q 'installOrchestratorScript' "$HOOK" \
-  && grep -q 'installOrchestratorScript(ctx.cwd, PLUGIN_ROOT)' pi/index.mjs; then
-  echo "PASS: session-start avoids project cache writes; explicit Pi command installs runtime"
+  && ! grep -q 'installOrchestratorScript' plugins/edc/hooks/lib/route.mjs \
+  && ! grep -q 'installOrchestratorScript(ctx.cwd, PLUGIN_ROOT)' pi/index.mjs \
+  && grep -q 'runtime-bootstrap.mjs' pi/index.mjs; then
+  echo "PASS: session/help paths avoid project cache writes; Pi execution uses trusted bootstrap"
 else
-  echo "FAIL: session-start/explicit install contract regressed"
+  echo "FAIL: passive Pi path or trusted execution bootstrap contract regressed"
   exit 1
 fi
 
@@ -247,6 +282,7 @@ if bash -n install.sh \
   && grep -q 'worker-pool.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'worker-manifest.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'build-dag.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'runtime-bootstrap.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'edc-worker.sh' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && [ "$(grep -c 'copy_or_download "plugins/edc/scripts/' install.sh)" -eq 0 ]; then
   echo "PASS: terminal runtime install derives copy/chmod from canonical manifest"
@@ -255,20 +291,29 @@ else
   exit 1
 fi
 
-# ── 5g: pi install path includes skill bundle for spawned subprocesses ──────
+# ── 5g: pi install path relies on runtime manifest for private subprocess skills ─
+install_terminal_fn=$(awk '/^install_terminal_cli\(\) \{/,/^}/' install.sh)
+install_public_skills_fn=$(awk '/^install_public_edc_skills\(\) \{/,/^}/' install.sh)
 pi_branch=$(awk '/^  pi\)/,/^    ;;/' install.sh)
-if echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
-  && grep -q 'edc-context-curator-impl/SKILL.md' install.sh \
-  && grep -q 'edc-context-curator-edit-impl/SKILL.md' install.sh \
-  && grep -q 'edc-audit/references/quality-checks.md' install.sh \
-  && grep -q 'edc-delivery-review/references/architecture-axis.md' install.sh \
+if ! grep -q 'remove_legacy_edc_skills' install.sh \
+  && ! echo "$pi_branch" | grep -q 'install_edc_skills "\$HOME/.edc/skills"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-review-impl"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-audit-impl"' \
+  && echo "$install_terminal_fn" | grep -Fq '"$HOME/.edc/skills/edc-context"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-review-impl"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-audit-impl"' \
+  && echo "$install_public_skills_fn" | grep -Fq '"$target/edc-context"' \
+  && grep -q 'edc-context-curator-impl/SKILL.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-context-curator-edit-impl/SKILL.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-audit/references/quality-checks.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
+  && grep -q 'edc-delivery-review/references/architecture-axis.md' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'classify-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'json-cli.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'pi-supervisor.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs \
   && grep -q 'stream-filter.mjs' plugins/edc/hooks/lib/runtime-manifest.mjs; then
-  echo "PASS: pi installer copies private skills and node runtime helpers for spawned subprocesses"
+  echo "PASS: installer centralizes legacy cleanup and uses runtime manifest for private skills/helpers"
 else
-  echo "FAIL: pi installer does not copy private skills/node runtime helpers"
+  echo "FAIL: installer legacy cleanup shape or private runtime helper contract regressed"
   exit 1
 fi
 
@@ -280,11 +325,36 @@ else
   exit 1
 fi
 
-if grep -q 'local_suffix=' pi/install.sh \
-  && ! grep -q '\${LOCAL:+, project-local}' pi/install.sh; then
-  echo "PASS: pi installer labels project-local only when --local is set"
+PI_INSTALL_BIN="$TMPDIR_T5/pi-install-bin"
+PI_INSTALL_LOG="$TMPDIR_T5/pi-install-args"
+mkdir -p "$PI_INSTALL_BIN"
+cat >"$PI_INSTALL_BIN/pi" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${PI_INSTALL_LOG:?}"
+EOF
+chmod +x "$PI_INSTALL_BIN/pi"
+set +e
+PATH="$PI_INSTALL_BIN:$PATH" PI_INSTALL_LOG="$PI_INSTALL_LOG" bash pi/install.sh --local >"$TMPDIR_T5/pi-local.out" 2>&1
+pi_local_rc=$?
+set -e
+if [ "$pi_local_rc" -eq 2 ] \
+  && grep -q -- '--local is unsupported' "$TMPDIR_T5/pi-local.out" \
+  && [ ! -e "$PI_INSTALL_LOG" ]; then
+  echo "PASS: pi installer rejects unsupported repo-local installs"
 else
-  echo "FAIL: pi installer may label global installs as project-local"
+  echo "FAIL: pi installer accepted or unclearly rejected --local"
+  cat "$TMPDIR_T5/pi-local.out"
+  exit 1
+fi
+
+PATH="$PI_INSTALL_BIN:$PATH" PI_INSTALL_LOG="$PI_INSTALL_LOG" bash pi/install.sh --from-source >"$TMPDIR_T5/pi-source.out" 2>&1
+if [ "$(sed -n '1p' "$PI_INSTALL_LOG")" = "install" ] \
+  && [ "$(sed -n '2p' "$PI_INSTALL_LOG")" = "$(pwd)" ] \
+  && [ "$(wc -l <"$PI_INSTALL_LOG" | tr -d ' ')" -eq 2 ]; then
+  echo "PASS: explicit Pi source install remains global"
+else
+  echo "FAIL: explicit Pi source install forwarded local-install flags"
+  cat "$PI_INSTALL_LOG" "$TMPDIR_T5/pi-source.out"
   exit 1
 fi
 
@@ -296,72 +366,15 @@ else
   exit 1
 fi
 
-# ── 5h: install logic: copies missing script to project .edc/scripts/ ─────────
-# Simulate install: run the hook with a fake project root
-result=$(node -e "
-import { join } from 'path';
-import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-
-const projectRoot = '${TMPDIR_T5}';
-const pluginDir = join('$(pwd)', 'plugins', 'edc');
-const pluginScript = join(pluginDir, 'scripts', 'edc-review.sh');
-const destDir = join(projectRoot, '.edc', 'scripts');
-const destScript = join(destDir, 'edc-review.sh');
-
-if (!existsSync(pluginScript)) {
-  process.stderr.write('plugin script missing\\n'); process.exit(1);
-}
-
-let shouldCopy = !existsSync(destScript);
-if (shouldCopy) {
-  mkdirSync(destDir, { recursive: true });
-  copyFileSync(pluginScript, destScript);
-  chmodSync(destScript, 0o755);
-  console.log('installed');
-} else {
-  console.log('already present');
-}
-" 2>&1)
-
-if echo "$result" | grep -q 'installed'; then
-  echo "PASS: install logic copies script to project .edc/scripts/"
+runtime_docs=(README.md pi/README.md docs/index.md docs/agent-discovery.md examples/pi-quickstart.md plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md)
+if ! rg -n 'pi install .* (-l|--local)|project-local install|runtime cache is created' "${runtime_docs[@]}" >"$TMPDIR_T5/local-runtime-docs.txt" \
+  && ! grep -qx '\.edc/' README.md \
+  && grep -qi 'repo-local `.edc/` is never read, repaired, created, or executed' README.md; then
+  echo "PASS: source docs describe package/global runtime without repo cache guidance"
 else
-  echo "FAIL: install logic did not copy script ($result)"
+  echo "FAIL: source docs retain project-local runtime install/cache guidance"
+  cat "$TMPDIR_T5/local-runtime-docs.txt"
   exit 1
-fi
-
-# Verify it's actually there and executable
-if [ -x "$TMPDIR_T5/.edc/scripts/edc-review.sh" ]; then
-  echo "PASS: installed script is executable"
-else
-  echo "FAIL: installed script is not executable or missing"
-  exit 1
-fi
-
-# ── 5i: install is idempotent (stale-check: older dest → copy again) ─────────
-# Make dest older by touching plugin script with newer mtime
-touch "$(pwd)/$PLUGIN_SCRIPT"
-result=$(node -e "
-import { join } from 'path';
-import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'fs';
-
-const projectRoot = '${TMPDIR_T5}';
-const pluginDir = join('$(pwd)', 'plugins', 'edc');
-const pluginScript = join(pluginDir, 'scripts', 'edc-review.sh');
-const destScript = join(projectRoot, '.edc', 'scripts', 'edc-review.sh');
-
-const srcMtime = statSync(pluginScript).mtimeMs;
-const dstMtime = statSync(destScript).mtimeMs;
-const shouldCopy = srcMtime > dstMtime;
-console.log(shouldCopy ? 'would-copy' : 'up-to-date');
-" 2>&1)
-
-if echo "$result" | grep -q 'would-copy'; then
-  echo "PASS: stale detection fires (plugin newer than project copy)"
-else
-  echo "INFO: stale detection: $result (may be same mtime — acceptable)"
 fi
 
 # ── 5j: installer adds ~/.edc/scripts to shell rc idempotently ───────────────

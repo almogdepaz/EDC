@@ -128,7 +128,6 @@ setup_repo() {
   printf 'src\n' > src/main.py
   git add src/main.py
   git commit -q -m init
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$dir" "$ROOT/plugins/edc" >/dev/null
   : > "$TMP/log"
 }
 
@@ -158,7 +157,7 @@ printf 'more\n' > src/extra.py
 git add src/extra.py
 git commit -q -m more
 : > "$TMP/log"
-out=$(PATH="$MOCK_BIN:$PATH" EDC_AGENT_CLI=claude EDC_T32_LOG="$TMP/log" "$BASH_BIN" "$SCRIPT_UPDATE" --base HEAD~1 2>&1)
+out=$(PATH="$MOCK_BIN:$PATH" EDC_AGENT_CLI=claude EDC_T32_LOG="$TMP/log" "$BASH_BIN" "$SCRIPT_UPDATE" 2>&1)
 if [ ! -e edc-context/reports/context-curation.md ] \
    && grep -qx 'update' "$TMP/log" \
    && grep -qx 'curator' "$TMP/log" \

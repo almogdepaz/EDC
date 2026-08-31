@@ -4,7 +4,7 @@
 
 edc_candidate_is_operational_untracked() {
   case "$1" in
-    .edc|.edc/*|.edc.install.lock|.edc.install.lock/*|edc-context|edc-context/*|review-*.md|delivery-review-*.md) return 0 ;;
+    .edc|.edc/*|.edc.install.lock|.edc.install.lock/*|.pi/tasks|.pi/tasks/*|edc-context|edc-context/*|review-*.md|delivery-review-*.md) return 0 ;;
     *) return 1 ;;
   esac
 }

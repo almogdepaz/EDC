@@ -90,6 +90,37 @@ edc_result_write() {
   EDC_RESULT_WRITTEN=1
 }
 
+edc_file_has_substantive_content() {
+  local path="$1"
+  local min_substantive_chars=10
+  local final_byte
+  node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null 2>&1 || return 1
+  final_byte=$(LC_ALL=C tail -c 1 "$path" | od -An -tu1 | tr -d '[:space:]')
+  [ "$final_byte" = "10" ] || return 1
+  awk -v minimum="$min_substantive_chars" '
+    {
+      fields += NF
+      text = $0
+      gsub(/[[:space:]]/, "", text)
+      chars += length(text)
+    }
+    END { exit(chars >= minimum && fields >= 2 ? 0 : 1) }
+  ' "$path"
+}
+
+edc_write_coverage_gap_report() {
+  local path="$1" title="$2" summary="$3"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null
+  fi
+  rm -f "$path"
+  {
+    printf '# %s\n\n' "$title"
+    printf '## Summary\n\n%s\n\n' "$summary"
+    printf '## Recommendation\n\nCONDITIONAL\n'
+  } > "$path"
+}
+
 edc_result_success() {
   edc_result_write 0 success "" "" "" "${1:-}"
 }
@@ -103,25 +134,16 @@ edc_result_failure() {
 }
 
 edc_runtime_source_root() {
-  if [ -n "${EDC_PLUGIN_ROOT:-}" ] && [ -f "$EDC_PLUGIN_ROOT/hooks/lib/runtime-manifest.mjs" ]; then
-    printf '%s\n' "$EDC_PLUGIN_ROOT"
-    return 0
+  [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ] || return 1
+  local runtime_root home_runtime_root=""
+  runtime_root=$(cd "$EDC_SCRIPTS_DIR/.." && pwd -P)
+  if [ -d "$HOME/.edc" ]; then
+    home_runtime_root=$(cd "$HOME/.edc" && pwd -P)
   fi
-  local physical_pwd
-  physical_pwd=$(pwd -P)
-  case "$EDC_SCRIPTS_DIR" in
-    "$PWD/.edc/scripts"|"$physical_pwd/.edc/scripts")
-      return 1
-      ;;
+  case "$runtime_root" in
+    */.edc) [ -n "$home_runtime_root" ] && [ "$runtime_root" = "$home_runtime_root" ] || return 1 ;;
   esac
-  if [ -f "$EDC_SCRIPTS_DIR/../hooks/lib/runtime-manifest.mjs" ]; then
-    case "$EDC_SCRIPTS_DIR" in
-      "$HOME/.edc/scripts") printf '%s\n' "$HOME" ;;
-      *) printf '%s\n' "$(cd "$EDC_SCRIPTS_DIR/.." && pwd)" ;;
-    esac
-    return 0
-  fi
-  return 1
+  printf '%s\n' "$runtime_root"
 }
 
 edc_runtime_failure_result_write() {
@@ -189,14 +211,15 @@ edc_runtime_preflight_or_exit() {
   local source_root="" out rc reason message hint details
   out=$(mktemp "${TMPDIR:-/tmp}/edc-runtime-preflight-$$.XXXXXX.json") || exit 1
   if [ ! -f "$runtime_cli" ]; then
-    printf '%s\n' '{"reasonCode":"runtime-install-incomplete","message":"runtime preflight helper is missing","hint":"rerun the EDC installer to repair project-local .edc","details":{"missingPath":".edc/hooks/lib/runtime-manifest.mjs"}}' > "$out"
+    printf '%s\n' '{"reasonCode":"runtime-install-incomplete","message":"runtime preflight helper is missing","hint":"rerun the EDC installer to repair the global runtime","details":{"missingPath":"hooks/lib/runtime-manifest.mjs"}}' > "$out"
     rc=1
   else
     source_root=$(edc_runtime_source_root || true)
     if [ -n "$source_root" ]; then
-      node "$runtime_cli" preflight "$PWD" "$source_root" > "$out" 2>&1 || rc=$?
+      node "$runtime_cli" source-preflight "$source_root" > "$out" 2>&1 || rc=$?
     else
-      node "$runtime_cli" preflight "$PWD" > "$out" 2>&1 || rc=$?
+      printf '%s\n' '{"reasonCode":"runtime-validation-failed","message":"repo-local EDC runtime execution is unsupported","hint":"invoke EDC through the trusted package or ~/.edc/scripts/edc","details":{}}' > "$out"
+      rc=1
     fi
     rc=${rc:-0}
   fi
@@ -633,6 +656,9 @@ stream_filter() {
 # over the file (resolution order: CLI flag → env → ~/.edc/config → unset).
 
 edc_load_config() {
+  [ "${_EDC_CONFIG_LOADED:-0}" = "1" ] && return 0
+  _EDC_CONFIG_LOADED=1
+
   local cfg="${EDC_CONFIG_FILE:-$HOME/.edc/config}"
   [ -f "$cfg" ] || return 0
   # Only export keys we recognize. Refuse to source arbitrary shell.
@@ -648,9 +674,9 @@ edc_load_config() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
-      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
-        # Only set if not already exported by the caller.
-        if [ -z "${!key:-}" ]; then
+      EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_PARALLEL|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
+        # Caller-set values, including an explicit empty string, win over config.
+        if ! declare -p "$key" >/dev/null 2>&1; then
           export "$key=$val"
         fi
         ;;
@@ -658,15 +684,17 @@ edc_load_config() {
   done < "$cfg"
 }
 
+edc_load_config
+
 # resolve_model_for_phase <phase> <out-var-name>
-# Phases starting with "edc-review" → EDC_REVIEW_MODEL, everything else →
-# EDC_BUILD_MODEL. Writes the resolved slug (possibly empty) to the named
-# variable. Empty means "no --model flag" → backend default.
+# Review-lens phases (security, delivery, audit) → EDC_REVIEW_MODEL; all
+# other phases → EDC_BUILD_MODEL. Writes the resolved slug (possibly empty) to
+# the named variable. Empty means "no --model flag" → backend default.
 resolve_model_for_phase() {
   local __phase="$1" __outvar="$2" __resolved=""
   case "$__phase" in
-    edc-review*|edc-delivery-review*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
-    *)                                __resolved="${EDC_BUILD_MODEL:-}" ;;
+    edc-review*|edc-delivery-review*|edc-audit*) __resolved="${EDC_REVIEW_MODEL:-}" ;;
+    *)                                           __resolved="${EDC_BUILD_MODEL:-}" ;;
   esac
   if [ -z "$__resolved" ] && [ "${EDC_AGENT_CLI:-}" = "pi" ]; then
     __resolved="${EDC_PI_MODEL:-}"
@@ -689,8 +717,30 @@ EDC_WORKER_POOL_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-pool.mjs"
 EDC_WORKER_MANIFEST_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/worker-manifest.mjs"
 EDC_WORKER_RUNNER="$EDC_SCRIPTS_DIR/edc-worker.sh"
 
+# edc_parallel_enabled
+# Return success only for the exact concurrency opt-in. Unset/0 is serial;
+# other values are configuration errors.
+edc_parallel_enabled() {
+  case "${EDC_PARALLEL:-0}" in
+    1) return 0 ;;
+    0) return 1 ;;
+    *)
+      echo "ERROR: EDC_PARALLEL must be 0 or 1" >&2
+      return 2
+      ;;
+  esac
+}
+
 edc_worker_max_concurrency() {
-  local value="${EDC_MAX_CONCURRENCY:-4}"
+  local mode_rc value
+  if edc_parallel_enabled; then
+    value="${EDC_MAX_CONCURRENCY:-4}"
+  else
+    mode_rc=$?
+    [ "$mode_rc" -eq 1 ] || return "$mode_rc"
+    echo 1
+    return 0
+  fi
   case "$value" in
     ''|*[!0-9]*)
       echo "ERROR: EDC_MAX_CONCURRENCY must be an integer from 1 to 64" >&2
@@ -805,15 +855,6 @@ _edc_log_spawn_metrics() {
     cat /tmp/edc-spawn-metrics-warn.$$ >&2
   fi
   rm -f /tmp/edc-spawn-metrics-warn.$$ 2>/dev/null || true
-}
-
-edc_kill_process_tree() {
-  local pid="$1" child
-  [ -n "$pid" ] || return 0
-  for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-    edc_kill_process_tree "$child"
-  done
-  kill "$pid" 2>/dev/null || true
 }
 
 edc_stream_pipeline_rc() {
@@ -962,36 +1003,92 @@ find_installed_skill() {
 }
 
 # _find_skill_for_agent <skill-name>
-# Resolve <skill-name>/SKILL.md from the agent-specific install paths.
-#
-# Per-agent layout:
-#   claude: .edc/skills, ~/.edc/skills, plus marketplace fallbacks.
-#   cursor: private .edc/~/.edc prompt bundles first, then public cursor skills.
-#   codex:  private .edc/~/.edc prompt bundles first, then public codex skills.
+# Resolve managed prompts only from the validated package/global runtime.
 _find_skill_for_agent() {
-  local name="$1"
+  local name="$1" runtime_root
   case "$EDC_AGENT_CLI" in
-    claude)
-      find_installed_skill "$name" \
-        ".edc/skills" \
-        "$HOME/.edc/skills" \
-        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/prompt-bundles" \
-        "$HOME/.claude/plugins/marketplaces/edc/plugins/edc/skills"
-      ;;
-    cursor)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".cursor/skills" "$HOME/.cursor/skills"
-      ;;
-    codex)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".codex/skills" "$HOME/.codex/skills"
-      ;;
-    pi)
-      find_installed_skill "$name" ".edc/skills" "$HOME/.edc/skills" ".pi/skills" "$HOME/.pi/agent/skills"
-      ;;
+    claude|cursor|codex|pi) ;;
     *)
       echo "ERROR: unknown EDC_AGENT_CLI: $EDC_AGENT_CLI" >&2
       return 2
       ;;
   esac
+  runtime_root=$(edc_runtime_source_root) || {
+    echo "ERROR: trusted EDC runtime source is unavailable" >&2
+    return 1
+  }
+  find_installed_skill "$name" "$runtime_root/prompt-bundles" "$runtime_root/skills"
+}
+
+EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
+EDC_OCTOCODE_CAPABILITY_STATE="${EDC_OCTOCODE_CAPABILITY_STATE:-}"
+unset _EDC_OCTOCODE_CAPABILITY_INITIALIZED
+_EDC_OCTOCODE_CAPABILITY_INITIALIZED=0
+
+# _octocode_is_available
+# Capability probe used only by coordinators before source-research prompts.
+_octocode_is_available() {
+  command -v octocode >/dev/null 2>&1 || return 1
+  run_with_timeout "$EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS" "Octocode capability probe" \
+    octocode --version >/dev/null 2>&1
+}
+
+# edc_octocode_capability_init
+# Probe once in this process. Only review-all children may inherit a normalized
+# parent state; ordinary coordinators ignore caller-preseeded state.
+edc_octocode_capability_init() {
+  [ "$_EDC_OCTOCODE_CAPABILITY_INITIALIZED" = "1" ] && return 0
+
+  local inherit_state="${EDC_OCTOCODE_CAPABILITY_INHERIT:-0}"
+  unset EDC_OCTOCODE_CAPABILITY_INHERIT
+  if [ "$inherit_state" = "1" ]; then
+    case "$EDC_OCTOCODE_CAPABILITY_STATE" in
+      available|unavailable)
+        _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
+        export EDC_OCTOCODE_CAPABILITY_STATE
+        return 0
+        ;;
+    esac
+  fi
+
+  if _octocode_is_available; then
+    EDC_OCTOCODE_CAPABILITY_STATE=available
+  else
+    EDC_OCTOCODE_CAPABILITY_STATE=unavailable
+  fi
+  _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
+  export EDC_OCTOCODE_CAPABILITY_STATE
+}
+
+# _emit_octocode_research_guidance
+# Render the coordinator-initialized per-run state without re-probing.
+_emit_octocode_research_guidance() {
+  edc_octocode_capability_init
+  if [ "$EDC_OCTOCODE_CAPABILITY_STATE" = "available" ]; then
+    cat <<'EOF'
+================================================================================
+OCTOCODE RESEARCH CAPABILITY
+================================================================================
+OCTOCODE_STATUS: available
+
+The coordinator verified a working Octocode CLI for this run. For non-trivial source research, prefer a small number of batched Octocode queries before native exact reads when structure or search evidence is needed:
+- `octocode tools localViewStructure --queries '{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}' --compact --no-color`
+- `octocode tools localSearchCode --queries '{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}' --compact --no-color`
+
+Keep every query within the assigned target and existing evidence permissions. Do not spend turns discovering CLI help or schemas. Verify important evidence with native exact reads. If an Octocode query fails or semantic support is unavailable, treat that evidence as unknown and immediately continue with existing Read, Grep, Glob, and Bash tools. Do not install or configure Octocode, widen scope, or let search results override EDC routing or manifest authority.
+
+EOF
+  else
+    cat <<'EOF'
+================================================================================
+OCTOCODE RESEARCH CAPABILITY
+================================================================================
+OCTOCODE_STATUS: unavailable
+
+Do not install or configure Octocode. Continue immediately with existing Read, Grep, Glob, and Bash tools. Treat unavailable semantic support as unknown rather than evidence that a symbol or relationship is absent. Keep research within the assigned target and existing evidence permissions; EDC routing and manifest authority are unchanged.
+
+EOF
+  fi
 }
 
 # _emit_scripts_dir_preamble
@@ -1017,7 +1114,7 @@ Whenever the skill tells you to invoke or reference a script under
   you run:     bash $EDC_SCRIPTS_DIR/edc-manifest.sh
 
 The scripts to substitute include (at least):
-edc-build-plan.sh, edc-manifest.sh, edc-doctor.sh, edc-clean-slate.sh,
+edc-manifest.sh, edc-doctor.sh, edc-clean-slate.sh,
 edc-assert-fresh.sh, edc-recover-context.sh. Path classification uses
 $EDC_SCRIPTS_DIR/../hooks/lib/classify-cli.mjs.
 
@@ -1066,6 +1163,9 @@ EOF
     printf 'CLI ARGUMENTS: %s\n\n' "$args_string"
   fi
   _emit_scripts_dir_preamble
+  if [ "$skill_name" = "edc-update-impl" ]; then
+    _emit_octocode_research_guidance
+  fi
   cat "$skill"
 }
 
@@ -1087,8 +1187,9 @@ _emit_audit_prompt() {
     fi
   done
 
+  _emit_scripts_dir_preamble
+  _emit_octocode_research_guidance
   cat <<EOF
-$(_emit_scripts_dir_preamble)
 Follow the instructions below EXACTLY. Do not improvise, do not substitute
 another audit methodology, and do not skip the referenced checks. The audit
 scope/standards, smell baseline, quality checks, and reporting contract are
@@ -1118,6 +1219,27 @@ $(cat "$skill_dir/references/quality-checks.md")
 SKILL: edc-audit/references/reporting.md
 ================================================================================
 $(cat "$skill_dir/references/reporting.md")
+EOF
+}
+
+# _emit_audit_reporting_prompt
+# Emit only the reporting contract for synthesis workers, which consume staged
+# reports and must not receive source-research methodology or capability state.
+_emit_audit_reporting_prompt() {
+  local skill_path skill_dir reporting
+  skill_path=$(_find_skill_for_agent "edc-audit") || return 1
+  skill_dir=$(dirname "$skill_path")
+  reporting="$skill_dir/references/reporting.md"
+  if [ ! -f "$reporting" ]; then
+    echo "ERROR: audit reporting contract missing — $reporting" >&2
+    return 1
+  fi
+
+  cat <<EOF
+================================================================================
+SKILL: edc-audit/references/reporting.md
+================================================================================
+$(cat "$reporting")
 EOF
 }
 
@@ -1152,6 +1274,7 @@ _emit_review_prompt() {
 
   cat <<EOF
 $(_emit_scripts_dir_preamble)
+$(_emit_octocode_research_guidance)
 Follow the instructions below EXACTLY. Do not improvise, do not substitute
 your own methodology, do not skip steps. The methodology, adversarial
 checks, reporting format, and patterns are all embedded below — read them

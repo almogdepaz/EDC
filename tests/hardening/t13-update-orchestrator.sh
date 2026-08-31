@@ -6,7 +6,9 @@
 #   - REFUSES on partial / malformed v2 (tells user to run --force build)
 #   - REFUSES on v1 layout with the migration hint
 #   - PROCEEDS on healthy v2 → spawns update subprocess → doctor validates
-#   - auto-detects --base from main/master if not provided
+#   - derives update lineage solely from manifest.sourceCommit
+#   - refuses missing or invalid provenance without spawning or mutating context
+#   - rejects review-only --base rather than overloading it as update lineage
 #
 # Run from repo root: bash tests/hardening/t13-update-orchestrator.sh
 set -euo pipefail
@@ -70,7 +72,6 @@ setup_repo() {
   git config user.name "T"
   git config commit.gpgsign false
   echo "src" > src/main.py
-  node "$ORIG_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$PWD" "$ORIG_DIR/plugins/edc" >/dev/null
   git add src/main.py
   git commit -q -m "init"
   echo "" > "$TMPDIR_T13/log"
@@ -161,9 +162,10 @@ if grep -q "spawned" "$EDC_T13_LOG"; then
   cat "$EDC_T13_LOG"; exit 1
 fi
 
-# ── 13d: healthy v2 → SPAWN update + auto-detect base ───────────────────────
+# ── 13d: healthy v2 → update from manifest lineage ───────────────────────────
 setup_repo
-write_healthy_v2
+lineage_source=$(git rev-parse HEAD)
+write_healthy_v2 "$lineage_source"
 echo "more" > src/extra.py && git add src/extra.py && git commit -q -m "more"
 echo "" > "$EDC_T13_LOG"
 result=0
@@ -173,37 +175,57 @@ if [ "$result" -ne 0 ]; then
   echo "$out"; exit 1
 fi
 if grep -q "spawned" "$EDC_T13_LOG" \
+  && grep -Fqx "CLI ARGUMENTS: --context-source $lineage_source" "$EDC_T13_LOG.prompt" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 0 && j.reasonCode === "success" && Array.isArray(j.outputs) && j.outputs.includes("edc-context/manifest.json") && Array.isArray(j.checks) && j.checks.some(c => c.name === "edc-doctor" && c.status === "success") ? 0 : 1)'; then
-  echo "PASS: healthy v2 → update spawned"
+  echo "PASS: healthy v2 → update spawned from manifest lineage"
 else
-  echo "FAIL (13d): expected agent spawn, log:"
-  cat "$EDC_T13_LOG"; exit 1
-fi
-# Verify the orchestrator passed --base (auto-detected from main).
-if grep -q -- '--base' "$EDC_T13_LOG.prompt"; then
-  echo "PASS: orchestrator auto-detected --base"
-else
-  echo "FAIL (13d): expected --base in spawned prompt"
-  cat "$EDC_T13_LOG.prompt"; exit 1
+  echo "FAIL (13d): update prompt did not use manifest lineage"
+  cat "$EDC_T13_LOG.prompt" 2>/dev/null || true; exit 1
 fi
 
-# ── 13e: explicit --base passes through ──────────────────────────────────────
+# ── 13e: divergent source updates from exact endpoint lineage ─────────────────
+setup_repo
+unrelated_tree=$(git mktree < /dev/null)
+divergent_source=$(printf 'unrelated\n' | git commit-tree "$unrelated_tree")
+write_healthy_v2 "$divergent_source"
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -ne 0 ] || ! grep -q -- "--context-source $divergent_source" "$EDC_T13_LOG.prompt"; then
+  echo "FAIL (13e): divergent context was not updated from its recorded source"
+  echo "$out"; cat "$EDC_T13_LOG.prompt" 2>/dev/null || true; exit 1
+fi
+echo "PASS: divergent context updates from recorded lineage"
+
+# ── 13f: invalid provenance refuses without mutation or agent spawn ───────────
+setup_repo
+write_healthy_v2 "not-a-commit"
+echo "" > "$EDC_T13_LOG"
+result=0
+out=$(bash "$SCRIPT" 2>&1) || result=$?
+if [ "$result" -ne 0 ] \
+  && ! grep -q "spawned" "$EDC_T13_LOG" \
+  && grep -q 'edc build --agent claude --force' <<< "$out" \
+  && grep -q '"sourceCommit":"not-a-commit"' edc-context/manifest.json; then
+  echo "PASS: invalid provenance refuses with explicit rebuild guidance"
+else
+  echo "FAIL (13f): invalid provenance spawned or mutated context"
+  echo "$out"; cat "$EDC_T13_LOG"; exit 1
+fi
+
+# ── 13g: update rejects review-only --base ────────────────────────────────────
 setup_repo
 write_healthy_v2
-git checkout -q -b feature
-echo "explicit" > src/explicit.py && git add src/explicit.py && git commit -q -m "explicit"
 echo "" > "$EDC_T13_LOG"
 result=0
 out=$(bash "$SCRIPT" --base main 2>&1) || result=$?
-if [ "$result" -ne 0 ]; then
-  echo "FAIL (13e): orchestrator exited $result with explicit --base"
-  echo "$out"; exit 1
-fi
-if grep -q -- '--base main' "$EDC_T13_LOG.prompt"; then
-  echo "PASS: explicit --base forwarded to skill prompt"
+if [ "$result" -ne 0 ] \
+  && ! grep -q "spawned" "$EDC_T13_LOG" \
+  && grep -q 'review-only' <<< "$out"; then
+  echo "PASS: update rejects review-only --base"
 else
-  echo "FAIL (13e): expected '--base main' in prompt"
-  cat "$EDC_T13_LOG.prompt"; exit 1
+  echo "FAIL (13g): update accepted review --base"
+  echo "$out"; cat "$EDC_T13_LOG"; exit 1
 fi
 
 # ── 13f: missing AGENTS.md → REFUSE as partial v2 ──────────────────────

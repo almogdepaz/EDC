@@ -82,12 +82,14 @@ cat > "$FAKE_BIN/bash" <<'EOF'
 set -eu
 script_name=$(basename "$1")
 case "$script_name" in
-  edc-build.sh)          bucket=build ;;
-  edc-review.sh)         bucket=review ;;
-  edc-review-all.sh)     bucket=review_all ;;
+  edc-build.sh)           bucket=build ;;
+  edc-update.sh)          bucket=update ;;
+  edc-review.sh)          bucket=review ;;
+  edc-review-all.sh)      bucket=review_all ;;
   edc-delivery-review.sh) bucket=delivery ;;
-  edc-audit.sh)          bucket=audit ;;
-  *)             bucket=other  ;;
+  edc-audit.sh)           bucket=audit ;;
+  edc-doctor.sh)          bucket=doctor ;;
+  *)                      bucket=other ;;
 esac
 out="${EDC_TEST_CAPTURE_DIR:?}/$bucket"
 mkdir -p "$out"
@@ -121,7 +123,6 @@ run_cli_pi_model_only() {
   "$BASH_BIN" "$SCRIPT_ABS" "$@"
 }
 
-eval "$(awk '/^find_script\(\)/{found=1} found{print} /^}$/{if(found){exit}}' "$SCRIPT")"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_ABS")" && pwd)"
 
 # ── 7a: --agent mandatory for build ───────────────────────────────────────────
@@ -233,6 +234,26 @@ for agent in claude cursor codex pi; do
 done
 echo "PASS: build delegates to edc-build.sh with EDC_AGENT_CLI + forwarded args (claude/cursor/codex/pi)"
 
+rm -rf "$CAPTURE/update"
+(cd "$PROJECT" && run_cli update --agent codex --base main)
+if [ "$(cat "$CAPTURE/update/script")" = "$SCRIPT_DIR/edc-update.sh" ] \
+  && grep -Fx -- '--base' "$CAPTURE/update/args" >/dev/null \
+  && grep -Fx -- 'main' "$CAPTURE/update/args" >/dev/null; then
+  echo "PASS: update delegates through trusted bootstrap"
+else
+  echo "FAIL: update did not delegate correctly"
+  exit 1
+fi
+
+rm -rf "$CAPTURE/doctor"
+(cd "$PROJECT" && run_cli doctor)
+if [ "$(cat "$CAPTURE/doctor/script")" = "$SCRIPT_DIR/edc-doctor.sh" ]; then
+  echo "PASS: doctor delegates through trusted bootstrap"
+else
+  echo "FAIL: doctor did not delegate correctly"
+  exit 1
+fi
+
 # ── 7f: review/security-review delegation ───────────────────────────────────
 mkdir -p "$PROJECT/.edc/scripts"
 cat > "$PROJECT/.edc/scripts/edc-review.sh" <<'EOF'
@@ -242,17 +263,8 @@ echo "stale project copy"
 EOF
 chmod +x "$PROJECT/.edc/scripts/edc-review.sh"
 
-# The wrapper should prefer the sibling script next to itself over a stale
-# project-local .edc/scripts copy when invoked from the repo checkout.
-selected_review_script="$(cd "$PROJECT" && find_script edc-review.sh)"
-if [ "$selected_review_script" = "$SCRIPT_DIR/edc-review.sh" ]; then
-  echo "PASS: wrapper prefers sibling edc-review.sh over stale project copy"
-else
-  echo "FAIL: wrapper selected stale project .edc/scripts/edc-review.sh"
-  echo "$selected_review_script"
-  exit 1
-fi
-
+# Trusted bootstrap must ignore this stale repo-local copy and dispatch the
+# sibling packaged orchestrator captured below.
 rm -rf "$CAPTURE/review_all"
 (cd "$PROJECT" && run_cli review --agent codex HEAD --base main --ignore generated/**)
 
@@ -278,7 +290,7 @@ else
 fi
 
 if [ "$(cat "$CAPTURE/review_all/script")" = "$SCRIPT_DIR/edc-review-all.sh" ]; then
-  echo "PASS: review invokes repo edc-review-all.sh"
+  echo "PASS: review invokes packaged edc-review-all.sh"
 else
   echo "FAIL: review invoked the wrong review orchestrator"
   cat "$CAPTURE/review_all/script"
@@ -305,7 +317,7 @@ if [ "$(cat "$CAPTURE/review/agent")" = "codex" ] \
   && grep -Fx -- 'HEAD' "$CAPTURE/review/args" >/dev/null \
   && grep -Fx -- '--base' "$CAPTURE/review/args" >/dev/null \
   && grep -Fx -- 'main' "$CAPTURE/review/args" >/dev/null; then
-  echo "PASS: security-review invokes repo edc-review.sh with args"
+  echo "PASS: security-review invokes packaged edc-review.sh with args"
 else
   echo "FAIL: security-review did not delegate correctly"
   cat "$CAPTURE/review/agent" "$CAPTURE/review/script" "$CAPTURE/review/args" 2>/dev/null || true
@@ -423,7 +435,7 @@ if [ "$(cat "$CAPTURE/review_all/agent")" = "codex" ] \
   && grep -Fx -- 'main' "$CAPTURE/review_all/args" >/dev/null \
   && grep -Fx -- '--ignore' "$CAPTURE/review_all/args" >/dev/null \
   && grep -Fx -- 'generated/**' "$CAPTURE/review_all/args" >/dev/null; then
-  echo "PASS: review-all invokes repo edc-review-all.sh with args"
+  echo "PASS: review-all invokes packaged edc-review-all.sh with args"
 else
   echo "FAIL: review-all did not delegate correctly"
   cat "$CAPTURE/review_all/agent" "$CAPTURE/review_all/script" "$CAPTURE/review_all/args" 2>/dev/null || true
@@ -437,7 +449,7 @@ if [ "$(cat "$CAPTURE/audit/agent")" = "codex" ] \
   && [ "$(cat "$CAPTURE/audit/script")" = "$SCRIPT_DIR/edc-audit.sh" ] \
   && grep -Fx -- '--ignore' "$CAPTURE/audit/args" >/dev/null \
   && grep -Fx -- 'generated/**' "$CAPTURE/audit/args" >/dev/null; then
-  echo "PASS: quality-review invokes repo edc-audit.sh with args"
+  echo "PASS: quality-review invokes packaged edc-audit.sh with args"
 else
   echo "FAIL: quality-review did not delegate correctly"
   cat "$CAPTURE/audit/agent" "$CAPTURE/audit/script" "$CAPTURE/audit/args" 2>/dev/null || true
@@ -510,7 +522,7 @@ if [ "$(cat "$CAPTURE/delivery/agent")" = "codex" ] \
   && grep -Fx -- 'HEAD' "$CAPTURE/delivery/args" >/dev/null \
   && grep -Fx -- '--base' "$CAPTURE/delivery/args" >/dev/null \
   && grep -Fx -- 'main' "$CAPTURE/delivery/args" >/dev/null; then
-  echo "PASS: delivery-review invokes repo edc-delivery-review.sh with args"
+  echo "PASS: delivery-review invokes packaged edc-delivery-review.sh with args"
 else
   echo "FAIL: delivery-review did not delegate correctly"
   cat "$CAPTURE/delivery/agent" "$CAPTURE/delivery/script" "$CAPTURE/delivery/args" 2>/dev/null || true

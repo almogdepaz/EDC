@@ -150,11 +150,43 @@ async function assertCompatible(order, mode) {
     const bashEvent = {
       type: "tool_call",
       toolName: "bash",
-      input: { command: "bash .edc/scripts/edc-review.sh --base main", timeout: 1200 },
+      input: { command: "edc security diff main --agent pi", timeout: 1200 },
     };
     await stack.emit("tool_call", bashEvent, ctx);
     assert.equal(bashEvent.input.contextPruneSawToolCall, true);
-    assert.ok(bashEvent.input.timeout >= 7200, "EDC should only mutate bash timeout for EDC orchestrator calls");
+    assert.ok(bashEvent.input.timeout >= 7200, "EDC should mutate bash timeout for EDC orchestrator calls");
+
+    const incidentalEdcTextEvent = {
+      type: "tool_call",
+      toolName: "bash",
+      input: { command: "echo edc review full --agent pi", timeout: 1200 },
+    };
+    await stack.emit("tool_call", incidentalEdcTextEvent, ctx);
+    assert.equal(incidentalEdcTextEvent.input.timeout, 1200, "EDC text in arguments must not extend bash timeout");
+
+    const separatedEdcEvent = {
+      type: "tool_call",
+      toolName: "bash",
+      input: { command: "printf ready; edc review full --agent pi", timeout: 1200 },
+    };
+    await stack.emit("tool_call", separatedEdcEvent, ctx);
+    assert.ok(separatedEdcEvent.input.timeout >= 7200, "EDC after a shell separator should extend bash timeout");
+
+    const globalScriptEvent = {
+      type: "tool_call",
+      toolName: "bash",
+      input: { command: 'bash "$HOME/.edc/scripts/edc-review.sh" --base main', timeout: 1200 },
+    };
+    await stack.emit("tool_call", globalScriptEvent, ctx);
+    assert.ok(globalScriptEvent.input.timeout >= 7200, "explicit HOME global orchestrator should extend bash timeout");
+
+    const incidentalGlobalPathEvent = {
+      type: "tool_call",
+      toolName: "bash",
+      input: { command: "echo $HOME/.edc/scripts/edc-review.sh", timeout: 1200 },
+    };
+    await stack.emit("tool_call", incidentalGlobalPathEvent, ctx);
+    assert.equal(incidentalGlobalPathEvent.input.timeout, 1200, "global script path in arguments must not extend bash timeout");
   } finally {
     await stack.emit("session_shutdown", { type: "session_shutdown" }, { cwd: stack.cwd, hasUI: false });
     rmSync(stack.cwd, { recursive: true, force: true });

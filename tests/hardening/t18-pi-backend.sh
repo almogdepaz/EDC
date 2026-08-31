@@ -13,6 +13,7 @@ TMP="$(mktemp -d)"
 LOG_DIR="$(mktemp -d)"
 PI_CALLS_LOG="$LOG_DIR/pi-calls.log"
 export PI_CALLS_LOG
+export EDC_CONFIG_FILE="$TMP/missing-config"
 trap 'rm -rf "$TMP" "$LOG_DIR"; check_cleanup' EXIT
 
 setup_repo() {
@@ -28,7 +29,8 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP" "$ROOT/plugins/edc" >/dev/null
+  local source_commit
+  source_commit=$(git rev-parse HEAD)
   mkdir -p edc-context/modules edc-context/reports
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
@@ -37,7 +39,7 @@ setup_repo() {
   cat > edc-context/manifest.json <<EOF
 {
   "schemaVersion": 2,
-  "sourceCommit": "0000000000000000000000000000000000000000",
+  "sourceCommit": "$source_commit",
   "policy": {"defaultMode": "advisory", "unmatchedPathPolicy": "warn-allow"},
   "modules": [
     {"name":"core", "priority": 10, "doc":"edc-context/modules/core.md", "match":{"prefixes":["src/"]}}
@@ -102,27 +104,27 @@ if [ "${PI_FAKE_AUTH_TEXT:-0}" = "1" ]; then
   sleep 30
   exit 1
 fi
-if printf '%s' "$prompt" | grep -q 'BUILD DISCOVERY TASK'; then
+if [[ "$prompt" == *'BUILD DISCOVERY TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^DISCOVERY_OUTPUT: ' | sed 's/^DISCOVERY_OUTPUT: //')
   mkdir -p "$(dirname "$output")"
   printf '{"modules":[{"name":"core","paths":["src/"],"approxLoc":1}]}\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"discovered"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'MODULE CONTEXT TASK'; then
+if [[ "$prompt" == *'MODULE CONTEXT TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | head -1 | sed 's/^OUTPUT: //')
   mkdir -p "$(dirname "$output")"
   printf '# Core\n\n## Ownership\n\nMock module.\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"module"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'CROSS-MODULE SYNTHESIS TASK'; then
+if [[ "$prompt" == *'CROSS-MODULE SYNTHESIS TASK'* ]]; then
   output=$(printf '%s\n' "$prompt" | grep '^OUTPUT: ' | sed 's/^OUTPUT: //')
   printf '## Flows\n\nMock.\n' > "$output"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"cross"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
+if [[ "$prompt" == *'BUILD ASSEMBLY TASK'* ]]; then
   index_output=$(printf '%s\n' "$prompt" | grep '^INDEX_OUTPUT: ' | sed 's/^INDEX_OUTPUT: //')
   partial_output=$(printf '%s\n' "$prompt" | grep '^PARTIAL_MANIFEST_OUTPUT: ' | sed 's/^PARTIAL_MANIFEST_OUTPUT: //')
   build_output=$(printf '%s\n' "$prompt" | grep '^BUILD_INFO_OUTPUT: ' | sed 's/^BUILD_INFO_OUTPUT: //')
@@ -135,27 +137,27 @@ if printf '%s' "$prompt" | grep -q 'BUILD ASSEMBLY TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"assembled"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'BUILD_SKILL_MARKER|name: edc-build-impl'; then
+if [[ "$prompt" == *'BUILD_SKILL_MARKER'* || "$prompt" == *'name: edc-build-impl'* ]]; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"built context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'UPDATE_SKILL_MARKER|name: edc-update-impl'; then
+if [[ "$prompt" == *'UPDATE_SKILL_MARKER'* || "$prompt" == *'name: edc-update-impl'* ]]; then
   write_context
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"updated context"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'CURATOR_EDIT_SKILL_MARKER|name: edc-context-curator-edit-impl'; then
+if [[ "$prompt" == *'CURATOR_EDIT_SKILL_MARKER'* || "$prompt" == *'name: edc-context-curator-edit-impl'* ]]; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curator edit"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'CURATOR_SKILL_MARKER|name: edc-context-curator-impl'; then
+if [[ "$prompt" == *'CURATOR_SKILL_MARKER'* || "$prompt" == *'name: edc-context-curator-impl'* ]]; then
   mkdir -p edc-context/reports
   printf '# Context Curation Report\n\n## Summary\n- mock pi curator\n' > edc-context/reports/context-curation.md
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"curated"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'REVIEW_SKILL_MARKER|name: edc-review'; then
+if [[ "$prompt" == *'REVIEW_SKILL_MARKER'* || "$prompt" == *'name: edc-review'* ]]; then
   task_path=$(printf '%s' "$prompt" | grep -oE 'TASK FILE: [^ ]+' | head -1 | awk '{print $3}')
   report_path="$(dirname "$task_path")/report-$(basename "$task_path" .md).md"
   mkdir -p "$(dirname "$report_path")"
@@ -163,14 +165,14 @@ if printf '%s' "$prompt" | grep -Eq 'REVIEW_SKILL_MARKER|name: edc-review'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"reviewed"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'AUDIT WORKER TASK'; then
+if [[ "$prompt" == *'AUDIT WORKER TASK'* ]]; then
   report_path=$(printf '%s\n' "$prompt" | grep '^AUDIT_REPORT_PATH: ' | head -1 | sed 's/^AUDIT_REPORT_PATH: //')
   mkdir -p "$(dirname "$report_path")"
   printf '## Module Audit\n\nmock pi module audit\n' > "$report_path"
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited module"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
+if [[ "$prompt" == *'AUDIT SYNTHESIS TASK'* ]]; then
   complexity_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_COMPLEXITY_REPORT: ' | head -1 | sed 's/^CANONICAL_COMPLEXITY_REPORT: //')
   issues_path=$(printf '%s\n' "$prompt" | grep '^CANONICAL_ISSUES_REPORT: ' | head -1 | sed 's/^CANONICAL_ISSUES_REPORT: //')
   mkdir -p "$(dirname "$complexity_path")" "$(dirname "$issues_path")"
@@ -179,7 +181,7 @@ if printf '%s' "$prompt" | grep -q 'AUDIT SYNTHESIS TASK'; then
   printf '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"audited"}}\n'
   finish_ok
 fi
-if printf '%s' "$prompt" | grep -Eq 'AUDIT_SKILL_MARKER|name: edc-audit'; then
+if [[ "$prompt" == *'AUDIT_SKILL_MARKER'* || "$prompt" == *'name: edc-audit'* ]]; then
   mkdir -p edc-context/reports
   printf '## Complexity\n\nmock pi audit\n' > edc-context/reports/complexity.md
   printf '## Issues\n\nmock pi audit\n' > edc-context/reports/issues.md
@@ -221,7 +223,7 @@ fi
 observer_extension="$TMP/observer-extension.ts"
 printf 'export default function observer() {}\n' > "$observer_extension"
 extension_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH="$observer_extension" "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/extension-update.out" 2>"$LOG_DIR/extension-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH="$observer_extension" "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/extension-update.out" 2>"$LOG_DIR/extension-update.err"
 rc=$?
 extension_call=$(tail -n +$((extension_before + 1)) "$PI_CALLS_LOG" | head -1)
 if [ "$rc" -eq 0 ] && printf '%s\n' "$extension_call" | grep -Fq -- "--no-extensions -e $observer_extension"; then
@@ -233,7 +235,7 @@ else
 fi
 
 invalid_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH=relative-extension.ts "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/invalid-extension.out" 2>"$LOG_DIR/invalid-extension.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH=relative-extension.ts "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/invalid-extension.out" 2>"$LOG_DIR/invalid-extension.err"
 rc=$?
 invalid_after=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
 if [ "$rc" -ne 0 ] && [ "$invalid_after" -eq "$invalid_before" ] && grep -q 'EDC_PI_EXTENSION_PATH must be an absolute readable file' "$LOG_DIR/invalid-extension.err"; then
@@ -243,7 +245,7 @@ else
   cat "$LOG_DIR/invalid-extension.out" "$LOG_DIR/invalid-extension.err"
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/update.out"; then
   check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 1
@@ -279,7 +281,7 @@ else
 fi
 
 fallback_before=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/fallback-update.out" 2>"$LOG_DIR/fallback-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/fallback-update.out" 2>"$LOG_DIR/fallback-update.err"
 rc=$?
 fallback_after=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/fallback-update.out" && [ "$fallback_after" -gt "$fallback_before" ]; then
@@ -290,8 +292,53 @@ else
   cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
+config_file="$TMP/edc-config"
+cat > "$config_file" <<'EOF'
+EDC_BUILD_MODEL=openai-codex/gpt-configured
+EDC_REVIEW_MODEL=openai-codex/gpt-configured
+EOF
+config_calls_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+env -u EDC_BUILD_MODEL -u EDC_REVIEW_MODEL \
+  PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_CONFIG_FILE="$config_file" EDC_PI_MODEL=t18-config-fallback \
+  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/config-update.out" 2>"$LOG_DIR/config-update.err"
+rc=$?
+config_calls=$(tail -n +$((config_calls_before + 1)) "$PI_CALLS_LOG")
+if [ "$rc" -eq 0 ] \
+  && grep -q 'Update OK' "$LOG_DIR/config-update.out" \
+  && printf '%s\n' "$config_calls" | grep -q -- '--model openai-codex/gpt-configured' \
+  && ! printf '%s\n' "$config_calls" | grep -q -- '--model t18-config-fallback'; then
+  check "18.7a: raw pi orchestrator prefers configured phase model over Pi fallback" 1
+else
+  check "18.7a: raw pi orchestrator prefers configured phase model over Pi fallback" 0
+  cat "$LOG_DIR/config-update.out" "$LOG_DIR/config-update.err"
+  printf 'config calls:\n%s\n' "$config_calls"
+fi
+
+cat > "$config_file" <<'EOF'
+EDC_BUILD_MODEL=openai-codex/gpt-build-configured
+EDC_REVIEW_MODEL=openai-codex/gpt-review-configured
+EOF
+audit_config_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
+env -u EDC_BUILD_MODEL -u EDC_REVIEW_MODEL \
+  PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_CONFIG_FILE="$config_file" EDC_PI_MODEL=t18-audit-config-fallback \
+  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-audit.sh" >"$LOG_DIR/config-audit.out" 2>"$LOG_DIR/config-audit.err"
+rc=$?
+audit_config_calls=$(tail -n +$((audit_config_before + 1)) "$PI_CALLS_LOG")
+audit_config_call_count=$(printf '%s\n' "$audit_config_calls" | sed '/^$/d' | wc -l | tr -d ' ')
+audit_config_review_count=$(printf '%s\n' "$audit_config_calls" | grep -c -- '--model openai-codex/gpt-review-configured' || true)
+if [ "$rc" -eq 0 ] \
+  && grep -q 'Audit reports:' "$LOG_DIR/config-audit.out" \
+  && [ "$audit_config_call_count" -gt 0 ] \
+  && [ "$audit_config_review_count" -eq "$audit_config_call_count" ]; then
+  check "18.7b: raw pi audit orchestrator uses configured review model for workers and synthesis" 1
+else
+  check "18.7b: raw pi audit orchestrator uses configured review model for workers and synthesis" 0
+  cat "$LOG_DIR/config-audit.out" "$LOG_DIR/config-audit.err"
+  printf 'audit config calls:\n%s\n' "$audit_config_calls"
+fi
+
 alias_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/alias-update.out" 2>"$LOG_DIR/alias-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/alias-update.out" 2>"$LOG_DIR/alias-update.err"
 rc=$?
 alias_after=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/alias-update.out" && [ "$alias_after" -gt "$alias_before" ]; then
@@ -315,7 +362,7 @@ else
   cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/hang-update.out" 2>"$LOG_DIR/hang-update.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/hang-update.out" 2>"$LOG_DIR/hang-update.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/hang-update.out"; then
   check "18.10: pi backend stops reading after agent_end" 1
@@ -324,7 +371,7 @@ else
   cat "$LOG_DIR/hang-update.out" "$LOG_DIR/hang-update.err"
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-error.out" 2>"$LOG_DIR/agent-end-error.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/agent-end-error.out" 2>"$LOG_DIR/agent-end-error.err"
 rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'provider down' "$LOG_DIR/agent-end-error.err"; then
   check "18.11: pi backend fails on agent_end assistant error" 1
@@ -333,7 +380,7 @@ else
   cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/agent-end-retry.out"; then
   check "18.12: pi backend allows retryable agent_end to recover" 1
@@ -343,7 +390,7 @@ else
 fi
 
 auth_start=$(date +%s)
-PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
 rc=$?
 auth_duration=$(( $(date +%s) - auth_start ))
 if [ "$rc" -ne 0 ] \

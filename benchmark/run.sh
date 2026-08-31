@@ -149,9 +149,7 @@ main() {
     mkdir -p "$WORK_DIR"
 
     # Initialize results file
-    if [ ! -f "$RESULTS_FILE" ]; then
-        echo -e "timestamp\tcve\tcategory\tseverity\tverdict\tconfidence\tduration\tnotes" > "$RESULTS_FILE"
-    fi
+    python3 "$SCRIPT_DIR/score.py" --init-results "$RESULTS_FILE"
 
     # Iterate repos
     for repo_dir in "$SCRIPT_DIR"/*/; do

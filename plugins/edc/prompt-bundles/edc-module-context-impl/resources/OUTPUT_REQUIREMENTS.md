@@ -1,16 +1,16 @@
-# Output Requirements
+# Private Scratch Requirements
 
-When performing ultra-granular analysis, the agent MUST structure output following the Per-Function Microstructure Checklist format demonstrated in [FUNCTION_MICRO_ANALYSIS_EXAMPLE.md](FUNCTION_MICRO_ANALYSIS_EXAMPLE.md).
+When performing ultra-granular analysis, the agent MUST use this file as a private scratch/reasoning structure following the Per-Function Microstructure Checklist format demonstrated in [FUNCTION_MICRO_ANALYSIS_EXAMPLE.md](FUNCTION_MICRO_ANALYSIS_EXAMPLE.md).
 
-## Output Destination (v2)
+## Private Scratch vs Final Output Destination (v2)
 
-When this skill runs as part of a v2 build, the per-module deep-context analysis is written to `edc-context/modules/<name>.md` — one file per module, with stable kebab-case names. Per-module docs MUST NOT be written at the top level of `edc-context/`.
+This scratch structure is not persisted directly. When this skill runs as part of a v2 build, the final per-module doc is written to `edc-context/modules/<name>.md` — one file per module, with stable kebab-case names. Per-module docs MUST NOT be written at the top level of `edc-context/`. Only distilled signal from scratch passes through to the final module doc; follow the final-doc contract in [../SKILL.md](../SKILL.md).
 
 ---
 
-## Required Structure
+## Required Private Scratch Structure
 
-For EACH analyzed function, output MUST include:
+For EACH analyzed function, private scratch MUST include:
 
 **1. Purpose** (mandatory)
 - Clear statement of function's role in the system

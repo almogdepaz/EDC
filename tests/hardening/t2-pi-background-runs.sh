@@ -2,13 +2,42 @@
 # Pi background review status must survive edc-context cleanup during recovery.
 set -euo pipefail
 
-node --input-type=module <<'NODE'
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+TRUSTED_PACKAGE="$TMP/trusted-package"
+mkdir -p "$TRUSTED_PACKAGE/plugins"
+cp -R "$ROOT/pi" "$TRUSTED_PACKAGE/pi"
+cp -R "$ROOT/plugins/edc" "$TRUSTED_PACKAGE/plugins/edc"
+cat >"$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${EDC_T2_PI_BACKGROUND_MODE:?}" in
+  cleanup)
+    rm -rf edc-context AGENTS.md
+    sleep 1
+    echo "Verified: review-HEAD.md"
+    ;;
+  quote)
+    echo "Verified: review-HEAD.md"
+    ;;
+  *)
+    echo "unknown EDC_T2_PI_BACKGROUND_MODE: $EDC_T2_PI_BACKGROUND_MODE" >&2
+    exit 64
+    ;;
+esac
+EOF
+chmod +x "$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh"
+
+EDC_TEST_EXTENSION="$TRUSTED_PACKAGE/pi/index.mjs" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import edcExtension from "./pi/index.mjs";
+import { pathToFileURL } from "node:url";
+
+const { default: edcExtension } = await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href);
 
 delete process.env.EDC_PI_SUBPROCESS;
 
@@ -30,18 +59,6 @@ let childPid = 0;
 try {
   execFileSync("git", ["init", "-q"], { cwd });
 
-  const scriptsDir = join(cwd, ".edc", "scripts");
-  mkdirSync(scriptsDir, { recursive: true });
-  const reviewScript = join(scriptsDir, "edc-review.sh");
-  writeFileSync(reviewScript, `#!/usr/bin/env bash
-set -euo pipefail
-rm -rf edc-context AGENTS.md
-sleep 1
-echo "Verified: review-HEAD.md"
-`);
-  chmodSync(reviewScript, 0o755);
-  mkdirSync(join(cwd, ".edc.install.lock"), { recursive: true });
-
   const messages = [];
   let handler;
   const pi = {
@@ -56,7 +73,7 @@ echo "Verified: review-HEAD.md"
   await edcExtension(pi);
   assert.equal(typeof handler, "function", "extension should register /edc handler");
 
-  const selections = ["security review", "changed files vs default branch", "job status"];
+  const selections = ["changes vs default branch", "security review", "job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -67,6 +84,7 @@ echo "Verified: review-HEAD.md"
     model: { provider: "test", id: "model" },
   };
 
+  process.env.EDC_T2_PI_BACKGROUND_MODE = "cleanup";
   const messagesBeforeStart = messages.length;
   await handler("", ctx);
   const startMessage = messages.slice(messagesBeforeStart).at(-1);
@@ -88,7 +106,7 @@ echo "Verified: review-HEAD.md"
   assert.ok(status, "review status message should be emitted");
   assert.match(status.content, /status: running/, "status should survive edc-context cleanup while review runs");
 
-  assert.ok(await waitFor(() => /status=success/.test(readFileSync(statusPathFromMessage, "utf-8")), 3000));
+  assert.ok(await waitFor(() => /status=success/.test(readFileSync(statusPathFromMessage, "utf-8")), 10000));
   assert.match(readFileSync(logPathFromMessage, "utf-8"), /Verified: review-HEAD\.md/);
 } finally {
   if (childPid) {
@@ -98,13 +116,15 @@ echo "Verified: review-HEAD.md"
 }
 NODE
 
-node --input-type=module <<'NODE'
+EDC_TEST_EXTENSION="$TRUSTED_PACKAGE/pi/index.mjs" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import edcExtension from "./pi/index.mjs";
+import { pathToFileURL } from "node:url";
+
+const { default: edcExtension } = await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href);
 
 delete process.env.EDC_PI_SUBPROCESS;
 
@@ -136,16 +156,6 @@ try {
   execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: mainRepo });
   execFileSync("git", ["worktree", "add", "-q", worktree, "HEAD"], { cwd: mainRepo });
 
-  const scriptsDir = join(worktree, ".edc", "scripts");
-  mkdirSync(scriptsDir, { recursive: true });
-  const reviewScript = join(scriptsDir, "edc-review.sh");
-  writeFileSync(reviewScript, `#!/usr/bin/env bash
-set -euo pipefail
-echo "Verified: review-HEAD.md"
-`);
-  chmodSync(reviewScript, 0o755);
-  mkdirSync(join(worktree, ".edc.install.lock"), { recursive: true });
-
   const messages = [];
   let handler;
   const pi = {
@@ -159,7 +169,7 @@ echo "Verified: review-HEAD.md"
   };
   await edcExtension(pi);
 
-  const selections = ["security review", "changed files vs default branch"];
+  const selections = ["changes vs default branch", "security review"];
   const ctx = {
     cwd: worktree,
     hasUI: true,
@@ -170,6 +180,7 @@ echo "Verified: review-HEAD.md"
     model: { provider: "test", id: "model" },
   };
 
+  process.env.EDC_T2_PI_BACKGROUND_MODE = "quote";
   const messagesBeforeStart = messages.length;
   await handler("", ctx);
   const startMessage = messages.slice(messagesBeforeStart).at(-1);

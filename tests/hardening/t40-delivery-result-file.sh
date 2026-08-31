@@ -16,7 +16,13 @@ if [ "${EDC_T40_MISSING_REPORT:-0}" = "1" ]; then
   exit 0
 fi
 report=$(printf '%s\n' "$prompt" | awk '/^DELIVERY_REPORT_PATH: /{print $2; exit}')
-printf '# Delivery\n\n## Verdict\n\nok\n' > "$report"
+case "${EDC_T40_TRUNCATED_REPORT:-0}" in
+  1) printf 'x' > "$report" ;;
+  2) printf 'xx' > "$report" ;;
+  3) printf 'xxxxxxxxxxxxxxxx\n' > "$report" ;;
+  4) printf 'complete looking prose without newline' > "$report" ;;
+  *) printf '# Delivery\n\n## Verdict\n\nok\n' > "$report" ;;
+esac
 MOCK
 chmod +x "$TMP/bin/claude"
 
@@ -36,7 +42,6 @@ setup_repo() {
   printf 'two\n' > file.txt
   git add file.txt
   git commit -q -m change
-  node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" install "$TMP/repo" "$ROOT/plugins/edc" >/dev/null
   mkdir -p edc-context/modules edc-context/reports edc-context/build
   head=$(git rev-parse HEAD)
   cat > edc-context/manifest.json <<EOF
@@ -64,22 +69,33 @@ NODE
 echo "PASS: delivery-review writes structured success result"
 
 setup_repo
-set +e
 PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_T40_MISSING_REPORT=1 bash "$SCRIPT" HEAD --base HEAD~1 --committed-only >"$TMP/bad.out" 2>"$TMP/bad.err"
-rc=$?
-set -e
-if [ "$rc" -ne 0 ]; then
-  node --input-type=module <<'NODE'
+node --input-type=module <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
 assert.equal(result.kind, 'delivery-review');
-assert.equal(result.exitCode, 1);
-assert.equal(result.reasonCode, 'delivery-report-validation');
+assert.equal(result.status, 'success-with-warning');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success-with-warning');
+assert.equal(result.finalReview, 'delivery-review-HEAD.md');
+assert.match(readFileSync('delivery-review-HEAD.md', 'utf8'), /Delivery review unavailable/);
 NODE
-  echo "PASS: delivery-review writes structured failure result"
-else
-  echo "FAIL: delivery-review missing report should fail"
-  cat "$TMP/bad.out" "$TMP/bad.err"
-  exit 1
-fi
+echo "PASS: delivery-review writes structured warning result for missing coverage"
+
+for truncated_case in 1 2 3 4; do
+  setup_repo
+  PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=claude EDC_T40_TRUNCATED_REPORT="$truncated_case" \
+    bash "$SCRIPT" HEAD --base HEAD~1 --committed-only \
+    >"$TMP/truncated-$truncated_case.out" 2>"$TMP/truncated-$truncated_case.err"
+  node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const result = JSON.parse(readFileSync('edc-context/build/last-run.json', 'utf8'));
+assert.equal(result.status, 'success-with-warning');
+assert.equal(result.exitCode, 0);
+assert.equal(result.reasonCode, 'success-with-warning');
+assert.match(readFileSync('delivery-review-HEAD.md', 'utf8'), /Delivery review unavailable/);
+NODE
+done
+echo "PASS: delivery-review classifies truncated and structurally incomplete garbage as coverage warnings"

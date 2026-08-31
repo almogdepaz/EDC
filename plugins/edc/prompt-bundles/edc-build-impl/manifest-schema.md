@@ -62,7 +62,7 @@ Build provenance only. Runtime adapters MUST NOT auto-load it.
 | `defaultMode` | enum: `"advisory"` \| `"inject"` | yes | Repo-default runtime mode. `advisory` means EDC only ships docs and instructions; `inject` means the harness auto-loads the matching module doc when it can. Flip with `edc mode advisory\|inject`. |
 | `guardedTools` | string[] | optional | Tools that, in inject installs, are gated on the matching module doc being loaded. Conventional values: `read`, `edit`, `write`. |
 | `discoveryGatedOnIndex` | string[] | optional | Tools gated only on `edc-context/index.md` having been loaded. Conventional values: `grep`, `glob`, `find`, `ls`. |
-| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `EDC_AGENTS.md`, `.edc/**`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. |
+| `bootstrapAlwaysReadable` | string[] (globs) | optional | Paths always readable regardless of which module docs have been loaded. Defaults to `edc-context/**`, `AGENTS.md`, `EDC_AGENTS.md`, `LICENSE*`, `package.json`, `Cargo.toml`, `*.lock`, `.gitignore`, `.editorconfig`. Repo-local `.edc/**` is intentionally excluded because runtime adapters ignore legacy caches. |
 | `unmatchedPathPolicy` | enum: `"warn-allow"` \| `"allow"` \| `"fail"` | yes | Behavior for code paths that match no module. Default authoring SHOULD use `"warn-allow"`: unmatched paths are warned and allowed so the manifest stays an honest contract instead of blocking new code. `"allow"` suppresses warnings; `"fail"` makes review task generation reject unmatched paths. |
 
 ---
@@ -227,7 +227,6 @@ Filled by the post-step. All counts cover the set of repo files included in `git
       "edc-context/**",
       "AGENTS.md",
       "EDC_AGENTS.md",
-      ".edc/**",
       "LICENSE*",
       "package.json",
       "Cargo.toml",

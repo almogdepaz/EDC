@@ -22,6 +22,8 @@ Use two-layer detection:
 
 Do not report architecture findings from path names, grep hits, or generic preferences alone.
 
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries to verify callers, public contracts, integration completeness, ownership evidence, and installed dependency behavior.
+
 ## Architecture checks
 
 ### Module ownership

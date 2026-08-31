@@ -21,7 +21,7 @@ pi
 # run /edc, choose build context, then choose scope + review lens
 ```
 
-First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtime cache `.edc/`, pi job state under `.git/edc/`, and `review-*.md` reports. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
+First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, pi job state under `.git/edc/`, and `review-*.md` reports. Runtime code comes only from the installed package or `~/.edc`; old repo-local `.edc/` caches are ignored and can be removed manually. Generated context is disposable; source remains authoritative. See [Generated Files and Local State](#generated-files-and-local-state) for details and `.gitignore` guidance.
 
 ## Why EDC?
 
@@ -31,6 +31,8 @@ First run may write `edc-context/`, `AGENTS.md` or `EDC_AGENTS.md`, local runtim
 | Claude/Cursor/Codex agents | Good at code changes | Start each repo/session mostly blind | Shared repo map before work starts |
 | PR bots | Convenient diff review | Remote, black-box, PR-only | Local inspectable context-aware review |
 | Semantic search / code search | Finds relevant code | Does not encode authority or invariants | Authored module docs with routing and guardrails |
+
+Before source-research workers run, EDC checks whether an already-installed Octocode CLI responds successfully and gives workers explicit available/unavailable guidance. Octocode remains optional: EDC never installs or requires it, and workers fall back immediately to their existing tools when it is absent or fails.
 
 ## What EDC Does
 
@@ -69,7 +71,7 @@ edc build  --agent codex --focus orchestrator
 edc build  --agent codex --ignore 'vendor/**' --ignore 'dist/**'
 edc update --agent claude              # incremental refresh after HEAD moves
 
-# run all review lenses concurrently: security, delivery, and quality
+# run all review lenses (serial by default): security, delivery, and quality
 edc review full --agent claude
 edc review diff --agent pi          # diff vs detected default branch
 edc review diff main --agent pi     # diff vs explicit base
@@ -99,16 +101,18 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit concurrently. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means durable outputs validated even though the agent transport reported an odd/nonzero finish. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit in order by default, or concurrently after explicit opt-in. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means one or more review calls failed or omitted output; EDC preserves substantive prose and inserts explicit unavailable-coverage markers instead of discarding the rest of the review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
 
 ### Worker concurrency and pi observability
 
-Build, security, and quality module work uses a coordinator-owned pool. Set `EDC_MAX_CONCURRENCY` to an integer from 1–64 (default `4`; use `1` for serial compatibility). Prompts, transcripts, task results, stderr, and staged outputs live under `.git/edc/runs/<run-id>/`. Canonical reports/context are written only after staged outputs validate as contained single-link regular files.
+All EDC orchestration is serial by default: combined review runs security, delivery, then quality, and worker manifests use `maxConcurrency: 1`. Set exact `EDC_PARALLEL=1` to enable concurrent review lenses and module-worker pools. Only after that opt-in does `EDC_MAX_CONCURRENCY` apply; it accepts an integer from 1–64 and defaults to `4`. Prompts, transcripts, task results, stderr, and staged outputs live under `.git/edc/runs/<run-id>/`. Canonical reports/context are written only after staged outputs validate as contained single-link regular files.
 
 Pi workers always use `--no-extensions`, so arbitrary global/project extension discovery remains disabled. To observe EDC workers, explicitly allow one prompt-neutral extension entrypoint:
 
 ```text
 # ~/.edc/config (environment variables override this file)
+EDC_PARALLEL=0
+# Used only when EDC_PARALLEL=1:
 EDC_MAX_CONCURRENCY=4
 EDC_PI_EXTENSION_PATH=/absolute/path/to/agent_observer/src/extension.ts
 ```
@@ -132,7 +136,7 @@ Alternative — install the runtime directly from a clone:
 bash install.sh --agent claude
 ```
 
-Both paths install the plugin surface (slash commands + hooks + skills) and the terminal CLI (`~/.edc/scripts/edc`). The direct installer also adds a zsh/bash `PATH` entry when possible; use `--no-path` to skip shell rc edits.
+Marketplace installation provides the package-backed Claude commands, hooks, and skills; it does not provision `~/.edc` or a standalone `edc` command. The standalone terminal CLI requires the direct installer, which installs `~/.edc/scripts/edc` and adds a zsh/bash `PATH` entry when possible; use `--no-path` to skip shell rc edits.
 
 ### Cursor
 
@@ -157,13 +161,10 @@ bash install.sh --agent codex
 ### pi
 
 ```bash
-# npm package
+# npm package (global)
 pi install npm:@sgtbeatdown/edc
 
-# project-local install for a team repo
-pi install npm:@sgtbeatdown/edc -l
-
-# or from a local checkout
+# or from a local checkout (also global)
 bash install.sh --agent pi
 ```
 
@@ -229,12 +230,12 @@ Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi s
 
 ## Generated Files and Local State
 
-EDC writes generated context and local runtime state in a few places:
+EDC writes generated context and operational state in a few places:
 
 - `edc-context/` — generated per-module deep context written by build/update; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may wipe and rebuild it.
 - `AGENTS.md` / `EDC_AGENTS.md` — short generated orientation pointing agents at `edc-context/`. If a repo already has a non-EDC `AGENTS.md`, non-pi builds preserve it, write `EDC_AGENTS.md`, and explain how to replace, append, or reference it. Set `EDC_AGENTS_MODE=overwrite` to replace `AGENTS.md`.
 - `review-*.md` — consolidated review output.
-- `.edc/` — project-local runtime copy used by hooks/extensions when they need deterministic access to orchestrator scripts and private prompt bundles. Global installs also live under `~/.edc/`.
+- `~/.edc/` — managed global terminal runtime and private prompt bundles. Package integrations may execute their own installed package source directly. Repo-local `.edc/` is never read, repaired, created, or executed; remove legacy caches manually if desired.
 - `.git/edc/status` and `.git/edc/<kind>.log` — pi's current background job status/logs. These are git metadata files, not worktree files, and need no `.gitignore` entry.
 
 For repos where you do not want generated EDC artifacts tracked, add:
@@ -244,7 +245,6 @@ AGENTS.md
 EDC_AGENTS.md
 edc-context/
 review-*.md
-.edc/
 ```
 
 If generated context or review outputs get committed, `edc review` filters them out of diffs automatically so the tool does not review its own output, but you will still usually want them ignored to keep history clean.

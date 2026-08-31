@@ -4,20 +4,20 @@
 #
 # Flow:
 #   1. dep check (git/node via helpers)
-#   2. parse args (--base, --ignore, --context-mode)
+#   2. parse args (--ignore, --context-mode); update lineage comes from manifest.sourceCommit
 #   3. preflight gate via edc-clean-slate.sh --check:
 #        11 (healthy v2)            → proceed
 #        0  (no context dir)         → REFUSE: "run edc-build first"
 #        10 (partial / malformed)   → REFUSE: "run edc-build to rebuild"
 #        12 (v1 layout)             → already printed migration hint, exit
-#   4. auto-detect base if --base not given (git merge-base with main/master)
+#   4. validate manifest.sourceCommit as a canonical locally-resolvable commit.
 #   5. spawn ONE update subprocess via edc_spawn (claude/cursor/codex/pi).
-#      Skill internally re-runs git diff + classify-cli.mjs against the same
-#      base, refreshes affected modules + reports + manifest.
+#      Skill computes the exact sourceCommit-to-HEAD diff, refreshes affected
+#      modules + reports + manifest.
 #   6. validate via edc-doctor.sh — non-zero doctor → update failed
 #
 # Usage:
-#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-update.sh [--base <ref>] [--ignore <glob>]...
+#   EDC_AGENT_CLI=claude|cursor|codex|pi bash edc-update.sh [--ignore <glob>]...
 
 set -euo pipefail
 
@@ -33,6 +33,8 @@ SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/edc-lib.sh"
 SCRIPT_DIR="$EDC_SCRIPTS_DIR"
 MANIFEST="$EDC_MANIFEST"
+# shellcheck source=edc-assert-fresh.sh
+. "$SCRIPT_DIR/edc-assert-fresh.sh"
 CLEAN_SLATE_SH="$SCRIPT_DIR/edc-clean-slate.sh"
 DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
 
@@ -51,7 +53,10 @@ usage() {
   cat <<'EOF' >&2
 Usage:
   EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-update.sh \
-    [--base <ref>] [--ignore <glob>]... [--context-mode advisory|inject]
+    [--ignore <glob>]... [--context-mode advisory|inject]
+
+Update lineage is always read from edc-context/manifest.json sourceCommit.
+`--base` is review-only; use it with edc review, security, delivery, or quality.
 EOF
   exit 2
 }
@@ -106,29 +111,21 @@ EOF
   esac
 }
 
-# Auto-detect base ref if --base not provided. Mirrors the skill's logic.
-auto_detect_base() {
-  git merge-base HEAD main 2>/dev/null \
-    || git merge-base HEAD master 2>/dev/null \
-    || true
-}
-
 # ── main ─────────────────────────────────────────────────────────────────────
 
 update_main() {
   edc_result_begin update
   trap edc_result_on_exit EXIT
   edc_runtime_preflight_or_exit
-  local base=""
+  local context_source
   local -a passthrough=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --base)
-        [ "$#" -ge 2 ] || { echo "ERROR: --base requires a ref" >&2; usage; }
-        base="$2"
-        passthrough+=("$1" "$2")
-        shift 2
+        echo "ERROR: --base is review-only and cannot select context update lineage." >&2
+        echo "Run edc update without --base; it uses manifest.sourceCommit automatically." >&2
+        usage
         ;;
       --ignore)
         [ "$#" -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; usage; }
@@ -159,24 +156,21 @@ update_main() {
     exit 1
   fi
 
-  # Auto-detect base if not given. Pass through to skill so its git-diff
-  # call sees the same base. Empty base = "skill auto-detects" (existing
-  # skill behavior); we just print what we found for log clarity.
-  if [ -z "$base" ]; then
-    base=$(auto_detect_base)
-    if [ -n "$base" ]; then
-      echo "→ auto-detected base: $base"
-      passthrough+=("--base" "$base")
-    else
-      echo "→ no main/master branch found; skill will infer base"
-    fi
+  context_source=$(read_canonical_context_source_commit 2>/dev/null || true)
+  if [ -z "$context_source" ]; then
+    echo "ERROR: context update requires a canonical, locally available manifest sourceCommit." >&2
+    echo "next step: run edc build --agent $EDC_AGENT_CLI --force explicitly, then retry." >&2
+    edc_result_failure 1 "context-provenance-unavailable" "context sourceCommit is missing, invalid, symbolic, or unavailable locally" "run edc build --agent $EDC_AGENT_CLI --force explicitly"
+    exit 1
   fi
+  passthrough+=("--context-source" "$context_source")
 
+  echo "→ updating context lineage: $context_source → $(git rev-parse HEAD)"
   echo "→ spawning $EDC_AGENT_CLI for edc-update..."
   local prompt
   prompt=$(resolve_prompt update ${passthrough[@]+"${passthrough[@]}"}) || exit 1
   edc_spawn "edc-update" "${EDC_UPDATE_TIMEOUT:-1800}" "$prompt" \
-    || { echo "ERROR: edc-update invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-update agent invocation failed" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI --base $base"; exit 1; }
+    || { echo "ERROR: edc-update invocation failed" >&2; edc_result_failure 1 "agent-failed" "edc-update agent invocation failed" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI"; exit 1; }
 
   # Validate via doctor.
   if [ ! -f "$DOCTOR_SH" ]; then

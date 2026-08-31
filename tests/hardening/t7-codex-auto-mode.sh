@@ -136,14 +136,14 @@ if [ "$result" -ne 0 ]; then
   exit 1
 fi
 
-if [ ! -f .mock-update-prompt ] || ! grep -q -- "--base $base_head" .mock-update-prompt; then
-  echo "FAIL: stale-context recovery did not use manifest.sourceCommit for codex edc-update"
+if [ ! -f .mock-update-prompt ] || ! grep -q -- "--context-source $base_head" .mock-update-prompt; then
+  echo "FAIL: stale-context recovery did not pass manifest.sourceCommit to codex edc-update"
   echo "--- update prompt ---"
   cat .mock-update-prompt 2>/dev/null || true
   echo "--- end update prompt ---"
   exit 1
 fi
-echo "PASS: stale-context recovery uses manifest.sourceCommit for codex edc-update"
+echo "PASS: stale-context recovery passes manifest.sourceCommit to codex edc-update"
 
 final=$(ls review-*.md 2>/dev/null | head -1 || true)
 if [ -z "$final" ]; then

@@ -61,7 +61,8 @@ Menu actions:
 - lenses: combined, security, delivery, or quality
 - job status — shows the current background job status
 - build context — starts a background context build
-- update context — detects the repo default branch (`origin/HEAD`, `main`, or `master`) and starts a background context update
+- force rebuild context — discards generated context and starts a full background rebuild
+- update context — refreshes from the context manifest's recorded source commit to `HEAD`; review base selection is never used
 - doctor / validate context
 
 `/edc` is interactive-only. For non-interactive use, use the terminal CLI:
@@ -73,7 +74,8 @@ edc security full --agent pi
 edc delivery diff <base> --agent pi
 edc quality full --agent pi
 edc build --agent pi
-edc update --agent pi --base <default-branch>
+edc build --agent pi --force
+edc update --agent pi
 ```
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.

@@ -164,14 +164,14 @@ if [ "$result" -ne 0 ]; then
 fi
 
 # ── assertions ───────────────────────────────────────────────────────────────
-if [ ! -f .mock-update-prompt ] || ! grep -q -- "--base $base_head" .mock-update-prompt; then
-  echo "FAIL: stale-context recovery did not use manifest.sourceCommit for edc-update"
+if [ ! -f .mock-update-prompt ] || ! grep -q -- "--context-source $base_head" .mock-update-prompt; then
+  echo "FAIL: stale-context recovery did not pass manifest.sourceCommit to edc-update"
   echo "--- update prompt ---"
   cat .mock-update-prompt 2>/dev/null || true
   echo "--- end update prompt ---"
   exit 1
 fi
-echo "PASS: stale-context recovery uses manifest.sourceCommit for edc-update"
+echo "PASS: stale-context recovery passes manifest.sourceCommit to edc-update"
 
 probe_count=0
 [ ! -f "$TMPDIR_T6/octocode-log" ] || probe_count=$(wc -l < "$TMPDIR_T6/octocode-log" | tr -d ' ')

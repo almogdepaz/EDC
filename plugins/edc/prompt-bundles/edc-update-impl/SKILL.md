@@ -5,7 +5,7 @@ description: Incrementally updates edc-context/ files based on branch changes (v
 
 # Update Context (v2)
 
-**Arguments:** optional `--base <ref>` for comparison reference and repeatable `--ignore <glob>` to exclude files from this run. Default base: auto-detect merge base with main/master.
+**Arguments:** required `--context-source <full-sha>` supplied by the orchestrator and repeatable `--ignore <glob>` to exclude files from this run. `--context-source` is the exact commit represented by the existing context; it is not a review base.
 
 ## Ignore Rules
 
@@ -24,26 +24,31 @@ This skill is invoked by `plugins/edc/scripts/edc-update.sh` AFTER the orchestra
 - `edc-context/manifest.json` exists, parses as JSON, and `schemaVersion == 2`
 - `edc-context/index.md` exists
 - v1 markers (`edc-context/.meta.json`, top-level `context.md` etc.) are NOT present
+- `--context-source` is a canonical full commit SHA that resolves locally
 
 If any of those assumptions are violated when this skill runs, that's an orchestrator bug — fail loudly rather than trying to repair the layout from inside the skill. Do NOT call `edc-clean-slate.sh` from this skill.
 
-If `git diff --name-only "$BASE"..HEAD` returns no source-file changes (only `edc-context/` or unrelated tracked paths), the update is a no-op. Skip to Step 10 (Validate) and exit 0. Never declare success when `manifest.json` is missing or invalid — the orchestrator's `edc-doctor.sh` post-check will catch that, but a clean exit from this skill on a broken layout is itself a bug.
+If `git diff --name-status "$CONTEXT_SOURCE" HEAD` returns no source-file changes (only `edc-context/` or unrelated tracked paths), the update is a no-op. Skip to Step 10 (Validate) and exit 0. Never declare success when `manifest.json` is missing or invalid — the orchestrator's `edc-doctor.sh` post-check will catch that, but a clean exit from this skill on a broken layout is itself a bug.
 
 ## Process
 
 ### Step 1 — Detect what changed
 
 ```bash
-# Auto-detect base if not provided
-BASE=$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null)
+# Read the required orchestrator argument. Never infer main/master or consume
+# a review --base value here.
+CONTEXT_SOURCE=<value supplied by --context-source>
 
-# Get changed files since base
-git diff --name-only "$BASE"..HEAD
+# Reconcile the context's exact source tree with HEAD. Use --name-status so
+# deletions and renames from either divergent history are represented.
+git diff --name-status "$CONTEXT_SOURCE" HEAD
 ```
 
-Read `edc-context/manifest.json` to get `sourceCommit` (last analyzed commit) and `modules[]` with their `name`, `doc`, and `match` rules.
+Read `edc-context/manifest.json` to get `sourceCommit` (last analyzed commit) and `modules[]` with their `name`, `doc`, and `match` rules. The manifest source must equal `CONTEXT_SOURCE`; fail loudly if it does not.
 
 ### Step 2 — Identify affected modules and contextless paths
+
+Classify each added, modified, deleted, and renamed path by invoking the shared classifier. For a deletion, use the pre-update manifest route and remove or rewrite the affected module facts; do not discard it merely because the path no longer exists. For a rename, analyze both old and new paths.
 
 Classify each changed file by invoking the shared classifier:
 

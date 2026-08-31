@@ -753,7 +753,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   const backgroundCases = [
     { selection: ["changes vs default branch", "security review"], kind: "review", log: ".git/edc/review.log", expect: "review args: HEAD --base master" },
     { selection: "build context", kind: "build", log: ".git/edc/build.log", expect: "build args:  agent=pi" },
-    { selection: "update context", kind: "update", log: ".git/edc/update.log", expect: "update args: --base master agent=pi" },
+    { selection: "force rebuild context", kind: "build", log: ".git/edc/build.log", expect: "build args: --force agent=pi" },
+    { selection: "update context", kind: "update", log: ".git/edc/update.log", expect: "update args:  agent=pi" },
     { selection: ["changes vs default branch", "quality review"], kind: "audit", log: ".git/edc/audit.log", expect: "audit args: HEAD --base master agent=pi" },
     { selection: ["changes vs default branch", "delivery review"], kind: "delivery-review", log: ".git/edc/delivery-review.log", expect: "delivery args: HEAD --base master agent=pi" },
   ];

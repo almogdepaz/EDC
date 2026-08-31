@@ -41,6 +41,29 @@ read_manifest_source_commit() {
   echo "$val"
 }
 
+# Echo the manifest source only when it is an exact canonical commit object.
+# This provenance drives context updates and is intentionally independent from
+# a review's comparison base or ancestry relationship to HEAD.
+read_canonical_context_source_commit() {
+  local source_commit canonical_commit
+  source_commit=$(read_manifest_source_commit) || return 1
+  case "$source_commit" in
+    -*)
+      echo "ERROR: context sourceCommit is not a canonical commit: $source_commit" >&2
+      return 1
+      ;;
+  esac
+  canonical_commit=$(git rev-parse --verify "${source_commit}^{commit}" 2>/dev/null) || {
+    echo "ERROR: context sourceCommit does not resolve to a local commit: $source_commit" >&2
+    return 1
+  }
+  if [ "$source_commit" != "$canonical_commit" ]; then
+    echo "ERROR: context sourceCommit is not a canonical full commit SHA: $source_commit" >&2
+    return 1
+  fi
+  printf '%s\n' "$canonical_commit"
+}
+
 assert_context_fresh() {
   if [ ! -f "$MANIFEST" ]; then
     echo "ERROR: context missing ($MANIFEST not found)" >&2

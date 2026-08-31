@@ -348,7 +348,7 @@ auto_mode() {
       --base)
         [ $((idx + 1)) -lt "${#raw_args[@]}" ] || { echo "ERROR: --base requires a ref" >&2; exit 2; }
         base="${raw_args[$((idx + 1))]}"
-        update_args+=("${raw_args[$idx]}" "$base")
+        # Review scope never controls context update lineage.
         extra_args+=("${raw_args[$idx]}" "$base")
         idx=$((idx + 2))
         ;;

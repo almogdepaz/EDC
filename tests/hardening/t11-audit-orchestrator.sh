@@ -171,9 +171,14 @@ setup_repo() {
     printf '<!-- t11 -->\n# root\n\n## Files\n\n- src.py\n' > edc-context/modules/root.md
     printf '<!-- t11 -->\n# lib\n\n## Files\n\n- lib.py\n' > edc-context/modules/lib.md
   elif [ "$with_context" = "stale" ]; then
+    local source_commit
+    source_commit=$(git rev-parse HEAD)
+    printf 'stale\n' >> src.py
+    git add src.py
+    git commit -q -m "stale context fixture"
     mkdir -p edc-context/modules
     printf '<!-- t11 -->\n# Stub\n\n## Module Map\n\n- root\n- lib\n' > edc-context/index.md
-    printf '{"schemaVersion":2,"sourceCommit":"deadbeef","modules":[{"name":"root","doc":"edc-context/modules/root.md","match":{"exactFiles":["src.py"]}},{"name":"lib","doc":"edc-context/modules/lib.md","match":{"exactFiles":["lib.py"]}}]}\n' > edc-context/manifest.json
+    printf '{"schemaVersion":2,"sourceCommit":"%s","modules":[{"name":"root","doc":"edc-context/modules/root.md","match":{"exactFiles":["src.py"]}},{"name":"lib","doc":"edc-context/modules/lib.md","match":{"exactFiles":["lib.py"]}}]}\n' "$source_commit" > edc-context/manifest.json
     printf '<!-- t11 -->\n# root\n\n## Files\n\n- src.py\n' > edc-context/modules/root.md
     printf '<!-- t11 -->\n# lib\n\n## Files\n\n- lib.py\n' > edc-context/modules/lib.md
   fi

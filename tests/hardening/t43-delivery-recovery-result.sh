@@ -32,12 +32,13 @@ mkdir -p src edc-context/modules
 echo one > src/app.ts
 git add src/app.ts
 git commit -q -m init
+source_commit=$(git rev-parse HEAD)
 echo two > src/app.ts
 git add src/app.ts
 git commit -q -m change
 printf '# Repo\n\n## Module Map\n- app\n' > edc-context/index.md
 printf '# app\n\n## Files\n- src/app.ts\n' > edc-context/modules/app.md
-printf '{"schemaVersion":2,"sourceCommit":"deadbeef","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' > edc-context/manifest.json
+printf '{"schemaVersion":2,"sourceCommit":"%s","policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"app","priority":10,"doc":"edc-context/modules/app.md","match":{"prefixes":["src/"]}}]}\n' "$source_commit" > edc-context/manifest.json
 export PATH="$MOCK_BIN:$PATH"
 export EDC_AGENT_CLI=claude
 result=0

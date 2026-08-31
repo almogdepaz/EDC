@@ -204,45 +204,7 @@ case "$RECOVERY_ARGS_MODE" in
 esac
 EOS
   chmod +x "$script"
-  local confirmation="${6:-}"
-  if [ -n "$confirmation" ]; then
-    TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" python3 - "$script" "$confirmation" <<'PY'
-import os
-import pty
-import select
-import signal
-import sys
-
-script, confirmation = sys.argv[1:]
-pid, fd = pty.fork()
-if pid == 0:
-    os.execv(script, [script])
-
-output = b""
-sent_confirmation = False
-while True:
-    ready, _, _ = select.select([fd], [], [], 10)
-    if not ready:
-        os.kill(pid, signal.SIGKILL)
-        _, status = os.waitpid(pid, 0)
-        sys.stdout.buffer.write(output)
-        raise SystemExit(124)
-    try:
-        chunk = os.read(fd, 4096)
-    except OSError:
-        chunk = b""
-    if not chunk:
-        _, status = os.waitpid(pid, 0)
-        sys.stdout.buffer.write(output)
-        raise SystemExit(os.waitstatus_to_exitcode(status))
-    output += chunk
-    if b"Type rebuild to continue" in output and not sent_confirmation:
-        os.write(fd, confirmation.encode("utf-8") + b"\n")
-        sent_confirmation = True
-PY
-  else
-    TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
-  fi
+  TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
 }
 
 default_repo="$TMP/default-repo"
@@ -271,7 +233,7 @@ if ! stale_output=$(run_stale_recovery "$stale_repo" "$stale_source" update-succ
   exit 1
 fi
 if [ "$(git -C "$stale_repo" branch --show-current)" = main ] \
-  && grep -Fq "edc-update"$'\t'"prompt:update --base $stale_source" "$stale_spawn_log" \
+  && grep -Fq "edc-update"$'\t'"prompt:update --context-source $stale_source" "$stale_spawn_log" \
   && ! grep -Fq 'prompt:update --base HEAD' "$stale_spawn_log"; then
   echo "PASS: stale-main recovery updates from manifest sourceCommit"
 else
@@ -286,10 +248,10 @@ if ! option_arg_output=$(run_stale_recovery "$stale_repo" "$stale_source" update
   printf '%s\n' "$option_arg_output"
   exit 1
 fi
-if grep -Fq "edc-update"$'\t'"prompt:update --ignore --base --base $stale_source" "$option_arg_spawn_log"; then
-  echo "PASS: replacing recovery base preserves option-like argument values"
+if grep -Fq "edc-update"$'\t'"prompt:update --ignore --base --context-source $stale_source" "$option_arg_spawn_log"; then
+  echo "PASS: replacing review base preserves option-like argument values"
 else
-  echo "FAIL: replacing recovery base corrupted an option-like argument value"
+  echo "FAIL: replacing review base corrupted an option-like argument value"
   cat "$option_arg_spawn_log"
   exit 1
 fi
@@ -316,7 +278,7 @@ if ! fallback_output=$(run_stale_recovery "$stale_repo" "$stale_source" update-f
   printf '%s\n' "$fallback_output"
   exit 1
 fi
-if grep -Fq "edc-update"$'\t'"prompt:update --base $stale_source" "$fallback_spawn_log" \
+if grep -Fq "edc-update"$'\t'"prompt:update --context-source $stale_source" "$fallback_spawn_log" \
   && grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$fallback_spawn_log" \
   && [ "$(wc -l < "$fallback_spawn_log" | tr -d ' ')" -eq 2 ]; then
   echo "PASS: failed incremental recovery gets exactly one force-build fallback"
@@ -335,76 +297,37 @@ for source_case in missing invalid symbolic; do
     symbolic) unsafe_source="HEAD~1" ;;
   esac
   unsafe_spawn_log="$TMP/$source_case-spawns.log"
-  if ! unsafe_output=$(run_stale_recovery "$stale_repo" "$unsafe_source" build-only-succeeds "$unsafe_spawn_log"); then
-    echo "FAIL: $source_case sourceCommit did not force-build"
-    printf '%s\n' "$unsafe_output"
-    exit 1
-  fi
-  if grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$unsafe_spawn_log" \
-    && ! grep -Fq 'edc-update' "$unsafe_spawn_log" \
-    && [ "$(wc -l < "$unsafe_spawn_log" | tr -d ' ')" -eq 1 ]; then
-    echo "PASS: $source_case sourceCommit skips update and force-builds once"
+  set +e
+  unsafe_output=$(run_stale_recovery "$stale_repo" "$unsafe_source" build-only-succeeds "$unsafe_spawn_log")
+  unsafe_rc=$?
+  set -e
+  if [ "$unsafe_rc" -ne 0 ] \
+    && [ ! -s "$unsafe_spawn_log" ] \
+    && grep -F 'edc build --agent pi --force' <<< "$unsafe_output" >/dev/null; then
+    echo "PASS: $source_case sourceCommit refuses update and requires an explicit rebuild"
   else
-    echo "FAIL: $source_case sourceCommit used an unsafe recovery path"
-    cat "$unsafe_spawn_log"
+    echo "FAIL: $source_case sourceCommit mutated context or spawned a model"
+    printf '%s\n' "$unsafe_output"
+    cat "$unsafe_spawn_log" 2>/dev/null || true
     exit 1
   fi
 done
 
 divergent_spawn_log="$TMP/nonancestor-spawns.log"
-set +e
-divergent_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$divergent_spawn_log")
-divergent_rc=$?
-set -e
-divergent_head=$(git -C "$stale_repo" rev-parse HEAD)
-if grep -F "$unrelated_source" <<< "$divergent_output" >/dev/null \
-  && grep -F "$divergent_head" <<< "$divergent_output" >/dev/null \
-  && grep -F 'consequence:' <<< "$divergent_output" >/dev/null \
-  && grep -F 'next step:' <<< "$divergent_output" >/dev/null; then
-  divergent_message_valid=1
-else
-  divergent_message_valid=0
-fi
-if [ "$divergent_rc" -ne 0 ] && [ ! -s "$divergent_spawn_log" ] && [ "$divergent_message_valid" -eq 1 ]; then
-  echo "PASS: non-interactive divergent context fails without mutation or model spawn"
-else
-  echo "FAIL: non-interactive divergent context should require an explicit rebuild"
-  printf '%s\n' "$divergent_output"
-  cat "$divergent_spawn_log" 2>/dev/null || true
-  exit 1
-fi
-
-interactive_spawn_log="$TMP/nonancestor-interactive-spawns.log"
-if interactive_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$interactive_spawn_log" review-base rebuild); then
-  if grep -Fq 'Type rebuild to continue' <<< "$interactive_output" \
-    && grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$interactive_spawn_log" \
-    && [ "$(wc -l < "$interactive_spawn_log" | tr -d ' ')" -eq 1 ]; then
-    echo "PASS: interactive divergent context requires and accepts rebuild confirmation"
+if divergent_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" update-succeeds "$divergent_spawn_log"); then
+  if grep -Fq "edc-update"$'\t'"prompt:update --context-source $unrelated_source" "$divergent_spawn_log" \
+    && ! grep -Fq 'edc-build-retry' "$divergent_spawn_log" \
+    && [ "$(wc -l < "$divergent_spawn_log" | tr -d ' ')" -eq 1 ]; then
+    echo "PASS: divergent context updates from its recorded source commit"
   else
-    echo "FAIL: interactive divergent context did not require the expected confirmation"
-    printf '%s\n' "$interactive_output"
-    cat "$interactive_spawn_log"
+    echo "FAIL: divergent context did not use its recorded source commit"
+    printf '%s\n' "$divergent_output"
+    cat "$divergent_spawn_log"
     exit 1
   fi
 else
-  echo "FAIL: confirmed interactive divergent context did not rebuild"
-  printf '%s\n' "$interactive_output"
-  exit 1
-fi
-
-cancelled_spawn_log="$TMP/nonancestor-cancelled-spawns.log"
-set +e
-cancelled_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" build-only-succeeds "$cancelled_spawn_log" review-base cancel)
-cancelled_rc=$?
-set -e
-if [ "$cancelled_rc" -ne 0 ] \
-  && [ ! -s "$cancelled_spawn_log" ] \
-  && grep -F 'Context recovery cancelled' <<< "$cancelled_output" >/dev/null; then
-  echo "PASS: interactive divergent context cancels without a model spawn"
-else
-  echo "FAIL: cancelled interactive divergent context should not rebuild"
-  printf '%s\n' "$cancelled_output"
-  cat "$cancelled_spawn_log" 2>/dev/null || true
+  echo "FAIL: divergent context update was refused"
+  printf '%s\n' "$divergent_output"
   exit 1
 fi
 

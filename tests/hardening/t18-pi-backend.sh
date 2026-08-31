@@ -29,6 +29,8 @@ setup_repo() {
   git add src/a.txt
   git commit -q -m init
 
+  local source_commit
+  source_commit=$(git rev-parse HEAD)
   mkdir -p edc-context/modules edc-context/reports
   printf '# Repo\n\n## Module Map\n' > edc-context/index.md
   printf '## Issues\n' > edc-context/reports/issues.md
@@ -37,7 +39,7 @@ setup_repo() {
   cat > edc-context/manifest.json <<EOF
 {
   "schemaVersion": 2,
-  "sourceCommit": "0000000000000000000000000000000000000000",
+  "sourceCommit": "$source_commit",
   "policy": {"defaultMode": "advisory", "unmatchedPathPolicy": "warn-allow"},
   "modules": [
     {"name":"core", "priority": 10, "doc":"edc-context/modules/core.md", "match":{"prefixes":["src/"]}}
@@ -221,7 +223,7 @@ fi
 observer_extension="$TMP/observer-extension.ts"
 printf 'export default function observer() {}\n' > "$observer_extension"
 extension_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH="$observer_extension" "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/extension-update.out" 2>"$LOG_DIR/extension-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH="$observer_extension" "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/extension-update.out" 2>"$LOG_DIR/extension-update.err"
 rc=$?
 extension_call=$(tail -n +$((extension_before + 1)) "$PI_CALLS_LOG" | head -1)
 if [ "$rc" -eq 0 ] && printf '%s\n' "$extension_call" | grep -Fq -- "--no-extensions -e $observer_extension"; then
@@ -233,7 +235,7 @@ else
 fi
 
 invalid_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH=relative-extension.ts "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/invalid-extension.out" 2>"$LOG_DIR/invalid-extension.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_EXTENSION_PATH=relative-extension.ts "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/invalid-extension.out" 2>"$LOG_DIR/invalid-extension.err"
 rc=$?
 invalid_after=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
 if [ "$rc" -ne 0 ] && [ "$invalid_after" -eq "$invalid_before" ] && grep -q 'EDC_PI_EXTENSION_PATH must be an absolute readable file' "$LOG_DIR/invalid-extension.err"; then
@@ -243,7 +245,7 @@ else
   cat "$LOG_DIR/invalid-extension.out" "$LOG_DIR/invalid-extension.err"
 fi
 
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/update.out" 2>"$LOG_DIR/update.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/update.out"; then
   check "18.3: EDC_AGENT_CLI=pi runs update orchestrator" 1
@@ -279,7 +281,7 @@ else
 fi
 
 fallback_before=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/fallback-update.out" 2>"$LOG_DIR/fallback-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=t18-fallback-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/fallback-update.out" 2>"$LOG_DIR/fallback-update.err"
 rc=$?
 fallback_after=$(grep -c -- '--model t18-fallback-model' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/fallback-update.out" && [ "$fallback_after" -gt "$fallback_before" ]; then
@@ -298,7 +300,7 @@ EOF
 config_calls_before=$(wc -l < "$PI_CALLS_LOG" | tr -d ' ')
 env -u EDC_BUILD_MODEL -u EDC_REVIEW_MODEL \
   PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_CONFIG_FILE="$config_file" EDC_PI_MODEL=t18-config-fallback \
-  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/config-update.out" 2>"$LOG_DIR/config-update.err"
+  "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/config-update.out" 2>"$LOG_DIR/config-update.err"
 rc=$?
 config_calls=$(tail -n +$((config_calls_before + 1)) "$PI_CALLS_LOG")
 if [ "$rc" -eq 0 ] \
@@ -336,7 +338,7 @@ else
 fi
 
 alias_before=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
-PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/alias-update.out" 2>"$LOG_DIR/alias-update.err"
+PATH="$TMP/bin:$PATH" EDC_AGENT_CLI=pi EDC_PI_MODEL=gpt-5.5 "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/alias-update.out" 2>"$LOG_DIR/alias-update.err"
 rc=$?
 alias_after=$(grep -c -- '--model gpt-5.5' "$PI_CALLS_LOG" 2>/dev/null || true)
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/alias-update.out" && [ "$alias_after" -gt "$alias_before" ]; then
@@ -360,7 +362,7 @@ else
   cat "$PI_CALLS_LOG" 2>/dev/null || true
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/hang-update.out" 2>"$LOG_DIR/hang-update.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_HANG_AFTER_AGENT_END=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/hang-update.out" 2>"$LOG_DIR/hang-update.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/hang-update.out"; then
   check "18.10: pi backend stops reading after agent_end" 1
@@ -369,7 +371,7 @@ else
   cat "$LOG_DIR/hang-update.out" "$LOG_DIR/hang-update.err"
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-error.out" 2>"$LOG_DIR/agent-end-error.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_ERROR=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/agent-end-error.out" 2>"$LOG_DIR/agent-end-error.err"
 rc=$?
 if [ "$rc" -ne 0 ] && grep -q 'provider down' "$LOG_DIR/agent-end-error.err"; then
   check "18.11: pi backend fails on agent_end assistant error" 1
@@ -378,7 +380,7 @@ else
   cat "$LOG_DIR/agent-end-error.out" "$LOG_DIR/agent-end-error.err"
 fi
 
-PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AGENT_END_RETRY=1 EDC_AGENT_CLI=pi EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/agent-end-retry.out" 2>"$LOG_DIR/agent-end-retry.err"
 rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'Update OK' "$LOG_DIR/agent-end-retry.out"; then
   check "18.12: pi backend allows retryable agent_end to recover" 1
@@ -388,7 +390,7 @@ else
 fi
 
 auth_start=$(date +%s)
-PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" --base HEAD~1 >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
+PATH="$TMP/bin:$PATH" PI_FAKE_AUTH_TEXT=1 EDC_AGENT_CLI=pi EDC_UPDATE_TIMEOUT=3 EDC_BUILD_MODEL=t18-model EDC_REVIEW_MODEL=t18-model "$BASH_BIN" "$ROOT/plugins/edc/scripts/edc-update.sh" >"$LOG_DIR/plain-auth.out" 2>"$LOG_DIR/plain-auth.err"
 rc=$?
 auth_duration=$(( $(date +%s) - auth_start ))
 if [ "$rc" -ne 0 ] \

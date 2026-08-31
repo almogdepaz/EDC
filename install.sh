@@ -298,7 +298,8 @@ print_cli_hint() {
   case "$agent" in
     pi)
       echo "  edc build  --agent pi             # build or update edc-context/"
-      echo "  edc update --agent pi --base main # force incremental update"
+      echo "  edc update --agent pi             # refresh from manifest lineage"
+      echo "  edc build --agent pi --force       # explicitly rebuild context"
       echo "  edc review full --agent pi        # security + delivery + quality full repo review"
       echo "  edc review diff --agent pi        # security + delivery + quality vs default branch"
       echo "  edc security full --agent pi      # security-only full repo review"

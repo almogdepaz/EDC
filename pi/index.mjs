@@ -34,7 +34,6 @@ import {
 import {
   applyDirtyReviewPolicy,
   defaultBaseReviewArgs,
-  defaultBaseUpdateArgs,
   reviewContextSummary,
   reviewDeclinedMessage,
   shouldProceedWithReview,
@@ -55,6 +54,7 @@ const EDC_MENU = {
   JOB_STATUS: "job status",
   KILL_JOB: "kill running edc job",
   BUILD: "build context",
+  FORCE_BUILD: "force rebuild context",
   UPDATE_DEFAULT: "update context",
   DOCTOR: "doctor / validate context",
   CANCEL: "cancel",
@@ -111,6 +111,7 @@ function renderEdcHelp() {
     "- job status",
     "- kill running edc job",
     "- build context",
+    "- force rebuild context",
     "- update context",
     "- doctor / validate context",
     "",
@@ -124,7 +125,8 @@ function renderEdcHelp() {
     "  edc delivery diff <base> --agent pi",
     "  edc quality full --agent pi",
     "  edc build --agent pi",
-    "  edc update --agent pi --base <default-branch>",
+    "  edc build --agent pi --force",
+    "  edc update --agent pi",
   ].join("\n");
 }
 
@@ -905,7 +907,8 @@ function interactiveOnlyMessage() {
     "  edc security full --agent pi",
     "  edc quality full --agent pi",
     "  edc build --agent pi",
-    "  edc update --agent pi --base <default-branch>",
+    "  edc build --agent pi --force",
+    "  edc update --agent pi",
   ].join("\n");
 }
 
@@ -1054,6 +1057,7 @@ async function handleEdcMenu(pi, args, ctx) {
     EDC_MENU.JOB_STATUS,
     EDC_MENU.KILL_JOB,
     EDC_MENU.BUILD,
+    EDC_MENU.FORCE_BUILD,
     EDC_MENU.UPDATE_DEFAULT,
     EDC_MENU.DOCTOR,
     EDC_MENU.CANCEL,
@@ -1075,8 +1079,11 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.BUILD:
       runBackgroundAction(pi, ctx, "build", "edc-build.sh");
       break;
+    case EDC_MENU.FORCE_BUILD:
+      runBackgroundAction(pi, ctx, "build", "edc-build.sh", ["--force"]);
+      break;
     case EDC_MENU.UPDATE_DEFAULT:
-      runBackgroundAction(pi, ctx, "update", "edc-update.sh", defaultBaseUpdateArgs(ctx.cwd));
+      runBackgroundAction(pi, ctx, "update", "edc-update.sh");
       break;
     case EDC_MENU.DOCTOR:
       await runScriptAction(pi, ctx, "edc doctor", "edc-doctor.sh");

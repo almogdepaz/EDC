@@ -52,10 +52,6 @@ export function defaultBaseReviewArgs(cwd) {
   return ["HEAD", "--base", detectDefaultBaseRef(cwd)];
 }
 
-export function defaultBaseUpdateArgs(cwd) {
-  return ["--base", detectDefaultBaseRef(cwd)];
-}
-
 function operationalUntracked(path) {
   return path === ".edc" || path.startsWith(".edc/") || path === ".edc.install.lock" || path.startsWith(".edc.install.lock/")
     || path === "edc-context" || path.startsWith("edc-context/")

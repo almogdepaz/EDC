@@ -1083,6 +1083,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     console.log("EDC_ABSOLUTE_BASH_TIMEOUT_FAIL:" + JSON.stringify(absoluteEdcBashEvent.input));
     process.exit(1);
   }
+  const multilineEdcBashEvent = {
+    type: "tool_call",
+    toolCallId: "bash-edc-multiline",
+    toolName: "bash",
+    input: { command: "printf ready\nedc review diff main --agent pi", timeout: 1200 },
+  };
+  await tc.handler(multilineEdcBashEvent, fakeCtx);
+  if (multilineEdcBashEvent.input.timeout < 7200) {
+    console.log("EDC_MULTILINE_BASH_TIMEOUT_FAIL:" + JSON.stringify(multilineEdcBashEvent.input));
+    process.exit(1);
+  }
 
   // 7. detached background spawn failure marks status failed instead of crashing or staying running.
   const spawnFailDir = `${cwd}/spawn-fail`;

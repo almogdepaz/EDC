@@ -105,6 +105,15 @@ else
   exit 1
 fi
 
+if grep -Fq 'Marketplace installation provides the package-backed Claude commands, hooks, and skills' README.md \
+  && grep -Fq 'The standalone terminal CLI requires the direct installer' README.md \
+  && ! grep -Fq 'Both paths install the plugin surface' README.md; then
+  echo "PASS: README distinguishes marketplace plugin setup from terminal runtime install"
+else
+  echo "FAIL: README conflates marketplace setup with terminal runtime installation"
+  exit 1
+fi
+
 if [ -f CHANGELOG.md ] \
   && grep -q '^## \[1.1.5\]' CHANGELOG.md \
   && [ -f SECURITY.md ] \

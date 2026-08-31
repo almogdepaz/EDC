@@ -50,6 +50,31 @@ class VerdictScoreTests(unittest.TestCase):
 
 
 class RegressionAggregationTests(unittest.TestCase):
+    def write_comparison_run(self, root, revision, *, verdict="exact", build_status="ok", review_status="ok"):
+        result_dir = root / revision / "v2" / "label" / "repo"
+        result_dir.mkdir(parents=True)
+        for filename, fieldnames, row in (
+            ("build-metrics.tsv", ["status", "total_cost_usd", "module_count"], {"status": build_status, "total_cost_usd": "1.0", "module_count": "1"}),
+            ("review-metrics.tsv", ["status", "total_cost_usd"], {"status": review_status, "total_cost_usd": "1.0"}),
+            ("review-results.tsv", ["cve", "verdict"], {"cve": "CVE-1", "verdict": verdict}),
+        ):
+            with (result_dir / filename).open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+                writer.writeheader()
+                writer.writerow(row)
+
+    def run_comparison(self, root):
+        previous_root, previous_argv = compare.ROOT, sys.argv
+        compare.ROOT = root
+        sys.argv = ["compare.py", "--pre", "pre", "--post", "post", "--repo", "repo"]
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                compare.main()
+        finally:
+            compare.ROOT, sys.argv = previous_root, previous_argv
+        return raised.exception.code, output.getvalue()
+
     def aggregate_rows(self, fieldnames, rows):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -201,6 +226,25 @@ class RegressionAggregationTests(unittest.TestCase):
                     compare.ROOT = previous_root
                 self.assertEqual(result["per_cve"], {cve: 1.0})
                 self.assertEqual(repos, ["repo"])
+
+    def test_comparison_rejects_unresolved_pre_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.write_comparison_run(root, "pre", verdict="judge_error")
+            self.write_comparison_run(root, "post", verdict="missed")
+            exit_code, output = self.run_comparison(root)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("FAIL pre unresolved judge/scoring errors: 1", output)
+        self.assertIn("OVERALL: FAIL", output)
+
+    def test_comparison_rejects_metrics_without_successful_rows(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.write_comparison_run(root, "pre", build_status="failed")
+            self.write_comparison_run(root, "post")
+            exit_code, output = self.run_comparison(root)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("FAIL pre has no usable build rows", output)
 
     def test_requested_repo_without_rows_fails_closed(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -423,6 +467,45 @@ class ResultSchemaContractTests(unittest.TestCase):
                 self.assertEqual(set(row), original_fields)
                 self.assertNotIn("found" if verdict_field == "verdict" else "verdict", row)
 
+    def test_rescore_recomputes_existing_dual_phase_score(self):
+        ground_truth = {
+            "CVE-1": {
+                "bug_pattern": "pattern",
+                "category": "category",
+                "description": "description",
+                "affected_files": "src/file.c",
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            results_file = Path(temp) / "results.tsv"
+            output_file = Path(temp) / "rescored.tsv"
+            with results_file.open("w", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["cve", "verdict", "build_verdict", "combined_score", "confidence", "notes"],
+                    delimiter="\t",
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "cve": "CVE-1",
+                    "verdict": "missed",
+                    "build_verdict": "missed",
+                    "combined_score": "0.0",
+                    "confidence": "0",
+                    "notes": "original",
+                })
+            with mock.patch.object(rescore, "repo_from_tsv", return_value="repo"), \
+                 mock.patch.object(rescore, "load_ground_truth", return_value=ground_truth), \
+                 mock.patch.object(rescore, "find_analysis", return_value=("analysis", "fixture")), \
+                 mock.patch.object(rescore, "score_cve", return_value=("exact", 1.0, "rescored")), \
+                 mock.patch.object(sys, "argv", ["rescore.py", str(results_file), "--out", str(output_file)]), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rescore.main(), 0)
+            with output_file.open(newline="") as handle:
+                row = next(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual(row["verdict"], "exact")
+        self.assertEqual(row["combined_score"], "1.0")
+
     def test_rescore_mutation_preserves_current_and_legacy_verdict_field(self):
         ground_truth = {
             "CVE-1": {
@@ -454,6 +537,33 @@ class ResultSchemaContractTests(unittest.TestCase):
 
 
 class ComputeBaselineTests(unittest.TestCase):
+    def test_empty_run_exits_nonzero_and_removes_stale_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            results_file = temp_path / "results.tsv"
+            output_file = temp_path / "baseline.json"
+            output_file.write_text('{"stale": true}\n')
+            with results_file.open("w", newline="") as handle:
+                csv.DictWriter(handle, fieldnames=["cve", "verdict"], delimiter="\t").writeheader()
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "benchmark/compute_baseline.py"),
+                    "--model", "test-model",
+                    "--pairs", f"run1:{results_file}:.",
+                    "--out", str(output_file),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("run1 has no benchmark result rows", proc.stderr)
+            self.assertFalse(output_file.exists())
+
     def test_load_results_round_trips_quoted_free_text(self):
         notes = 'judge said "exact"\tfirst line\nsecond line'
         with tempfile.TemporaryDirectory() as temp:

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { constants } from "node:os";
+import { processGroupIsRunning, signalProcessGroup, spawnProcessGroup } from "./process-group.mjs";
 import { SUBPROCESS_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 const agent = process.env.STREAM_FILTER_AGENT || process.env.EDC_AGENT_CLI || "agent";
@@ -21,7 +22,7 @@ function signalExitCode(signal) {
 }
 
 function childIsRunning() {
-  return Boolean(childToKill?.pid) && childToKill.exitCode === null && childToKill.signalCode === null;
+  return processGroupIsRunning(childToKill);
 }
 
 function clearLifecycleTimers() {
@@ -38,6 +39,17 @@ function exitOnce(code) {
   process.exit(code);
 }
 
+function waitForKilledGroup() {
+  const poll = () => {
+    if (!childIsRunning()) {
+      exitOnce(requestedExitCode ?? 1);
+      return;
+    }
+    escalationTimer = setTimeout(poll, 10);
+  };
+  poll();
+}
+
 function finish(code, signal = "SIGTERM") {
   if (exiting) return;
   exiting = true;
@@ -46,14 +58,14 @@ function finish(code, signal = "SIGTERM") {
     clearTimeout(commandTimer);
     commandTimer = null;
   }
-  if (!childIsRunning()) {
+  if (!signalProcessGroup(childToKill, signal)) {
     exitOnce(code);
     return;
   }
 
-  childToKill.kill(signal);
   escalationTimer = setTimeout(() => {
-    if (childIsRunning()) childToKill.kill("SIGKILL");
+    signalProcessGroup(childToKill, "SIGKILL");
+    waitForKilledGroup();
   }, SUBPROCESS_TERMINATION_GRACE_MS);
 }
 
@@ -267,7 +279,7 @@ function runCommand() {
     process.exit(64);
   }
 
-  childToKill = spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+  childToKill = spawnProcessGroup(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
   childToKill.stdin.on("error", (error) => {
     if (error?.code === "EPIPE") return;
     console.error(`ERROR: stdin: ${error.message}`);
@@ -297,10 +309,12 @@ function runCommand() {
     }
   });
   childToKill.on("close", (code, signal) => {
+    if (exiting && childIsRunning()) return;
     const finalCode = exiting
       ? (requestedExitCode ?? 1)
       : (typeof code === "number" ? code : signalExitCode(signal));
-    exitOnce(finalCode);
+    if (!exiting && childIsRunning()) finish(finalCode);
+    else exitOnce(finalCode);
   });
 }
 

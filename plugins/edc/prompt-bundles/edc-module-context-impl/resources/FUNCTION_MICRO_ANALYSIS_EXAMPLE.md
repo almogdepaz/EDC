@@ -45,6 +45,7 @@ Handles POST requests to create a new AI agent session. This is the primary entr
 - Directory not found: `{ error: "project directory not found" }` (404)
 
 *State Writes:*
+- A `newProject` directory may be created before later validation/session work and retained if that later work fails
 - New tmux session created (system-level side effect — persists beyond request lifecycle)
 - `sessionDirMap` updated with session→directory mapping (in-memory server state)
 - tmux session environment variable `WOLFPACK_PROJECT_DIR` set (persists in tmux)
@@ -58,7 +59,8 @@ Handles POST requests to create a new AI agent session. This is the primary entr
 
 *Postconditions:*
 - If success: exactly one new tmux session exists with the returned name, CWD set to project directory
-- If error: no tmux session created, no state modified (atomic — all-or-nothing)
+- Failures before directory creation leave filesystem and tmux state unchanged
+- For `newProject`, the project directory can remain after a later failure in directory validation, duplicate-session handling, or session creation; this handler is not atomic
 - Session name is unique across all existing tmux sessions at time of creation
 
 ---
@@ -128,7 +130,7 @@ if (!validateProjectDir(res, projectDir)) return;
 - **Why here:** Directory must exist before tmux session can use it as CWD
 - **Assumptions:** `join(DEV_DIR, folderName)` is safe because `folderName` was validated above. `validateProjectDir` checks: not a symlink, is a directory, realpath resolves under DEV_DIR.
 - **Depends on:** `folderName` validation from L326. If that check is bypassed, this join could resolve outside DEV_DIR.
-- **Invariant established:** `projectDir` is a real directory under DEV_DIR, not a symlink, accessible
+- **Invariant established:** After successful validation, `projectDir` is a real directory under DEV_DIR, not a symlink, accessible. If `newProject` created it, later failures do not remove it.
 - **5 Hows:**
   - How to ensure path safety? → Validate name (L326), then validate resolved path (validateProjectDir)
   - How does validateProjectDir work? → Checks lstat (no symlink), stat (is directory), realpath (under DEV_DIR)

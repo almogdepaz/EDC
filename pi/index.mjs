@@ -133,7 +133,7 @@ function sendInfo(pi, customType, content) {
 }
 
 function isEdcOrchestratorCommand(command) {
-  const commandBoundary = "(?:^|[;&|()]\\s*)";
+  const commandBoundary = "(?:^|[;&|()\\r\\n]\\s*)";
   const scriptName = "edc-(?:build|update|review|review-all|delivery-review|audit|doctor)\\.sh";
   return new RegExp(`${commandBoundary}edc(?:\\s|$)`).test(command)
     || new RegExp(`${commandBoundary}(?:bash\\s+)?["']?(?:\\$HOME|~)/\\.edc/scripts/${scriptName}["']?(?:\\s|$)`).test(command);

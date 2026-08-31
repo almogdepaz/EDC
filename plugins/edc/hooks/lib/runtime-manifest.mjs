@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   renameSync,
   statSync,
@@ -66,6 +65,7 @@ export const RUNTIME_MANIFEST = Object.freeze({
     hook("paths.mjs", false),
     hook("pi-supervisor.mjs"),
     hook("platform.mjs", false),
+    hook("process-group.mjs", false),
     hook("route.mjs", false),
     hook("runtime-bootstrap.mjs"),
     hook("runtime-manifest.mjs"),
@@ -160,8 +160,15 @@ export function validateRuntimeManifest(manifest = RUNTIME_MANIFEST, sourceRoot 
     if (typeof artifact.executable !== "boolean") throw fail(structured("runtime-validation-failed", "runtime manifest executable flag must be boolean", "reinstall EDC from a trusted package", { source: artifact.source }));
     if (destinations.has(artifact.destination)) throw fail(structured("runtime-validation-failed", "runtime manifest declares a duplicate destination", "reinstall EDC from a trusted package", { destination: artifact.destination }));
     destinations.add(artifact.destination);
-    if (sourceRoot && !existsSync(sourcePathFor(sourceRoot, artifact))) {
-      throw fail(structured("runtime-install-incomplete", "runtime source file is missing", "reinstall EDC from a complete package", { missingPath: artifact.source }));
+    if (sourceRoot) {
+      const sourcePath = sourcePathFor(sourceRoot, artifact);
+      if (!existsSync(sourcePath)) {
+        throw fail(structured("runtime-install-incomplete", "runtime source file is missing", "reinstall EDC from a complete package", { missingPath: artifact.source }));
+      }
+      const sourceStat = lstatSync(sourcePath);
+      if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+        throw fail(structured("runtime-install-incomplete", "runtime source artifact is not a regular file", "reinstall EDC from a complete trusted package", { sourcePath: artifact.source }));
+      }
     }
   }
   return true;
@@ -199,29 +206,12 @@ function copyArtifact(sourceRoot, artifact, stageRoot) {
   chmodSync(dst, artifact.executable ? 0o755 : 0o644);
 }
 
-function managedDestinations(manifest = RUNTIME_MANIFEST) {
-  return new Set(manifest.artifacts.map((artifact) => artifact.destination));
-}
-
-function copyPreservedFiles(previousEdcRoot, stageRoot, manifest = RUNTIME_MANIFEST) {
-  if (!existsSync(previousEdcRoot)) return;
-  const managed = managedDestinations(manifest);
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const src = join(dir, entry.name);
-      const relFromEdc = relative(previousEdcRoot, src).split(sep).join("/");
-      const projectRel = `.edc/${relFromEdc}`;
-      const dst = join(stageRoot, relFromEdc);
-      if (entry.isDirectory()) {
-        walk(src);
-        continue;
-      }
-      if (!entry.isFile() || managed.has(projectRel)) continue;
-      mkdirSync(dirname(dst), { recursive: true });
-      copyFileSync(src, dst);
-    }
-  };
-  walk(previousEdcRoot);
+function copyPreservedConfig(previousEdcRoot, stageRoot) {
+  const sourceConfig = join(previousEdcRoot, "config");
+  if (!existsSync(sourceConfig)) return;
+  const configStat = lstatSync(sourceConfig);
+  if (!configStat.isFile() || configStat.isSymbolicLink()) return;
+  copyFileSync(sourceConfig, join(stageRoot, "config"));
 }
 
 function writeMetadata(stageRoot, sourceRoot, manifest = RUNTIME_MANIFEST) {
@@ -519,7 +509,7 @@ export function installRuntime(globalRoot, sourceRoot, manifest = RUNTIME_MANIFE
     stageEdcRoot = join(stageRoot, ".edc");
     mkdirSync(stageEdcRoot, { recursive: true });
     for (const artifact of manifest.artifacts) copyArtifact(source, artifact, stageEdcRoot);
-    copyPreservedFiles(join(root, ".edc"), stageEdcRoot, manifest);
+    copyPreservedConfig(join(root, ".edc"), stageEdcRoot);
     const metadata = writeMetadata(stageEdcRoot, source, manifest);
     validateStageRoot(stageEdcRoot, source, manifest);
     if (process.env.EDC_RUNTIME_FAIL_AFTER_STAGE === "1") {

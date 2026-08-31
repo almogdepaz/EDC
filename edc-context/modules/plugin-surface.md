@@ -7,7 +7,7 @@ Owns package/plugin metadata, Claude Code/Cursor hooks, user-facing package docu
 **Primary paths:** `README.md`, `package.json`, `.claude-plugin/marketplace.json`, `plugins/edc/README.md`, `plugins/edc/.claude-plugin/`, `plugins/edc/hooks/`.
 
 ## Purpose
-This module is the host-agent and distribution surface for EDC context. Its manifest-backed runtime inventory distributes orchestrator scripts, hook/runtime `.mjs` helpers, and prompt bundles into target repos; hooks read `edc-context/manifest.json`, optionally inject `edc-context/index.md` at session start, and inject matching module docs before file-touching tools when runtime mode is `inject`. It also exposes JS-only routing/freshness helpers used by the Pi adapter and carries deterministic worker helper CLIs used by shell orchestrators. A small managed `termination-policy.mjs` centralizes nested worker and outer Pi background-job grace periods so packaging/install drift cannot recreate equal-deadline cancellation races. `runtime-bootstrap.mjs` is now the trusted wrapper entrypoint: command surfaces and Pi find it in the installed plugin/home runtime, run project-local preflight/repair, then dispatch packaged orchestrator bytes instead of trusting arbitrary `.edc/scripts` directly.
+This module is the host-agent and distribution surface for EDC context. Its manifest-backed inventory defines the scripts, hook/runtime `.mjs` helpers, and prompt bundles that execute either directly from an installed package or from the managed global `~/.edc`; repo-local `.edc/` caches are deliberately outside the runtime. Hooks read `edc-context/manifest.json`, optionally inject `edc-context/index.md` at session start, and inject matching module docs before file-touching tools when runtime mode is `inject`. Shared JS routing/freshness helpers serve Pi, while deterministic helper CLIs serve shell orchestrators. `termination-policy.mjs` orders worker, runtime-bootstrap, and outer Pi deadlines. `runtime-bootstrap.mjs` is the trusted wrapper entrypoint: it validates its package/current-HOME source, rejects repo-local invocation, and dispatches colocated orchestrator bytes without repair side effects.
 
 The public docs/package surface names the workflow taxonomy precisely: combined review (`review`/`review-all`) runs security, delivery/architecture, and quality phases against one immutable candidate serially by default and concurrently only when `EDC_PARALLEL=1`; `security-review` is security/adversarial; `delivery-review` is goal/spec delivery plus architecture-fit; `quality-review` is code-quality/maintainability (`audit` remains a deprecated alias). Documentation also describes explicit dirty-tree policies, candidate metadata, coordinator-owned worker pools, serial-by-default `EDC_PARALLEL`/`EDC_MAX_CONCURRENCY` behavior, git-private run artifacts, Pi `--no-extensions`, and the optional single-observer `EDC_PI_EXTENSION_PATH` contract.
 
@@ -26,21 +26,21 @@ The public docs/package surface names the workflow taxonomy precisely: combined 
 - `plugins/edc/hooks/lib/route.mjs`: shared runtime library for manifest loading, staleness/freshness checks, path extraction, routing, session-start content, and per-tool injection. Context reads are contained regular-file reads under `edc-context/`/`modules/`, invalid glob regex construction is surfaced as `InvalidGlobPatternError`, inject mode is exact (`policy.defaultMode === "inject"`), and a single tool call can concatenate multiple newly routed module docs.
 - `plugins/edc/hooks/lib/json-cli.mjs`: deterministic JSON/result dispatch for build plans, doctor/manifest utilities, review routing manifests, audit module selection, review-all aggregation, spawn metrics, and mode mutation. Build-plan validation rejects non-kebab module names and missing/empty module paths before worker manifests are generated.
 - `plugins/edc/hooks/lib/json-result-commands.mjs`: extracted structured result writing, review phase normalization, and review-all aggregation handlers.
-- `plugins/edc/hooks/lib/runtime-manifest.mjs`: authoritative v1.1.5 runtime inventory. It performs transactional/token-owned installation and verifies regular-file type, modes, metadata, fingerprints, and per-artifact hashes before any managed smoke/helper execution. It is also the source of truth for private prompt-bundle copying, replacing installer-maintained skill arrays.
-- `plugins/edc/hooks/lib/worker-pool.mjs`: Node worker coordinator used by shell. It is intentionally in the hook library so installed/project-local runtimes receive it with the same copy mechanism as classifier/router helpers; output ownership validation now also accounts for case-insensitive filesystems.
-- `plugins/edc/hooks/lib/termination-policy.mjs`: shared constants for worker TERM-to-KILL grace and the longer Pi background supervisor grace. It is imported by both `worker-pool.mjs` and `pi/index.mjs` and is explicitly declared in the canonical runtime inventory.
+- `plugins/edc/hooks/lib/runtime-manifest.mjs`: authoritative v1.1.5 runtime inventory. It transactionally installs only into the current `HOME` as `~/.edc`, using a token-owned lock and staged promotion, and verifies regular-file type, modes, metadata, fingerprints, per-artifact hashes, JavaScript syntax, and a worker-manifest smoke test. `source-preflight` separately validates package source or the current-HOME global runtime; non-HOME install/preflight targets fail before execution. It is also the source of truth for private prompt-bundle copying.
+- `plugins/edc/hooks/lib/worker-pool.mjs`: Node worker coordinator used by shell. Package and global runtimes receive it through the canonical inventory; output ownership validation accounts for case-insensitive filesystems, pre-close start failures remain `failed`, and HUP follows the same process-group cancellation path as TERM/INT.
+- `plugins/edc/hooks/lib/termination-policy.mjs`: shared constants for worker TERM-to-KILL grace, the longer runtime-bootstrap grace, and the still-longer Pi background supervisor grace. It is imported across worker, bootstrap, and Pi layers and is explicitly declared in the inventory.
 - `plugins/edc/hooks/lib/worker-manifest.mjs`: JSONL-to-manifest helper used by shell worker orchestration.
 - `plugins/edc/hooks/lib/build-dag.mjs`: full-build task graph expander that prepares module-context and build-audit worker prompts/manifests.
-- `plugins/edc/hooks/lib/pi-supervisor.mjs`: Pi JSON subprocess supervisor; it ignores retrying `agent_end` events so Pi provider retry does not get classified as terminal failure and uses the shared subprocess grace to terminate child processes truthfully on SIGTERM/SIGINT/SIGHUP.
-- `plugins/edc/hooks/lib/runtime-bootstrap.mjs`: trusted command/Pi bootstrap. It allowlists orchestrator names, preflights/repairs project-local `.edc/`, writes structured runtime-failure results when possible, forwards termination signals, and executes the packaged trusted shell script.
+- `plugins/edc/hooks/lib/pi-supervisor.mjs`: Pi JSON subprocess supervisor; it ignores retrying `agent_end` events so provider retry does not become terminal failure, terminates children on TERM/INT/HUP, and treats stdout `EPIPE` as supervised shutdown rather than an uncaught crash.
+- `plugins/edc/hooks/lib/runtime-bootstrap.mjs`: trusted command/Pi bootstrap. It allowlists orchestrator names, derives both invoked and real source roots to reject repo-local copies/symlinks, preflights package or current-HOME global source, writes structured runtime-failure results when possible, and runs the trusted shell script in a detached group. Signal forwarding escalates on the middle deadline between worker-pool and Pi supervision.
 - `plugins/edc/hooks/lib/paths.mjs`, `platform.mjs`, `session-start.mjs`, and `pretooluse-context-inject.mjs`: JS mirrors of shell paths, host payload parsing, session-start content, and context injection.
 
 ## Core flows
 ### Runtime installation and session start
-1. `runtime-manifest.mjs` validates the declared source inventory, takes a token-owned install lock, stages every declared script/hook/prompt artifact, writes per-artifact metadata, validates staged bytes, and atomically promotes `<repo>/.edc/` while preserving approved user files.
-2. Runtime consumers preflight the installed inventory and fail closed on missing, symlinked, stale, or byte-mismatched artifacts; ordinary helpers require explicit repair while the trusted bootstrap may repair before orchestrator dispatch.
-3. Session-start hooks load the manifest through contained reads. Missing, advisory, or unknown mode no-ops; inject mode emits staleness warning plus `index.md` content.
-4. Hosts receive valid no-op output on errors rather than thrown exceptions.
+1. `runtime-manifest.mjs install <HOME> <source>` validates the declared source inventory, rejects any target other than the current HOME, takes a token-owned global install lock, stages every declared script/hook/prompt artifact plus metadata, validates staged bytes, and atomically promotes `~/.edc/`.
+2. Package integrations validate and execute their own source; terminal/global integrations validate current `HOME/.edc` against its metadata. Missing, symlinked, stale, non-HOME, or byte-mismatched sources fail closed. Repo-local `.edc/` is ignored and never repaired.
+3. Session-start hooks load the repository context manifest through contained reads. Missing, advisory, or unknown mode no-ops; inject mode emits staleness warning plus `index.md` content.
+4. Hosts receive valid no-op output on context-injection errors rather than thrown exceptions.
 
 ### Per-tool injection
 1. Normalize tool names to lowercase and extract paths from edit/write file args or path-shaped Bash tokens.
@@ -50,7 +50,7 @@ The public docs/package surface names the workflow taxonomy precisely: combined 
 5. Deduplicate by `(sessionId,moduleName)` in a temp-file key and return one concatenated payload when a tool call touches multiple modules.
 
 ### Worker helper distribution
-Shell worker orchestration depends on JS files that live in this module but are executed from `.edc/hooks/lib/` in installed repos. Any new managed helper must be declared once in `runtime-manifest.mjs`, included in package allowlists, and covered by source-inventory, install, integrity, and package tests. Terminal install and project-local installation consume that same inventory. Shared policy modules are part of this contract even when they are libraries rather than executable helper CLIs.
+Shell orchestration depends on JS helpers that live beside package scripts or under `~/.edc/hooks/lib/`. Any new managed helper must be declared in `runtime-manifest.mjs`, included in package allowlists, and covered by source-inventory, global-install, integrity, and package tests. Package execution and terminal global installation consume the same inventory; repo-local distribution is unsupported. Shared policy modules remain part of this contract even when they are libraries rather than executable CLIs.
 
 ### Package publication
 1. `npm test` runs the hardening suite via `tests/hardening/run-all.sh`.
@@ -62,18 +62,18 @@ Shell worker orchestration depends on JS files that live in this module but are 
 - Runtime injection is disabled unless `manifest.policy.defaultMode === "inject"`; advisory and unknown values no-op rather than partially injecting.
 - JS routing must mirror shell routing: exact file, longest prefix, glob, then priority/tie ambiguity.
 - Hook code should never throw into host runtimes; failures return no-op content.
-- Project-local `.edc/skills` is private orchestrator prompt material, not a public skill registry.
+- Private orchestrator prompts come only from validated package `prompt-bundles/`/`skills/` or managed global `~/.edc`; repo-local skill/runtime caches never participate in resolution.
 - JS path constants must mirror `runtime-cli` shell constants.
-- Installed/project-local runtimes must exactly match the canonical runtime inventory before managed helpers execute; metadata alone is not trusted as proof of current bytes. Trusted bootstrap may repair the project-local copy, but direct helper execution must not.
+- Package source must satisfy the canonical inventory before helpers execute. Managed `~/.edc` must additionally match current-HOME identity, metadata, modes, fingerprint, and artifact bytes; metadata alone is not proof. No runtime consumer implicitly repairs source.
 - Published npm package contents must include all runtime/Pi/plugin/prompt/docs/license files needed at install time but not generated context, tests, benchmarks, or scratch run artifacts.
 - Root/package docs are part of the public API: command names, visible skills, workflow descriptions, worker configuration, optional research-capability behavior, and Pi extension-observer constraints should match runtime behavior.
-- Cross-runtime timing constants that coordinate worker and wrapper termination must have one managed source and preserve an outer-supervisor margin over nested worker escalation.
+- Cross-runtime timing constants must have one managed source and preserve strict worker < runtime-bootstrap < outer-Pi escalation ordering.
 - Context injection must not follow symlinked or escaping manifest/module-doc paths; contained regular-file reads are part of the trust boundary, not just a convenience.
 
 ## Trust boundaries
 - Hook payloads and Bash command text are untrusted. Path extraction only selects context to display; it grants no authority.
 - Manifest/module docs are repo-controlled content and should only be injected when mode permits.
-- Script/prompt/hook-runtime installation copies from the installed plugin transactionally. Runtime use fails closed until the full trusted inventory validates.
+- Global script/prompt/hook installation copies from trusted source transactionally into current `HOME/.edc`. Package execution validates colocated source directly. Runtime use fails closed until the appropriate full inventory validates, while legacy repo-local caches remain untouched.
 - Worker helper CLIs validate manifests/paths before shell workers execute, but their inputs are still untrusted orchestrator IPC.
 - Freshness checks are advisory UX signals. Shell `edc-assert-fresh.sh`/`edc-doctor.sh` are authoritative gates.
 - Package metadata and root docs are distribution contracts; tests should catch accidental omission of runtime files, stale visible-skill/command claims, or inclusion of generated/private scratch artifacts.
@@ -81,7 +81,7 @@ Shell worker orchestration depends on JS files that live in this module but are 
 ## Coupling
 - Mirrors `runtime-cli` route/path behavior and hosts JS worker helper CLIs used by `runtime-cli` shell scripts. It also owns distribution of the runtime bootstrap and termination policy shared by the worker pool and Pi wrapper.
 - Imported directly by `agent-wrappers` for Pi session/tool injection and background-review preflight.
-- Copies prompt bundles and public skill directories from `canonical-skills` into project-local `.edc/skills` for spawned subprocesses.
+- Packages `canonical-skills` beside trusted source and copies managed prompt/public skill trees into global `~/.edc`; spawned orchestrators resolve only those validated roots.
 - Package metadata and docs must agree with the `pi/` layout, visible-skill set, and Pi worker observability guidance owned by `agent-wrappers`.
 - Validated by `hardening-tests` for hook parsing, mode behavior, route parity, context-dir source of truth, package contents/script allowlists, visible skills, structured-result helpers, worker helper installation, and Pi extension wiring.
 
@@ -91,4 +91,4 @@ Shell worker orchestration depends on JS files that live in this module but are 
 - Runtime helper installation is manifest-declared while package allowlists are broad; a new hook-lib file can ship without being managed, or a managed helper can be forgotten from package tests. Keep both contracts synchronized.
 - Dedup depends on session ids. Missing ids intentionally disable dedup, causing repeated injection.
 - `getContextFreshness` is a UX helper over contained regular-file reads and commit comparison; do not treat it as a replacement for doctor.
-- Package allowlists and the canonical runtime inventory drift easily when files move or new scripts/skills/helpers are added; keep package tests, docs, and manifest routing aligned with distribution layout. Missing `runtime-bootstrap.mjs` or `termination-policy.mjs` now breaks command wrappers, Pi extension loading, or worker coordination.
+- Package allowlists and the canonical runtime inventory drift easily when files move or new scripts/skills/helpers are added; keep package tests, docs, global-install tests, and manifest routing aligned. Missing `runtime-bootstrap.mjs` or any termination-policy consumer breaks command wrappers, Pi loading, or ordered cancellation; accidentally restoring repo-local fallback would reopen a trusted-code boundary.

@@ -30,6 +30,7 @@ try:
     from scoring_helpers import (
         CANONICAL_RESULT_FIELDS,
         UnresolvedVerdictError,
+        combine_scores,
         review_verdict,
         review_verdict_field,
         verdict_to_score,
@@ -38,6 +39,7 @@ except ModuleNotFoundError:
     from benchmark.scoring_helpers import (
         CANONICAL_RESULT_FIELDS,
         UnresolvedVerdictError,
+        combine_scores,
         review_verdict,
         review_verdict_field,
         verdict_to_score,
@@ -513,37 +515,6 @@ def print_summary():
         print(f"\nPer-category:")
         for cat, s in sorted(categories.items()):
             print(f"  {cat}: {s['exact']}e/{s['partial']}p/{s['missed']}m (total {s['total']})")
-
-
-# Dual-phase scoring matrix. Detects when the build phase pre-identifies a CVE
-# and weights the row accordingly so a leak from build into review's reading
-# context doesn't masquerade as a review win. See: combine_scores().
-# Source-of-truth: discussed and agreed in STATUS.md → "dual-phase scoring".
-COMBINED_MATRIX = {
-    ("exact",   "exact"):   0.5,   # build leaked the answer, review echoed
-    ("exact",   "partial"): 0.5,
-    ("exact",   "missed"):  0.5,   # build saw it, review didn't pick up
-    ("partial", "exact"):   0.75,  # build hinted at area, review nailed it
-    ("partial", "partial"): 0.4,
-    ("partial", "missed"):  0.25,
-    ("missed",  "exact"):   1.0,   # pure review win, strongest signal
-    ("missed",  "partial"): 0.5,
-    ("missed",  "missed"):  0.0,
-}
-
-
-def combine_scores(build_verdict: str, review_verdict: str) -> float:
-    """Apply the dual-phase scoring matrix. Returns -1.0 sentinel when either
-    phase is `judge_error` so the row can be filtered out of aggregates.
-    Falls back to the review-only mapping when build_verdict is empty."""
-    if "judge_error" in (build_verdict, review_verdict):
-        return -1.0
-    if not build_verdict:
-        return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
-    key = (build_verdict, review_verdict)
-    if key in COMBINED_MATRIX:
-        return COMBINED_MATRIX[key]
-    return {"exact": 1.0, "partial": 0.5, "missed": 0.0}.get(review_verdict, 0.0)
 
 
 def main():

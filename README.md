@@ -136,7 +136,7 @@ Alternative — install the runtime directly from a clone:
 bash install.sh --agent claude
 ```
 
-Both paths install the plugin surface (slash commands + hooks + skills) and the terminal CLI (`~/.edc/scripts/edc`). The direct installer also adds a zsh/bash `PATH` entry when possible; use `--no-path` to skip shell rc edits.
+Marketplace installation provides the package-backed Claude commands, hooks, and skills; it does not provision `~/.edc` or a standalone `edc` command. The standalone terminal CLI requires the direct installer, which installs `~/.edc/scripts/edc` and adds a zsh/bash `PATH` entry when possible; use `--no-path` to skip shell rc edits.
 
 ### Cursor
 

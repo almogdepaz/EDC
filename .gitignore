@@ -5,9 +5,10 @@ __pycache__/
 *.pyc
 *.tgz
 
-# pi extension peer-deps installed by `pi install` post-clone
+# pi extension peer-deps and local task-store state
 node_modules/
 package-lock.json
+.pi/tasks/
 
 # benchmark runtime / autoresearch state
 benchmark/autoresearch-output.log

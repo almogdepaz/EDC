@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { constants } from "node:os";
+import { processGroupIsRunning, signalProcessGroup, spawnProcessGroup } from "./process-group.mjs";
 import { SUBPROCESS_TERMINATION_GRACE_MS } from "./termination-policy.mjs";
 
 const SUCCESS_STOP_REASONS = new Set(["stop"]);
@@ -12,7 +12,7 @@ if (cmd.length === 0) {
   process.exit(2);
 }
 
-let child = spawn(cmd[0], cmd.slice(1), {
+let child = spawnProcessGroup(cmd[0], cmd.slice(1), {
   stdio: ["ignore", "pipe", "pipe"],
 });
 let exiting = false;
@@ -72,7 +72,7 @@ function signalExitCode(signal) {
 }
 
 function childIsRunning() {
-  return Boolean(child?.pid) && child.exitCode === null && child.signalCode === null;
+  return processGroupIsRunning(child);
 }
 
 function exitOnce(code) {
@@ -83,11 +83,22 @@ function exitOnce(code) {
   process.exit(code);
 }
 
+function waitForKilledGroup() {
+  const poll = () => {
+    if (!childIsRunning()) {
+      exitOnce(requestedExitCode ?? 1);
+      return;
+    }
+    escalationTimer = setTimeout(poll, 10);
+  };
+  poll();
+}
+
 function stopChild(signal) {
-  if (!childIsRunning()) return false;
-  child.kill(signal);
+  if (!signalProcessGroup(child, signal)) return false;
   escalationTimer = setTimeout(() => {
-    if (childIsRunning()) child.kill("SIGKILL");
+    signalProcessGroup(child, "SIGKILL");
+    waitForKilledGroup();
   }, SUBPROCESS_TERMINATION_GRACE_MS);
   return true;
 }
@@ -173,17 +184,17 @@ child.on("exit", () => {
 
 child.on("close", (code, signal) => {
   if (exiting) {
-    exitOnce(requestedExitCode ?? 1);
+    if (!childIsRunning()) exitOnce(requestedExitCode ?? 1);
     return;
   }
-  if (typeof code === "number" && code !== 0) {
-    exitOnce(code);
-    return;
+  const finalCode = typeof code === "number" && code !== 0
+    ? code
+    : signal
+      ? signalExitCode(signal)
+      : 1;
+  if (typeof code !== "number" || code === 0) {
+    if (!signal) process.stderr.write("ERROR: pi subprocess ended without successful agent_end\n");
   }
-  if (signal) {
-    exitOnce(signalExitCode(signal));
-    return;
-  }
-  process.stderr.write("ERROR: pi subprocess ended without successful agent_end\n");
-  exitOnce(1);
+  if (childIsRunning()) finish(finalCode);
+  else exitOnce(finalCode);
 });

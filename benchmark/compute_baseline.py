@@ -104,7 +104,9 @@ def main():
                     except (ValueError, TypeError):
                         pass
             n = len(scores)
-            run_score = sum(scores) / n if n else 0
+            if n == 0:
+                raise UnresolvedVerdictError(f"{run['label']} has no benchmark result rows")
+            run_score = sum(scores) / n
             per_run_score.append(run_score)
     except UnresolvedVerdictError as exc:
         if out_path.exists():

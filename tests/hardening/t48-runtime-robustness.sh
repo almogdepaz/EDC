@@ -150,6 +150,45 @@ else
   cat "$TMP/valid-tamper.out"
 fi
 
+SOURCE_SYMLINK="$TMP/source-symlink"
+cp -R "$PLUGIN_ROOT" "$SOURCE_SYMLINK"
+rm "$SOURCE_SYMLINK/scripts/edc"
+ln -s "$PLUGIN_ROOT/scripts/edc" "$SOURCE_SYMLINK/scripts/edc"
+REPO_SOURCE_CHECK="$TMP/source-check"
+make_repo "$REPO_SOURCE_CHECK"
+mkdir "$REPO_SOURCE_CHECK/.edc.install.lock"
+printf 'untouched\n' >"$REPO_SOURCE_CHECK/.edc.install.lock/sentinel"
+set +e
+install_global "$REPO_SOURCE_CHECK" "$SOURCE_SYMLINK" >"$TMP/source-symlink.out" 2>&1
+source_symlink_rc=$?
+set -e
+if [ "$source_symlink_rc" -ne 0 ] \
+  && grep -q 'runtime-install-incomplete' "$TMP/source-symlink.out" \
+  && grep -q 'sourcePath' "$TMP/source-symlink.out" \
+  && grep -q 'untouched' "$REPO_SOURCE_CHECK/.edc.install.lock/sentinel"; then
+  check "symlink runtime source fails before lock acquisition" "1"
+else
+  check "symlink runtime source fails before lock acquisition" "0"
+  cat "$TMP/source-symlink.out"
+fi
+rm -rf "$REPO_SOURCE_CHECK/.edc.install.lock"
+
+REPO_UPGRADE="$TMP/upgrade-cleanup"
+make_repo "$REPO_UPGRADE"
+install_global "$REPO_UPGRADE" "$PLUGIN_ROOT" >/dev/null
+printf 'keep-config\n' >"$REPO_UPGRADE/.edc/config"
+printf 'remove-stale\n' >"$REPO_UPGRADE/.edc/stale-helper"
+mkdir -p "$REPO_UPGRADE/.edc/obsolete"
+printf 'remove-nested\n' >"$REPO_UPGRADE/.edc/obsolete/helper"
+install_global "$REPO_UPGRADE" "$PLUGIN_ROOT" >/dev/null
+if grep -q 'keep-config' "$REPO_UPGRADE/.edc/config" \
+  && [ ! -e "$REPO_UPGRADE/.edc/stale-helper" ] \
+  && [ ! -e "$REPO_UPGRADE/.edc/obsolete" ]; then
+  check "runtime upgrade preserves only config outside the manifest" "1"
+else
+  check "runtime upgrade preserves only config outside the manifest" "0"
+fi
+
 REPO4="$TMP/interrupted"
 make_repo "$REPO4"
 install_global "$REPO4" "$PLUGIN_ROOT" >/dev/null

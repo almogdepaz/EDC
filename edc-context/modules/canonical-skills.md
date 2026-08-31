@@ -43,7 +43,7 @@ Simplification findings may use `delete:`, `stdlib:`, `native:`, `yagni:`, or `s
 - `edc-delivery-review/references/*`: spec-axis discovery/taxonomy, architecture-fit checks, and required side-by-side reporting structure.
 
 ## Runtime resolution
-`runtime-cli` resolves these files via `_find_skill_for_agent` in project-local `.edc/skills`, `$HOME/.edc/skills`, and backend-specific public skill locations; `runtime-manifest.mjs` owns managed copying of private prompt bundles into `.edc/skills`. Pi search paths include `.pi/skills` and `$HOME/.pi/agent/skills`; Pi wrappers expose only public review/audit/delivery skills through `resources_discover`, while private implementation bundles remain prompt material for spawned orchestrator runs. The effective prompt includes a substitution preamble telling agents to run helper scripts from the installed/project-local scripts dir with Bash-compatible commands. Audit and security review bundles are embedded by `edc-lib.sh`; delivery-review embeds its bundle in `edc-delivery-review.sh` and validates that all references are present. `review-all` composes child orchestrators through runtime result files rather than adding prompt text here.
+`runtime-cli` resolves managed prompts only from the already validated runtime root: package `prompt-bundles/`/`skills/` when executing an installed package, or current `HOME/.edc/{prompt-bundles,skills}` for the managed global runtime. Backend-specific and repo-local skill directories are not orchestrator fallback paths. Pi `resources_discover` separately exposes only package public `edc-review`, `edc-audit`, and `edc-delivery-review` skills; private implementation bundles remain subprocess prompt material. The effective prompt includes a substitution preamble directing helpers to the trusted package/global scripts directory with Bash-compatible commands. Audit and security bundles are embedded by `edc-lib.sh`; delivery-review embeds its bundle and validates all references. `review-all` composes child orchestrators through result files rather than adding prompt text here.
 
 ## Invariants
 - Prompt bundles must not ask implementation agents to decide orchestrator-owned control flow such as build-vs-update, clean-slate routing, context recovery, worker graph shape, concurrency, subprocess flags, review-task routing, review-all phase aggregation, audit fanout, scope selection, staging/promotion, or report validation.
@@ -54,21 +54,22 @@ Simplification findings may use `delete:`, `stdlib:`, `native:`, `yagni:`, or `s
 - `policy.defaultMode` is operator-controlled and must be preserved by rebuild/update flows.
 - Public skills and private implementation bundles must remain distinguishable; Pi resource discovery intentionally exposes only `edc-review`, `edc-audit`, and `edc-delivery-review`.
 - Audit findings must stay evidence-based and simplification-first; the ladder/tags are not license for generic style advice or invented deletion precision.
-- Optional semantic research is capability-gated by the coordinator. Prompts must preserve native-tool fallback, assigned scope/evidence permissions, uncertainty on unavailable semantics, and manifest/classifier authority.
+- Optional semantic research is capability-gated once per coordinator run. Prompts must preserve native-tool fallback, assigned scope/evidence permissions, uncertainty on unavailable semantics, and manifest/classifier authority; review-all child lenses reuse one normalized state rather than probing independently.
+- Manifest bootstrap-readable defaults intentionally omit `.edc/**`: runtime adapters ignore legacy repo-local caches, so context policy must not imply that those paths are a trusted/readable bootstrap surface.
 
 ## Trust boundaries
-- Skill markdown is executable instruction content. Installer/runtime code copies it into user/project skill locations; drift changes agent behavior.
+- Skill markdown is executable instruction content. Package/global installers expose public skills and manage private prompt bundles; drift changes agent behavior.
 - Public review/audit/delivery skills are available to humans; implementation bundles should remain hidden from normal resource discovery and only invoked by orchestrators.
 - Build/update prompt wording can cause agents to write canonical artifacts, launch processes, or treat search evidence as routing authority if it drifts from coordinator ownership; tests should pin these prohibitions.
 - Capability guidance is executable instruction content supplied by `runtime-cli`, while this module supplies workflow-specific uses. Both halves must agree that Octocode is optional and that unavailable/failed queries do not prove absence.
 - Review methodology creates output files early to reduce lost findings during timeouts.
 - Audit scoped workers must not write canonical reports; synthesis owns canonical report generation. Simplification findings should cite real code evidence, rank bigger cuts first when severity is otherwise equal, and avoid invented removal precision.
 - Delivery-review is read-only except for its requested report artifact.
-- Script path substitution is required because installed repos often have `.edc/scripts` or `$HOME/.edc/scripts`, not development paths.
+- Script path substitution is required because workers may execute from package source or `$HOME/.edc/scripts`, never from repository-local `.edc/scripts`; development-only `plugins/edc/scripts/` references must be replaced by coordinator guidance.
 
 ## Coupling
 - `runtime-cli` embeds these prompts in build/update/security-review/quality-review subprocesses and prepends script-path plus optional source-research capability guidance; delivery-review has a parallel bundle emitter; review-all composes child orchestrators rather than embedding a separate skill. Audit/build synthesis intentionally receives only reporting guidance, not source-research methodology.
-- `plugin-surface` copies prompt bundles and public skill trees into project-local `.edc/skills` so spawned agents can resolve private bundles inside target repos.
+- `plugin-surface` packages these trees and installs managed copies globally under `~/.edc`; its trusted-source preflight is what makes private bundle resolution safe.
 - `agent-wrappers` exposes public skills to Pi while hiding private bundles; visible-skill changes require Pi docs/tests/package checks.
 - `hardening-tests` pin prompt-resolution behavior, public/private visibility, coordinator-vs-worker wording, skill contract wording, simplification-ladder/reporting phrases, antipattern/debt-marker terms, skill fixture schemas, temp-HOME setup, and decoupling from dev-repo paths.
 - `benchmarking` mutates/evaluates security review methodology during autoresearch loops; delivery/audit scope boundaries and simplification wording should not dilute security benchmark prompts.
@@ -77,7 +78,7 @@ Simplification findings may use `delete:`, `stdlib:`, `native:`, `yagni:`, or `s
 - Prompt text and runtime-embedded prompts can drift. Keep `edc-build-impl/SKILL.md`, `edc-build.sh` assembly prompt, update skill index-order wording, capability-state terminology, and hardening tests synchronized. Source workers should receive capability guidance; synthesis-only workers should not. The runtime-embedded build assembly prompt is especially easy to miss because it is not in this module's markdown tree.
 - Methodology breadth is large; weaker models can skip mandatory phases unless prompts keep imperative task headers and explicit no-skip language.
 - The audit simplification ladder is intentionally opinionated; wording changes should preserve delete/repo-helper/stdlib/native/dependency/YAGNI/shrink coverage, root-cause/smallest-check heuristics, and evidence requirements.
-- Splitting skills into reference files improves tuneability but requires installer, project-local copy, and prompt embedding code to preserve directory structure.
+- Splitting skills into reference files improves tuneability but requires package/global installation and prompt embedding code to preserve directory structure.
 - Host support for clean subprocesses varies; the build/review/audit worker contracts depend on `runtime-cli` enforcing isolated spawns.
-- Prompt text references helper paths that are only valid in the dev repo; the runtime preamble and update/build instructions must stay aligned with installed layout and Bash-compatible helper invocation.
+- Prompt text references helper paths that are only valid in the dev repo; the runtime preamble and update/build instructions must stay aligned with package/global-only execution and Bash-compatible helper invocation.
 - Routing-first index and skill-boundary requirements are prompt/test-enforced; changing section labels/order or workflow names can break hardening tests even when runtime routing still works.

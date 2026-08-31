@@ -11,6 +11,7 @@ BUILD_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/SKILL.md"
 UPDATE_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-update-impl/SKILL.md"
 MODULE_PROMPT="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/SKILL.md"
 MODULE_OUTPUT_REQUIREMENTS="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/resources/OUTPUT_REQUIREMENTS.md"
+MODULE_ANALYSIS_EXAMPLE="$ROOT/plugins/edc/prompt-bundles/edc-module-context-impl/resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md"
 MANIFEST_SCHEMA="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/manifest-schema.md"
 ADAPTER_CONTRACT="$ROOT/plugins/edc/prompt-bundles/edc-build-impl/adapter-contract.md"
 JSON_CLI="$ROOT/plugins/edc/hooks/lib/json-cli.mjs"
@@ -119,6 +120,8 @@ check "generated module task prompt forbids sibling source bodies" \
   "$(contains "$JSON_CLI" "do not read sibling source bodies" && not_contains "$JSON_CLI" "You may read sibling-module source" && echo 1 || echo 0)"
 check "module output requirements define private scratch, not final docs" \
   "$(contains "$MODULE_OUTPUT_REQUIREMENTS" "the agent MUST use this file as a private scratch/reasoning structure" && contains "$MODULE_OUTPUT_REQUIREMENTS" "This scratch structure is not persisted directly" && contains "$MODULE_OUTPUT_REQUIREMENTS" "Only distilled signal from scratch passes through to the final module doc" && contains "$MODULE_OUTPUT_REQUIREMENTS" "edc-context/modules/<name>.md" && not_contains "$MODULE_OUTPUT_REQUIREMENTS" "output MUST include" && not_contains "$MODULE_OUTPUT_REQUIREMENTS" "Claude MUST" && echo 1 || echo 0)"
+check "module scratch example pins retained-directory failure state" \
+  "$(contains "$MODULE_ANALYSIS_EXAMPLE" "project directory can remain after a later failure" && contains "$MODULE_ANALYSIS_EXAMPLE" "Failures before directory creation" && not_contains "$MODULE_ANALYSIS_EXAMPLE" "no state modified (atomic — all-or-nothing)" && echo 1 || echo 0)"
 
 check "manifest schema documents contextless coverage" \
   "$(contains "$MANIFEST_SCHEMA" "contextless.entries" && contains "$MANIFEST_SCHEMA" "promotion-check" && contains "$MANIFEST_SCHEMA" "no-context-review" && echo 1 || echo 0)"

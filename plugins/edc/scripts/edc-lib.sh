@@ -92,8 +92,20 @@ edc_result_write() {
 
 edc_file_has_substantive_content() {
   local path="$1"
-  node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null 2>&1 \
-    && grep -q '[^[:space:]]' "$path"
+  local min_substantive_chars=10
+  local final_byte
+  node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null 2>&1 || return 1
+  final_byte=$(LC_ALL=C tail -c 1 "$path" | od -An -tu1 | tr -d '[:space:]')
+  [ "$final_byte" = "10" ] || return 1
+  awk -v minimum="$min_substantive_chars" '
+    {
+      fields += NF
+      text = $0
+      gsub(/[[:space:]]/, "", text)
+      chars += length(text)
+    }
+    END { exit(chars >= minimum && fields >= 2 ? 0 : 1) }
+  ' "$path"
 }
 
 edc_write_coverage_gap_report() {
@@ -663,8 +675,8 @@ edc_load_config() {
     val="${val%\'}"; val="${val#\'}"
     case "$key" in
       EDC_BUILD_MODEL|EDC_REVIEW_MODEL|EDC_PI_MODEL|EDC_PI_EXTENSION_PATH|EDC_PARALLEL|EDC_MAX_CONCURRENCY|EDC_AGENT_CLI|EDC_PROVIDER)
-        # Only set if not already exported by the caller.
-        if [ -z "${!key:-}" ]; then
+        # Caller-set values, including an explicit empty string, win over config.
+        if ! declare -p "$key" >/dev/null 2>&1; then
           export "$key=$val"
         fi
         ;;

@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import statistics
 import sys
 from pathlib import Path
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK_DIR))
-from scoring_helpers import UnresolvedVerdictError, review_verdict, verdict_to_score
+from scoring_helpers import UnresolvedVerdictError, result_row_score
 
 ROOT = Path(__file__).resolve().parent / "results"
 RESULT_FILES = ("build-metrics.tsv", "review-metrics.tsv", "review-results.tsv")
@@ -88,37 +87,22 @@ def aggregate(sha: str, repo: str, mode: str | None = None, label: str | None = 
     build_costs = [float(b["total_cost_usd"]) for b in builds if b.get("status") == "ok"]
     review_costs = [float(r["total_cost_usd"]) for r in reviews if r.get("status") == "ok"]
 
-    # Recall is verdict-derived. Dual-phase rows carry their weighted score in
-    # combined_score; legacy rows use `found`, while current rows use `verdict`.
+    # Recall is verdict-derived from the shared single-/dual-phase rules.
     by_cve: dict[str, list[float]] = {}
     judge_errors = 0
+    usable_score_rows = 0
     for row in scores:
-        verdict = review_verdict(row).strip()
-        build_verdict = (row.get("build_verdict") or "").strip()
-        combined = (row.get("combined_score") or "").strip()
-        if "judge_error" in (verdict, build_verdict):
-            judge_errors += 1
-            continue
-        if combined:
-            try:
-                value = float(combined)
-            except ValueError:
-                judge_errors += 1
-                continue
-            if not math.isfinite(value) or value < 0:
-                judge_errors += 1
-                continue
-        else:
-            try:
-                value = verdict_to_score(verdict, context=f"regression result {row.get('cve') or '<unknown>'}")
-            except UnresolvedVerdictError:
-                judge_errors += 1
-                continue
         cve = (row.get("cve") or "").strip()
         if not cve:
             judge_errors += 1
             continue
+        try:
+            value = result_row_score(row, context=f"regression result {cve}")
+        except UnresolvedVerdictError:
+            judge_errors += 1
+            continue
         by_cve.setdefault(cve, []).append(value)
+        usable_score_rows += 1
 
     per_cve = {cve: max(values) for cve, values in by_cve.items()}
     recall = sum(per_cve.values()) / len(per_cve) if per_cve else 0.0
@@ -136,7 +120,11 @@ def aggregate(sha: str, repo: str, mode: str | None = None, label: str | None = 
         "per_cve": per_cve,
         "judge_errors": judge_errors,
         "module_ok": module_ok,
-        "row_counts": {"build": len(builds), "review": len(reviews), "score": len(scores)},
+        "row_counts": {
+            "build": len(build_costs),
+            "review": len(review_costs),
+            "score": usable_score_rows,
+        },
     }
 
 
@@ -206,9 +194,10 @@ def main():
             if missing:
                 print(f"  ✗ FAIL {side} has no usable {', '.join(missing)} rows")
                 repo_pass = False
-        if post["judge_errors"] > 0:
-            print(f"  ✗ FAIL unresolved judge/scoring errors: {post['judge_errors']}")
-            repo_pass = False
+        for side, result in (("pre", pre), ("post", post)):
+            if result["judge_errors"] > 0:
+                print(f"  ✗ FAIL {side} unresolved judge/scoring errors: {result['judge_errors']}")
+                repo_pass = False
         if post["recall"] < pre["recall"]:
             print(f"  ✗ FAIL recall: {post['recall']:.3f} < {pre['recall']:.3f}")
             repo_pass = False

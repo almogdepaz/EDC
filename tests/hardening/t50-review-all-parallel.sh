@@ -125,6 +125,21 @@ else
   exit 1
 fi
 
+printf 'EDC_BUILD_MODEL=config-model\n' > "$TMP/empty-override-config"
+cat > "$TMP/read-empty-config.sh" <<'SH'
+#!/usr/bin/env bash
+. "$1"
+printf '<%s>\n' "$EDC_BUILD_MODEL"
+SH
+empty_override=$(EDC_BUILD_MODEL= EDC_CONFIG_FILE="$TMP/empty-override-config" bash "$TMP/read-empty-config.sh" "$TMP/plugin/scripts/edc-lib.sh")
+unset_fallback=$(env -u EDC_BUILD_MODEL EDC_CONFIG_FILE="$TMP/empty-override-config" bash "$TMP/read-empty-config.sh" "$TMP/plugin/scripts/edc-lib.sh")
+if [ "$empty_override" = '<>' ] && [ "$unset_fallback" = '<config-model>' ]; then
+  echo 'PASS: caller-set empty config value overrides file while unset still falls back'
+else
+  echo "FAIL: config set/unset precedence is wrong (empty=$empty_override unset=$unset_fallback)"
+  exit 1
+fi
+
 # Default mode runs each lens to completion in security/delivery/quality order.
 setup_repo
 set +e

@@ -33,7 +33,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from scoring_helpers import review_verdict, review_verdict_field
+from scoring_helpers import combine_scores, review_verdict, review_verdict_field
 from transcript_utils import (
     find_issues_for_row,
     find_transcript_for_row,
@@ -184,6 +184,10 @@ def main() -> int:
         new_row = dict(row)
         new_row[original_verdict_field] = review_verdict(row)
         new_row[verdict_field] = verdict
+        if "combined_score" in new_row:
+            new_row["combined_score"] = str(
+                combine_scores(new_row.get("build_verdict", ""), verdict, context=f"{cve} rescore")
+            )
         new_row["confidence"] = str(confidence)
         new_row["notes"] = notes
         new_row["rescored_at"] = datetime.now().isoformat(timespec="seconds")

@@ -99,6 +99,21 @@ prepare_dirty_candidate() {
 
 prepare_plugin
 
+# Pi task-store records are operational state, but unrelated .pi source/config
+# remains eligible for an immutable working-tree candidate.
+setup_repo
+mkdir -p .pi/tasks/task-example .pi/extensions
+printf '{"status":"completed"}\n' > .pi/tasks/task-example/task.json
+printf 'export const extension = true;\n' > .pi/extensions/example.mjs
+selected_untracked=$(bash -c 'source "$1"; edc_candidate_selected_untracked' _ "$TMP/plugin/scripts/edc-review-candidate.sh" | tr '\0' '\n')
+if ! grep -q '^\.pi/tasks/task-example/task.json$' <<<"$selected_untracked" \
+  && grep -q '^\.pi/extensions/example.mjs$' <<<"$selected_untracked" \
+  && git -C "$ROOT" check-ignore -q --no-index .pi/tasks/task-example/task.json; then
+  pass 'Pi task records are ignored/excluded while unrelated .pi source remains reviewable'
+else
+  fail 'Pi task exclusion swallowed unrelated .pi source or lacks repository ignore' "$selected_untracked"
+fi
+
 # Dirty state without a policy must stop before any phase starts.
 setup_repo
 prepare_dirty_candidate

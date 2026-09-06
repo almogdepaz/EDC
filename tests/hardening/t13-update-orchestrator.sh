@@ -175,7 +175,7 @@ if [ "$result" -ne 0 ]; then
   echo "$out"; exit 1
 fi
 if grep -q "spawned" "$EDC_T13_LOG" \
-  && grep -Fqx "CLI ARGUMENTS: --context-source $lineage_source" "$EDC_T13_LOG.prompt" \
+  && grep -Fqx "CLI ARGUMENTS (JSON argv): [\"--context-source\",\"$lineage_source\"]" "$EDC_T13_LOG.prompt" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "update" && j.exitCode === 0 && j.reasonCode === "success" && Array.isArray(j.outputs) && j.outputs.includes("edc-context/manifest.json") && Array.isArray(j.checks) && j.checks.some(c => c.name === "edc-doctor" && c.status === "success") ? 0 : 1)'; then
   echo "PASS: healthy v2 → update spawned from manifest lineage"
 else
@@ -191,7 +191,7 @@ write_healthy_v2 "$divergent_source"
 echo "" > "$EDC_T13_LOG"
 result=0
 out=$(bash "$SCRIPT" 2>&1) || result=$?
-if [ "$result" -ne 0 ] || ! grep -q -- "--context-source $divergent_source" "$EDC_T13_LOG.prompt"; then
+if [ "$result" -ne 0 ] || ! grep -Fqx "CLI ARGUMENTS (JSON argv): [\"--context-source\",\"$divergent_source\"]" "$EDC_T13_LOG.prompt"; then
   echo "FAIL (13e): divergent context was not updated from its recorded source"
   echo "$out"; cat "$EDC_T13_LOG.prompt" 2>/dev/null || true; exit 1
 fi

@@ -1,75 +1,21 @@
-# Private Scratch Requirements
+# private analysis and persisted output
 
-When performing ultra-granular analysis, the agent MUST use this file as a private scratch/reasoning structure following the Per-Function Microstructure Checklist format demonstrated in [FUNCTION_MICRO_ANALYSIS_EXAMPLE.md](FUNCTION_MICRO_ANALYSIS_EXAMPLE.md).
+use these categories to check coverage, not as a demand to produce exhaustive scratch prose or meet numerical reasoning quotas. the [function example](FUNCTION_MICRO_ANALYSIS_EXAMPLE.md) illustrates analysis; it is not a mandatory output template.
 
-## Private Scratch vs Final Output Destination (v2)
+## output authority
 
-This scratch structure is not persisted directly. When this skill runs as part of a v2 build, the final per-module doc is written to `edc-context/modules/<name>.md` — one file per module, with stable kebab-case names. Per-module docs MUST NOT be written at the top level of `edc-context/`. Only distilled signal from scratch passes through to the final module doc; follow the final-doc contract in [../SKILL.md](../SKILL.md).
+write the final distilled module doc only to the coordinator-declared staged path. the coordinator validates and promotes it to `edc-context/modules/<name>.md`; the worker never writes canonical context directly. follow [the final-doc contract](../SKILL.md).
 
----
+## coverage categories
 
-## Required Private Scratch Structure
+- **purpose and authority:** explain the role and non-obvious ownership boundary.
+- **inputs and assumptions:** identify actual explicit/implicit inputs, preconditions, and trust assumptions; do not invent extras to meet a count.
+- **outputs and effects:** trace relevant returns, state mutations, events, external interactions, and postconditions.
+- **ordering and failure paths:** inspect branches, state transitions, cleanup, and external calls needed to establish the claimed contracts. use causal questions where they resolve uncertainty, not once per block as ceremony.
+- **dependencies and coupling:** connect relevant callers, callees, shared state, and invariants within assigned scope. sibling source remains out of bounds unless separately authorized by the coordinator.
 
-For EACH analyzed function, private scratch MUST include:
+## evidence and limitations
 
-**1. Purpose** (mandatory)
-- Clear statement of function's role in the system
-- Impact on system state, data flow, or security
-- Minimum 2-3 sentences
+support persisted claims with source pointers. record unresolved questions and uninspected paths as limitations; do not infer certainty from an analysis checklist. apply memory/arithmetic checks according to the actual language/runtime and ownership model.
 
-**2. Inputs & Assumptions** (mandatory)
-- All parameters (explicit and implicit)
-- All preconditions
-- All trust assumptions
-- Each input must identify: type, source, trust level
-- Minimum 3 assumptions documented
-
-**3. Outputs & Effects** (mandatory)
-- Return values (or "void" if none)
-- All state writes
-- All external interactions
-- All events emitted
-- All postconditions
-- Minimum 3 effects documented
-
-**4. Block-by-Block Analysis** (mandatory)
-For EACH logical code block, document:
-- **What:** What the block does (1 sentence)
-- **Why here:** Why this ordering/placement (1 sentence)
-- **Assumptions:** What must be true (1+ items)
-- **Depends on:** What prior state/logic this relies on
-- **First Principles / 5 Whys / 5 Hows:** Apply at least ONE per block
-
-Minimum standards:
-- Analyze at minimum: ALL conditional branches, ALL external calls, ALL state modifications
-- For complex blocks (>5 lines): Apply First Principles AND 5 Whys or 5 Hows
-- For simple blocks (<5 lines): Minimum What + Why here + 1 Assumption
-
-**5. Cross-Function Dependencies** (mandatory)
-- Internal calls made (list all)
-- External calls made (list all with risk analysis)
-- Functions that call this function
-- Shared state with other functions
-- Invariant couplings (how this function's invariants interact with others)
-- Minimum 3 dependency relationships documented
-
----
-
-## Quality Thresholds
-
-A complete micro-analysis MUST identify:
-- Minimum 3 invariants (per function)
-- Minimum 5 assumptions (across all sections)
-- Minimum 3 risk considerations (especially for external interactions)
-- At least 1 application of First Principles
-- At least 3 applications of 5 Whys or 5 Hows (combined)
-
----
-
-## Format Consistency
-
-- Use markdown headers: `**Section Name:**` for major sections
-- Use bullet points (`-`) for lists
-- Use code blocks with language tag for code snippets
-- Reference line numbers: `L45`, `lines 98-102`
-- Separate blocks with `---` horizontal rules for readability
+persist only decision-useful read boundaries, authority, implicit contracts, ordering constraints, coupling, trust boundaries, historical hazards, and source pointers. omit copied constants, inventories, obvious function narration, and private scratch structure. no minimum sentence, invariant, assumption, effect, or dependency count applies.

@@ -6,8 +6,8 @@ Use this axis to answer: did the implementation deliver what was asked, without 
 
 Find the originating requirement source in this order:
 
-1. Issue or PR references in commit messages, branch names, or PR text: `#123`, `Closes #45`, task IDs, or linked planning docs.
-2. A path passed by the user or task file.
+1. The exact requirement/spec path or source explicitly supplied by the user or task file.
+2. Issue or PR references in commit messages, branch names, or PR text: `#123`, `Closes #45`, task IDs, or linked planning docs. Use these to corroborate an explicit source, not silently replace it; report conflicts for resolution.
 3. Repo-local plans/specs under `docs/`, `specs/`, `.plans/`, `plans/`, `tasks/`, or issue templates matching the branch/task name.
 4. If none exists, write `No spec available` and do not hallucinate unstated requirements. Review only observable delivery claims from commit messages, PR text, or user-provided context.
 

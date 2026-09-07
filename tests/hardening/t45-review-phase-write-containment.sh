@@ -25,7 +25,7 @@ done
 scenario=${EDC_T45_SCENARIO:-valid}
 
 if [[ "$prompt" == *"DELIVERY REVIEW TASK"* ]] || [[ "$prompt" == *"DELIVERY CURRENT-STATE REVIEW TASK"* ]]; then
-  report_path=$(printf '%s\n' "$prompt" | awk -F': ' '/^DELIVERY_REPORT_PATH: /{print $2; exit}')
+  report_path=$(awk -F': ' '/^DELIVERY_REPORT_PATH: /{print $2; exit}' <<<"$prompt")
   if [ "$scenario" = "delivery-mutates" ]; then
     printf 'agent mutation\n' > src/app.ts
   fi
@@ -38,7 +38,7 @@ if [[ "$prompt" == *"DELIVERY REVIEW TASK"* ]] || [[ "$prompt" == *"DELIVERY CUR
 fi
 
 if [[ "$prompt" == *"AUDIT WORKER TASK"* ]]; then
-  report_path=$(printf '%s\n' "$prompt" | awk -F': ' '/^AUDIT_REPORT_PATH: /{print $2; exit}')
+  report_path=$(awk -F': ' '/^AUDIT_REPORT_PATH: /{print $2; exit}' <<<"$prompt")
   if [ "$scenario" = "audit-worker-mutates" ]; then
     printf 'agent mutation\n' > src/app.ts
   fi
@@ -54,8 +54,8 @@ if [[ "$prompt" == *"AUDIT SYNTHESIS TASK"* ]]; then
   if [ "$scenario" = "audit-synthesis-mutates" ]; then
     printf 'agent mutation\n' > src/app.ts
   fi
-  complexity_path=$(printf '%s\n' "$prompt" | awk -F': ' '/^CANONICAL_COMPLEXITY_REPORT: /{print $2; exit}')
-  issues_path=$(printf '%s\n' "$prompt" | awk -F': ' '/^CANONICAL_ISSUES_REPORT: /{print $2; exit}')
+  complexity_path=$(awk -F': ' '/^CANONICAL_COMPLEXITY_REPORT: /{print $2; exit}' <<<"$prompt")
+  issues_path=$(awk -F': ' '/^CANONICAL_ISSUES_REPORT: /{print $2; exit}' <<<"$prompt")
   mkdir -p "$(dirname "$complexity_path")" "$(dirname "$issues_path")"
   printf '## Summary\n\nNo complexity findings.\n' > "$complexity_path"
   printf '## Known Issues\n\nNo issues.\n' > "$issues_path"

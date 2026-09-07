@@ -1022,15 +1022,51 @@ _find_skill_for_agent() {
 
 EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
 EDC_OCTOCODE_CAPABILITY_STATE="${EDC_OCTOCODE_CAPABILITY_STATE:-}"
+EDC_OCTOCODE_CATALOG="${EDC_OCTOCODE_CATALOG:-}"
 unset _EDC_OCTOCODE_CAPABILITY_INITIALIZED
 _EDC_OCTOCODE_CAPABILITY_INITIALIZED=0
 
-# _octocode_is_available
-# Capability probe used only by coordinators before source-research prompts.
-_octocode_is_available() {
+# _octocode_catalog
+# Print a supported local-tool catalog name only when the structured catalog
+# contains every command used by its emitted guidance.
+_octocode_catalog() {
   command -v octocode >/dev/null 2>&1 || return 1
-  run_with_timeout "$EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS" "Octocode capability probe" \
-    octocode --version >/dev/null 2>&1
+
+  (
+    set -o pipefail
+    run_with_timeout "$EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS" "Octocode capability probe" \
+      octocode tools --json --compact 2>/dev/null | node -e '
+const input = require("fs").readFileSync(0, "utf8");
+let catalog;
+try {
+  catalog = JSON.parse(input);
+} catch {
+  process.exit(1);
+}
+if (catalog === null || typeof catalog !== "object" || catalog.kind !== "octocode.toolCatalog" || catalog.version !== 1 || !Array.isArray(catalog.tools)) {
+  process.exit(1);
+}
+const tools = new Map(
+  catalog.tools
+    .filter((tool) => tool !== null && typeof tool === "object" && typeof tool.name === "string")
+    .map((tool) => [tool.name, tool])
+);
+const hasAll = (names, requireEnabled) => names.every((name) => {
+  const tool = tools.get(name);
+  if (tool === undefined) return false;
+  return requireEnabled ? tool.availability?.enabled === true : tool.availability?.enabled !== false;
+});
+const unified = ["localSearch", "localAnalyzeGraph", "localGetFileContent", "lspGetSemantics"];
+const legacy = ["localViewStructure", "localSearchCode", "localFindFiles", "localFindDeadCode", "localGetFileContent", "lspGetSemantics"];
+if (hasAll(unified, true)) {
+  process.stdout.write("unified");
+} else if (hasAll(legacy, false)) {
+  process.stdout.write("legacy");
+} else {
+  process.exit(1);
+}
+'
+  )
 }
 
 # edc_octocode_capability_init
@@ -1042,22 +1078,25 @@ edc_octocode_capability_init() {
   local inherit_state="${EDC_OCTOCODE_CAPABILITY_INHERIT:-0}"
   unset EDC_OCTOCODE_CAPABILITY_INHERIT
   if [ "$inherit_state" = "1" ]; then
-    case "$EDC_OCTOCODE_CAPABILITY_STATE" in
-      available|unavailable)
+    case "$EDC_OCTOCODE_CAPABILITY_STATE:$EDC_OCTOCODE_CATALOG" in
+      available:legacy|available:unified|unavailable:unavailable)
         _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
-        export EDC_OCTOCODE_CAPABILITY_STATE
+        export EDC_OCTOCODE_CAPABILITY_STATE EDC_OCTOCODE_CATALOG
         return 0
         ;;
     esac
   fi
 
-  if _octocode_is_available; then
-    EDC_OCTOCODE_CAPABILITY_STATE=available
-  else
-    EDC_OCTOCODE_CAPABILITY_STATE=unavailable
-  fi
+  EDC_OCTOCODE_CATALOG=$(_octocode_catalog) || EDC_OCTOCODE_CATALOG=unavailable
+  case "$EDC_OCTOCODE_CATALOG" in
+    legacy|unified) EDC_OCTOCODE_CAPABILITY_STATE=available ;;
+    *)
+      EDC_OCTOCODE_CATALOG=unavailable
+      EDC_OCTOCODE_CAPABILITY_STATE=unavailable
+      ;;
+  esac
   _EDC_OCTOCODE_CAPABILITY_INITIALIZED=1
-  export EDC_OCTOCODE_CAPABILITY_STATE
+  export EDC_OCTOCODE_CAPABILITY_STATE EDC_OCTOCODE_CATALOG
 }
 
 # _emit_octocode_research_guidance
@@ -1071,11 +1110,33 @@ OCTOCODE RESEARCH CAPABILITY
 ================================================================================
 OCTOCODE_STATUS: available
 
-The coordinator verified a working Octocode CLI for this run. For non-trivial source research, prefer a small number of batched Octocode queries before native exact reads when structure or search evidence is needed:
-- `octocode tools localViewStructure --queries '{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}' --compact --no-color`
-- `octocode tools localSearchCode --queries '{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}' --compact --no-color`
+The coordinator verified a supported Octocode command catalog for this run. Keep every query within the assigned target and existing evidence permissions.
+EOF
+    case "$EDC_OCTOCODE_CATALOG" in
+      legacy)
+        cat <<'EOF'
 
-Keep every query within the assigned target and existing evidence permissions. Do not spend turns discovering CLI help or schemas. Verify important evidence with native exact reads. If an Octocode query fails or semantic support is unavailable, treat that evidence as unknown and immediately continue with existing Read, Grep, Glob, and Bash tools. Do not install or configure Octocode, widen scope, or let search results override EDC routing or manifest authority.
+This catalog supports focused structure and lexical search:
+- `octocode tools localViewStructure --queries '{"queries":[{"path":"<assigned-absolute-path>","maxDepth":2},{"path":"<focused-absolute-subpath>","maxDepth":2}]}' --compact --no-color`
+- `octocode tools localSearchCode --queries '{"queries":[{"path":"<assigned-absolute-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-absolute-path>","searchText":"<related-symbol-or-pattern>"}]}' --compact --no-color`
+EOF
+        ;;
+      unified)
+        cat <<'EOF'
+
+This catalog supports unified local research:
+- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}' --compact --no-color`
+- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}' --compact --no-color`
+- `octocode tools lspGetSemantics --queries '{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}' --compact --no-color`
+- `octocode tools localAnalyzeGraph --queries '{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}' --compact --no-color`
+
+Use AST/structural search only for JavaScript, TypeScript, or Python syntax questions; use lexical search and native exact reads for shell or unsupported languages. Verify structural matches with native exact reads; unsupported structural search is unknown, not a negative result. Use LSP only with an exact-read file, symbol, and line anchor. Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints. Confirm those relationships with lexical search, exact reads, and the smallest runnable verification when one exists. Treat graph edges, reachability, and dead-code candidates as syntactic hypotheses: they must not prove dead code or zero references. Before inferring runtime behavior, use the smallest runnable verification within the assigned scope when one exists; otherwise state the limit.
+EOF
+        ;;
+    esac
+    cat <<'EOF'
+
+If an Octocode query fails or semantic support is unavailable, treat that evidence as unknown and immediately continue with existing Read, Grep, Glob, and Bash tools. Do not install or configure Octocode, widen scope, or let search results override EDC routing or manifest authority.
 
 EOF
   else

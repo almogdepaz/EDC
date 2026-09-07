@@ -81,7 +81,7 @@ This establishes anchors for detailed analysis.
 
 ### Coordinator-provided targeted source research
 
-When the prompt says `OCTOCODE_STATUS: available`, use its permitted query patterns for focused repository structure, exact source reads, structural search, symbol definitions/references/callers, installed dependency source, and history evidence already permitted by the assigned workflow. Keep research within the assigned target and existing evidence permissions.
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted query patterns for focused repository structure, lexical search followed by exact source reads, structural search, symbol definitions/references/callers, graph hypotheses, installed dependency source, and history evidence already permitted by the assigned workflow. Keep research within the assigned target and existing evidence permissions. AST/structural, LSP, and graph output is candidate evidence: verify it with exact reads and the smallest runnable check when one exists; never treat a dead-code candidate or zero references as proof.
 
 ---
 

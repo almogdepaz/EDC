@@ -64,13 +64,40 @@ cat > "$OCTOCODE_BIN/octocode" <<'MOCK'
 #!/usr/bin/env bash
 [ -z "${OCTOCODE_PROBE_LOG:-}" ] || printf 'probe\n' >> "$OCTOCODE_PROBE_LOG"
 if [ "${OCTOCODE_FAKE_FAIL:-0}" = "1" ]; then
+  [ "${OCTOCODE_FAKE_DIAGNOSTIC:-0}" = "1" ] && printf 'OCTOCODE_FAKE_PROBE_DIAGNOSTIC\n' >&2
   exit 1
 fi
 if [ "${OCTOCODE_FAKE_HANG:-0}" = "1" ]; then
   while :; do :; done
 fi
-[ "${1:-}" = "--version" ] || exit 2
-printf 'octocode v-test\n'
+[ "${1:-}" = "tools" ] && [ "${2:-}" = "--json" ] && [ "${3:-}" = "--compact" ] || exit 2
+case "${OCTOCODE_FAKE_CATALOG:-unified}" in
+  legacy)
+    printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":15,"tools":[{"name":"ghSearchCode"},{"name":"ghSearchRepos"},{"name":"ghSearchPullRequests"},{"name":"ghSearchIssues"},{"name":"ghSearchCommits"},{"name":"ghGetFileContent"},{"name":"ghViewRepoStructure"},{"name":"ghCloneRepo"},{"name":"localSearchCode"},{"name":"localFindFiles"},{"name":"localFindDeadCode"},{"name":"localGetFileContent"},{"name":"localViewStructure"},{"name":"lspGetSemantics"},{"name":"npmSearch"}]}'
+    ;;
+  unified)
+    printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
+    ;;
+  partial)
+    printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"tools":[{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}}]}'
+    ;;
+  legacy-disabled)
+    printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":15,"tools":[{"name":"ghSearchCode"},{"name":"ghSearchRepos"},{"name":"ghSearchPullRequests"},{"name":"ghSearchIssues"},{"name":"ghSearchCommits"},{"name":"ghGetFileContent"},{"name":"ghViewRepoStructure"},{"name":"ghCloneRepo"},{"name":"localSearchCode","availability":{"enabled":false}},{"name":"localFindFiles"},{"name":"localFindDeadCode"},{"name":"localGetFileContent"},{"name":"localViewStructure"},{"name":"lspGetSemantics"},{"name":"npmSearch"}]}'
+    ;;
+  nul-smuggled)
+    printf '%s\0%s\n' '{"kind":"octocode.tool' 'Catalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
+    ;;
+  unified-fail)
+    printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
+    exit 1
+    ;;
+  malformed)
+    printf '%s\n' '{not-json'
+    ;;
+  *)
+    exit 2
+    ;;
+esac
 MOCK
 chmod +x "$OCTOCODE_BIN/octocode"
 
@@ -215,41 +242,62 @@ for agent in cursor codex; do
   check "$agent review: embeds full skill bundle (6 markers)" "$all_present"
 done
 
-# ── 14.7: coordinator emits actionable Octocode capability state ────────────
+# ── 14.7: coordinator detects a supported structured Octocode catalog ───────
 for action in update audit; do
-  out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude "$action")
-  available_contract=1
+  out=$(OCTOCODE_FAKE_CATALOG=unified PATH="$OCTOCODE_BIN:$PATH" run_resolve claude "$action")
+  unified_contract=1
   for marker in "OCTOCODE_STATUS: available" \
-                'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
-                'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color' \
+                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}'\'' --compact --no-color' \
+                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}'\'' --compact --no-color' \
+                'octocode tools lspGetSemantics --queries '\''{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}'\'' --compact --no-color' \
+                'octocode tools localAnalyzeGraph --queries '\''{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}'\'' --compact --no-color' \
+                "AST/structural search only for JavaScript, TypeScript, or Python syntax questions" \
+                "lexical search and native exact reads for shell or unsupported languages" \
+                "lexical search" \
+                "native exact reads" \
+                "smallest runnable verification" \
+                "must not prove dead code or zero references" \
+                "Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints" \
+                "Confirm those relationships with lexical search, exact reads, and the smallest runnable verification" \
                 "existing Read, Grep, Glob, and Bash tools"; do
-    echo "$out" | grep -qF "$marker" || available_contract=0
+    echo "$out" | grep -qF "$marker" || unified_contract=0
   done
-  echo "$out" | grep -qF 'octocode --help' && available_contract=0
-  echo "$out" | grep -qF -- '--scheme' && available_contract=0
-  check "claude $action: emits actionable available Octocode state" "$available_contract"
+  echo "$out" | grep -qF 'localViewStructure' && unified_contract=0
+  echo "$out" | grep -qF 'localSearchCode' && unified_contract=0
+  check "claude $action: emits v19 unified catalog guidance" "$unified_contract"
 done
 
-out=$(PATH="$OCTOCODE_BIN:$PATH" run_resolve claude review "$TASK_FILE")
-review_available=1
+out=$(OCTOCODE_FAKE_CATALOG=legacy PATH="$OCTOCODE_BIN:$PATH" run_resolve claude review "$TASK_FILE")
+legacy_contract=1
 for marker in "OCTOCODE_STATUS: available" \
-              'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-path>","maxDepth":2},{"path":"<focused-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
-              'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color'; do
-  echo "$out" | grep -qF "$marker" || review_available=0
+              'octocode tools localViewStructure --queries '\''{"queries":[{"path":"<assigned-absolute-path>","maxDepth":2},{"path":"<focused-absolute-subpath>","maxDepth":2}]}'\'' --compact --no-color' \
+              'octocode tools localSearchCode --queries '\''{"queries":[{"path":"<assigned-absolute-path>","searchText":"<symbol-or-pattern>"},{"path":"<assigned-absolute-path>","searchText":"<related-symbol-or-pattern>"}]}'\'' --compact --no-color'; do
+  echo "$out" | grep -qF "$marker" || legacy_contract=0
 done
-check "claude review: emits actionable available Octocode state" "$review_available"
+echo "$out" | grep -qF 'tools localSearch --queries' && legacy_contract=0
+check "claude review: emits v18 legacy catalog guidance" "$legacy_contract"
 
-out=$(OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+for catalog in partial malformed legacy-disabled nul-smuggled unified-fail; do
+  out=$(OCTOCODE_FAKE_CATALOG="$catalog" PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+  unavailable_catalog_contract=1
+  echo "$out" | grep -qF "OCTOCODE_STATUS: unavailable" || unavailable_catalog_contract=0
+  echo "$out" | grep -qF "Do not install or configure Octocode" || unavailable_catalog_contract=0
+  echo "$out" | grep -qF 'octocode tools ' && unavailable_catalog_contract=0
+  check "$catalog Octocode catalog emits unavailable fallback state" "$unavailable_catalog_contract"
+done
+
+out=$(OCTOCODE_FAKE_FAIL=1 OCTOCODE_FAKE_DIAGNOSTIC=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
 unavailable_contract=1
 for marker in "OCTOCODE_STATUS: unavailable" \
               "Do not install or configure Octocode" \
               "existing Read, Grep, Glob, and Bash tools"; do
   echo "$out" | grep -qF "$marker" || unavailable_contract=0
 done
-if echo "$out" | grep -qF "OCTOCODE_STATUS: available"; then
+if echo "$out" | grep -qF "OCTOCODE_STATUS: available" \
+  || echo "$out" | grep -qF "OCTOCODE_FAKE_PROBE_DIAGNOSTIC"; then
   unavailable_contract=0
 fi
-check "broken Octocode CLI emits unavailable fallback state" "$unavailable_contract"
+check "broken Octocode CLI quietly emits unavailable fallback state" "$unavailable_contract"
 
 preseeded_probe_log="$TMP/preseeded-probes"
 out=$(EDC_OCTOCODE_CAPABILITY_STATE=available OCTOCODE_PROBE_LOG="$preseeded_probe_log" OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)

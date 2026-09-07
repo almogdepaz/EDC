@@ -58,7 +58,7 @@ If one issue is found, run a variant sweep for that pattern class across the cha
 
 ## Phase 1: changed-code security analysis
 
-When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries for targeted reachability, blast-radius, dependency-source, and permitted history research. Remote history remains allowed only when the assigned workflow already permits it.
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries for targeted lexical anchors, exact reads, reachability candidates, blast-radius, dependency-source, and permitted history research. Remote history remains allowed only when the assigned workflow already permits it. AST/LSP/graph output is not executable proof: confirm material reachability with exact reads and the smallest runnable verification when one exists; do not turn dead-code or zero-reference candidates into claims.
 
 For each security-relevant diff region:
 

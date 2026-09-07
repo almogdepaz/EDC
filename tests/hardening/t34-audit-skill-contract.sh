@@ -43,7 +43,7 @@ check "audit main points to smell reference" "$(main_has "references/smell-basel
 check "audit main points to quality checks reference" "$(main_has "references/quality-checks.md" && echo 1 || echo 0)"
 check "audit main points to reporting reference" "$(main_has "references/reporting.md" && echo 1 || echo 0)"
 check "audit requires standard citations" "$(has "cite the standard" && echo 1 || echo 0)"
-check "audit scope reference uses coordinator-approved Octocode for candidate verification" "$(file_has "$SCOPE_STANDARDS" 'OCTOCODE_STATUS: available' && file_has "$SCOPE_STANDARDS" "references, callers, duplication, and dead-export claims" && echo 1 || echo 0)"
+check "audit scope reference treats Octocode results as candidates, not proof" "$(file_has "$SCOPE_STANDARDS" 'OCTOCODE_STATUS: available' && file_has "$SCOPE_STANDARDS" "dead exports" && file_has "$SCOPE_STANDARDS" "cannot prove dead code or zero references" && file_has "$SCOPE_STANDARDS" "lexical search, exact reads, and the smallest runnable verification" && echo 1 || echo 0)"
 check "audit coordinator guidance preserves scope, semantic uncertainty, and fallback" "$(file_has "$RUNTIME_LIB" "Do not install or configure Octocode" && file_has "$RUNTIME_LIB" "widen scope" && file_has "$RUNTIME_LIB" "Treat unavailable semantic support as unknown" && file_has "$RUNTIME_LIB" "existing Read, Grep, Glob, and Bash tools" && echo 1 || echo 0)"
 check "audit labels smell findings as possible" "$(has "possible smell" && echo 1 || echo 0)"
 check "audit skips tooling-enforced issues" "$(has "do not report formatter/linter/type errors" && echo 1 || echo 0)"

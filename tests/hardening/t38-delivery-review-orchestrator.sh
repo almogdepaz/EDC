@@ -47,8 +47,8 @@ MOCK
 chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<'MOCK'
 #!/usr/bin/env bash
-[ "${1:-}" = "--version" ] || exit 2
-printf 'octocode v-test\n'
+[ "${1:-}" = "tools" ] && [ "${2:-}" = "--json" ] && [ "${3:-}" = "--compact" ] || exit 2
+printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK
 chmod +x "$MOCK_BIN/octocode"
 
@@ -102,8 +102,9 @@ if [ "$result" -eq 0 ] && [ -f delivery-review-HEAD.md ] \
   && grep -q '# Architecture Fit Axis' "$TMPDIR_T38/last-prompt" \
   && grep -q '# Delivery / Architecture Reporting' "$TMPDIR_T38/last-prompt" \
   && grep -qF 'OCTOCODE_STATUS: available' "$TMPDIR_T38/last-prompt" \
-  && grep -qF 'octocode tools localViewStructure --queries' "$TMPDIR_T38/last-prompt" \
-  && grep -qF 'octocode tools localSearchCode --queries' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'octocode tools localSearch --queries' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'octocode tools lspGetSemantics --queries' "$TMPDIR_T38/last-prompt" \
+  && grep -qF 'octocode tools localAnalyzeGraph --queries' "$TMPDIR_T38/last-prompt" \
   && node -e 'const j=require("./edc-context/build/last-run.json"); process.exit(j.kind === "delivery-review" && j.exitCode === 0 && j.reasonCode === "success" && j.finalReview === "delivery-review-HEAD.md" ? 0 : 1)'; then
   echo "PASS: delivery-review writes report from embedded skill bundle"
 else

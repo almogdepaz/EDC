@@ -186,8 +186,8 @@ MOCK
 chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<'MOCK'
 #!/usr/bin/env bash
-[ "${1:-}" = "--version" ] || exit 2
-printf 'octocode v-test\n'
+[ "${1:-}" = "tools" ] && [ "${2:-}" = "--json" ] && [ "${3:-}" = "--compact" ] || exit 2
+printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK
 chmod +x "$MOCK_BIN/octocode"
 
@@ -273,9 +273,10 @@ else
   echo "FAIL (12a): expected 'build' action, log:"; cat "$EDC_T12_LOG"; exit 1
 fi
 if grep -qF 'OCTOCODE_STATUS: available' "$EDC_T12_MODULE_PROMPT_LOG" \
-  && grep -qF 'octocode tools localViewStructure --queries' "$EDC_T12_MODULE_PROMPT_LOG" \
-  && grep -qF 'octocode tools localSearchCode --queries' "$EDC_T12_MODULE_PROMPT_LOG"; then
-  echo "PASS: build module worker receives coordinator-detected Octocode guidance"
+  && grep -qF 'octocode tools localSearch --queries' "$EDC_T12_MODULE_PROMPT_LOG" \
+  && grep -qF 'octocode tools lspGetSemantics --queries' "$EDC_T12_MODULE_PROMPT_LOG" \
+  && grep -qF 'octocode tools localAnalyzeGraph --queries' "$EDC_T12_MODULE_PROMPT_LOG"; then
+  echo "PASS: build module worker receives coordinator-detected unified Octocode guidance"
 else
   echo "FAIL: build module worker missing coordinator-detected Octocode guidance"
   exit 1

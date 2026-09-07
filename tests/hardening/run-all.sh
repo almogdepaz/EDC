@@ -17,6 +17,7 @@ export HOME="$TEST_HOME"
 for t in "$ROOT"/tests/hardening/t*.sh; do
   "$BASH_BIN" "$t" || exit 1
 done
+python3 "$ROOT/tests/hardening/t35-update-manifest-promotion.py"
 
 git -C "$ROOT" status --porcelain=v1 --untracked-files=all | LC_ALL=C sort >"$TEST_HOME/status-after"
 if ! diff -u "$TEST_HOME/status-before" "$TEST_HOME/status-after"; then

@@ -1,6 +1,6 @@
 # Quality Checks
 
-Run these checks against the assigned audit scope. Keep findings code-quality focused: correctness, maintainability, test value, interface clarity, and simplicity.
+Run these checks against the assigned audit scope. Keep findings code-quality focused: correctness, maintainability, test value, interface clarity, and simplicity. Counts, sizes, and search matches are investigation leads, never sufficient findings; demonstrate concrete harm against the actual ownership/behavior contract.
 
 ## Simplification ladder
 
@@ -64,11 +64,7 @@ Report markers missing `upgrade when` or another concrete trigger as maintainabi
 
 ## LOC vs complexity estimate
 
-For each assigned module or module-like scope:
-1. Read the module purpose and the invariants/flows described.
-2. Based on the described complexity, estimate what a senior engineer would write this in (LOC).
-3. Count actual LOC of the module's source files.
-4. Flag modules where actual LOC > 2x the estimate, unless extra size is justified by generated code, schema tables, fixtures, or explicit compatibility requirements.
+Read the module purpose, invariants, and flows before comparing size. Identify concrete duplicated rules, unnecessary surface, or mixed responsibilities and the smaller existing mechanism that preserves the contract. Estimate removal only from identifiable code. Do not invent a hypothetical senior-engineer LOC budget or flag a ratio against that guess; generated code, schemas, fixtures, and compatibility requirements are not bloat by size alone.
 
 ## Dead exports / public surface
 
@@ -90,7 +86,7 @@ For each module/scope, count:
 - number of exported abstractions (interfaces, types, classes, functions)
 - number of unique callers/importers across the codebase or assigned caller set
 
-Flag modules where `abstractions > 3 * callers` only after verifying the abstractions are not stable public contracts or required adapter seams.
+Use those counts to locate abstractions whose indirection or maintenance cost exceeds their demonstrated value. Do not turn an abstraction/caller ratio into a finding; verify the concrete harm and preserve stable public contracts and required adapter seams.
 
 ## Duplication detection
 
@@ -104,7 +100,7 @@ Use the module doc's coupling notes to distinguish legitimate repeated adapters 
 
 ## File and function size
 
-List source files/functions by LOC. Flag:
+Use these size heuristics to select files/functions for closer inspection, not to produce findings by themselves:
 - files > 3x the median file length
 - files > 500 LOC
 - single files holding >30% of the assigned scope LOC

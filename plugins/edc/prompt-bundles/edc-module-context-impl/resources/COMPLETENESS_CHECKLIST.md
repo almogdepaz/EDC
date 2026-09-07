@@ -1,47 +1,26 @@
-# Completeness Checklist
+# completeness checklist
 
-Before concluding micro-analysis of a function, verify:
+before concluding analysis of the assigned scope, verify evidence rather than counts of statements.
 
----
+## contracts and effects
 
-## Structural Completeness
-- [ ] Purpose section: 2+ sentences explaining function role
-- [ ] Inputs & Assumptions section: All parameters + implicit inputs documented
-- [ ] Outputs & Effects section: All returns, state writes, external calls, events
-- [ ] Block-by-Block Analysis: Every logical block analyzed (no gaps)
-- [ ] Cross-Function Dependencies: All calls and shared state documented
+- [ ] the function/module's purpose and authority are clear.
+- [ ] relevant explicit/implicit inputs, trust assumptions, outputs, state writes, and external effects are identified.
+- [ ] inspected branches and transitions support the claimed behavior, including relevant failure/cleanup paths.
+- [ ] actual invariants and dependencies are tied to source evidence; no invented minimum count is required.
 
----
+## continuity and scope
 
-## Content Depth
-- [ ] Identified at least 3 invariants (what must always hold)
-- [ ] Documented at least 5 assumptions (what is assumed true)
-- [ ] Applied First Principles at least once
-- [ ] Applied 5 Whys or 5 Hows at least 3 times total
-- [ ] Risk analysis for all external dependency calls (total failure, partial failure, state corruption, contract violation, re-entrant invocation)
+- [ ] caller/callee assumptions and shared-state couplings are traced where needed within the assigned boundary.
+- [ ] sibling-module evidence remains limited to coordinator-supplied signatures/docs.
+- [ ] language/runtime-specific arithmetic and resource rules apply to the code actually inspected.
+- [ ] unresolved external behavior, uninspected paths, and remaining questions are explicit limitations.
 
----
+## evidence and output
 
-## Continuity & Integration
-- [ ] Cross-reference with related functions (if internal calls exist, analyze callees)
-- [ ] Propagated assumptions from callers (if this function is called by others)
-- [ ] Identified invariant couplings (how this function's invariants relate to global system)
-- [ ] Tracked data flow across function boundaries (if applicable)
+- [ ] claims have source pointers and contradictions are explicitly corrected.
+- [ ] speculation is marked unknown rather than made certain to satisfy a completion gate.
+- [ ] the persisted document contains decision-useful contracts/hazards, not scratch narration.
+- [ ] output goes only to the coordinator-declared staged path; canonical promotion is coordinator-owned.
 
----
-
-## Anti-Hallucination Verification
-- [ ] All claims reference specific line numbers (L45, L98-102, etc.)
-- [ ] No vague statements ("probably", "might", "seems to") - replaced with "unclear; need to check X"
-- [ ] Contradictions resolved (if earlier analysis conflicts with current findings, explicitly updated)
-- [ ] Evidence-based: Every invariant/assumption tied to actual code
-
----
-
-## Completeness Signal
-
-Analysis is complete when:
-1. All checklist items above are satisfied
-2. No remaining "TODO: analyze X" or "unclear Y" items
-3. Full call chain analyzed (for internal calls, jumped into and analyzed)
-4. All identified risks have mitigation analysis or acknowledged as unresolved
+completion means the reported inspected scope is supported. it does not mean all unknowns disappeared or that unrelated scope was analyzed.

@@ -164,7 +164,7 @@ if [ "$result" -ne 0 ]; then
 fi
 
 # ── assertions ───────────────────────────────────────────────────────────────
-if [ ! -f .mock-update-prompt ] || ! grep -q -- "--context-source $base_head" .mock-update-prompt; then
+if [ ! -f .mock-update-prompt ] || ! grep -Fqx "CLI ARGUMENTS (JSON argv): [\"--context-source\",\"$base_head\"]" .mock-update-prompt; then
   echo "FAIL: stale-context recovery did not pass manifest.sourceCommit to edc-update"
   echo "--- update prompt ---"
   cat .mock-update-prompt 2>/dev/null || true

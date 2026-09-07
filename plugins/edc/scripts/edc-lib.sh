@@ -1127,7 +1127,7 @@ is authoritative.
 EOF
 }
 
-# _emit_skill_prompt <skill-name> [args-string]
+# _emit_skill_prompt <skill-name> [argv...]
 # Emit the canonical "find skill, optionally prepend args, cat content"
 # prompt used by build/update/audit across all agents.
 #
@@ -1137,7 +1137,7 @@ EOF
 # haiku reads the skill prose as documentation and asks "what do you need?"
 # while sonnet/opus charge ahead regardless.
 _emit_skill_prompt() {
-  local skill_name="$1" args_string="${2:-}"
+  local skill_name="$1"; shift
   local skill
   skill=$(_find_skill_for_agent "$skill_name") || return 1
   # Imperative header — first thing the model sees.
@@ -1159,8 +1159,10 @@ If EDC_AGENTS_TARGET is AGENTS.md, write the normal EDC-generated AGENTS.md file
 
 EOF
   fi
-  if [ -n "$args_string" ]; then
-    printf 'CLI ARGUMENTS: %s\n\n' "$args_string"
+  if [ "$#" -gt 0 ]; then
+    printf 'CLI ARGUMENTS (JSON argv): '
+    printf '%s\0' "$@" | node -e 'const chunks=[];process.stdin.on("data", c=>chunks.push(c));process.stdin.on("end",()=>{const values=Buffer.concat(chunks).toString().split("\0");values.pop();process.stdout.write(JSON.stringify(values));})'
+    printf '\n\n'
   fi
   _emit_scripts_dir_preamble
   if [ "$skill_name" = "edc-update-impl" ]; then
@@ -1314,7 +1316,6 @@ EOF
 
 resolve_prompt() {
   local action="$1"; shift
-  local prompt_arg_string="$*"
 
   # Validate agent up front so error messages are uniform.
   case "$EDC_AGENT_CLI" in
@@ -1326,8 +1327,8 @@ resolve_prompt() {
   esac
 
   case "$action" in
-    build)   _emit_skill_prompt "edc-build-impl"  "$prompt_arg_string" ;;
-    update)  _emit_skill_prompt "edc-update-impl" "$prompt_arg_string" ;;
+    build)   _emit_skill_prompt "edc-build-impl" "$@" ;;
+    update)  _emit_skill_prompt "edc-update-impl" "$@" ;;
     curator)      _emit_skill_prompt "edc-context-curator-impl" ;;
     curator-edit) _emit_skill_prompt "edc-context-curator-edit-impl" ;;
     audit)        _emit_audit_prompt ;;

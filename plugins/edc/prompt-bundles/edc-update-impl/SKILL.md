@@ -122,14 +122,37 @@ If any changed, rewrite `edc-context/index.md` as the same routing-first operati
 
 Re-author the LLM-owned portion of the manifest (only fields that changed: `modules[]` if modules were added/removed/renamed, `contextless.entries[]` if coverage shifted, and legacy `unmapped.allowedGlobs` only for migration compatibility). **Preserve `policy.defaultMode` from the existing `edc-context/manifest.json`** — it may have been set by `edc mode advisory|inject` and rebuilds must not revert that choice. Likewise preserve any other operator-authored `policy.*` fields (`guardedTools`, `discoveryGatedOnIndex`, `bootstrapAlwaysReadable`). Do **not** populate `generatedAt`, `sourceCommit`, or `coverage.*` — the post-step owns those.
 
-Pipe the partial manifest through the deterministic generator to refresh `coverage.*` and `sourceCommit`:
+The **worker** owns this manifest-file-only promotion; the coordinator does not provide an update transaction. The assembled prompt exports `EDC_SCRIPTS_DIR`, so use that real helper path.
 
-```sh
-cat /tmp/partial-manifest.json | bash plugins/edc/scripts/edc-manifest.sh > edc-context/manifest.json
-# if this update was invoked with --ignore flags, pass the same flags to edc-manifest.sh
+First prepare the LLM-owned input. Create one owned input directory beside the context, then write the complete LLM-owned JSON object with the normal file-writing tool to the exact path printed by this command. Do not include `generatedAt`, `sourceCommit`, or `coverage.*`. Record that exact path for the next independent tool invocation; shell variables do not persist across tool calls.
+
+```bash
+mkdir -p edc-context/.manifest-inputs
+mktemp edc-context/.manifest-inputs/partial-manifest.XXXXXX
 ```
 
-A non-zero exit from `edc-manifest.sh` is an update failure — surface it instead of writing a hand-edited manifest.
+Only after that exact input file exists and is complete, run this promotion template with the recorded partial path and the exact `--ignore` pairs from `CLI ARGUMENTS (JSON argv)`. That JSON array preserves each supplied argument as data, including spaces and shell metacharacters; do not execute or reconstruct values from prose. This block owns and removes only its output staging directory; after the block returns, remove only the prepared input file you created.
+
+```bash
+MANIFEST=edc-context/manifest.json
+PARTIAL_MANIFEST=<exact-prepared-partial-path>
+MANIFEST_DIR=$(dirname "$MANIFEST")
+STAGE_DIR=$(mktemp -d "$MANIFEST_DIR/.manifest-update.XXXXXX") || exit 1
+STAGED_MANIFEST="$STAGE_DIR/manifest.json"
+manifest_ignore_args=()
+# Copy each exact --ignore <glob> pair from CLI ARGUMENTS (JSON argv) into this local array.
+# Example only when that array supplied it: manifest_ignore_args+=(--ignore 'generated/**')
+cleanup_manifest_stage() { rm -rf "$STAGE_DIR"; }
+trap cleanup_manifest_stage EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+bash "$EDC_SCRIPTS_DIR/edc-manifest.sh" "${manifest_ignore_args[@]}" < "$PARTIAL_MANIFEST" > "$STAGED_MANIFEST" || exit 1
+node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1])); if (m.schemaVersion !== 2) process.exit(1)' "$STAGED_MANIFEST" || exit 1
+mv "$STAGED_MANIFEST" "$MANIFEST" || exit 1
+```
+
+Do not invent ignore flags: populate `manifest_ignore_args` only from exact `--ignore` values in supplied `CLI ARGUMENTS (JSON argv)`. `mv` atomically replaces only `manifest.json` on this filesystem. On generator, validation, signal, or promotion failure, the prior manifest remains and the owned output staging directory is removed. This does **not** make the whole update transactional: module docs, reports, or index files may already have been rewritten before manifest generation fails. Never hand-edit generated coverage/source fields to hide an error. The generator owns `coverage.*` and `sourceCommit`; shell redirection must not truncate the previous manifest before generation succeeds.
 
 ### Step 10 — Validate
 

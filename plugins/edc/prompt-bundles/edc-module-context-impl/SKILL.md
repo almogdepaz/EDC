@@ -11,7 +11,7 @@ This skill governs **how the agent thinks** during the context-building phase of
 
 When active, the agent will:
 - Perform **line-by-line / block-by-block** code analysis by default.
-- Apply **First Principles**, **5 Whys**, and **5 Hows** at micro scale.
+- Use First Principles, 5 Whys, or 5 Hows only when one resolves a concrete uncertainty about a contract, ordering, or failure mode.
 - Continuously link insights → functions → modules → entire system.
 - Maintain a stable, explicit mental model that evolves with new evidence.
 - Identify invariants, assumptions, flows, and reasoning hazards.
@@ -20,7 +20,7 @@ Ultra-granular analysis depth is the reasoning method, not the persisted artifac
 
 This skill defines a structured analysis format (see Example: Function Micro-Analysis below) and runs **before** the vulnerability-hunting phase.
 
-When invoked from a v2 build, the per-module distilled-context output is written to `edc-context/modules/<name>.md` (one file per module, kebab-case names). Do not write per-module docs at the top level of `edc-context/`.
+When invoked from a v2 build, write the distilled module document only to the coordinator-declared staged path. After validation, the coordinator promotes it to `edc-context/modules/<name>.md` (one kebab-case file per module). Never write canonical context directly or infer an output path from the module name.
 
 ---
 
@@ -44,7 +44,7 @@ Do **not** use for:
 
 When active, the agent will:
 - Default to **ultra-granular analysis** of each block and line.
-- Apply micro-level First Principles, 5 Whys, and 5 Hows.
+- Apply causal methods selectively when they resolve a concrete uncertainty; do not perform them ceremonially.
 - Build and refine a persistent global mental model.
 - Update earlier assumptions when contradicted ("Earlier I thought X; now Y.").
 - Periodically anchor summaries to maintain stable context.
@@ -59,7 +59,7 @@ Goal: **deep, accurate understanding**, then a concise persisted doc containing 
 | Rationalization | Why It's Wrong | Required Action |
 |-----------------|----------------|-----------------|
 | "I get the gist" | Gist-level understanding misses edge cases | Line-by-line analysis required |
-| "This function is simple" | Simple functions compose into complex bugs | Apply 5 Whys anyway |
+| "This function is simple" | Simple functions can carry non-obvious contracts | Check its actual invariants and boundary role; do not pad analysis with reasoning quotas |
 | "I'll remember this invariant" | You won't. Context degrades. | Write it down explicitly |
 | "External call is probably fine" | External = adversarial until proven otherwise | Jump into code or model as hostile |
 | "I can skip this helper" | Helpers contain assumptions that propagate | Trace the full call chain |
@@ -114,10 +114,9 @@ For each function:
    - What invariants it establishes or maintains.
    - What later logic depends on it.
 
-   Apply per-block:
-   - **First Principles**
-   - **5 Whys**
-   - **5 Hows**
+   Use First Principles, 5 Whys, or 5 Hows when they resolve a concrete
+   uncertainty about a block's contract or ordering. Do not apply all three
+   ceremonially to every block.
 
 5. **State Machine Analysis** (when function is part of a state machine or non-blocking protocol)
    - Map every state and transition. What causes each transition?
@@ -132,7 +131,7 @@ For each function:
    - **Impact if wrong:** if the flag has the opposite value at point of use, what breaks? (e.g., wrong buffer size, skipped validation, wrong protocol path)
    - Pay special attention to flags that control: local vs remote resolution, protocol variant selection, buffer size decisions, security-relevant behavior
 
-7. **Integer Arithmetic & Size Calculation Analysis** (for every expression that produces a value used as a size, offset, index, or length)
+7. **Integer Arithmetic & Size Calculation Analysis** (for size, offset, index, or length expressions where applicable to the language/runtime; do not impose C allocation/overflow semantics on other runtimes)
    - **Identify the arithmetic**: find every `+`, `-`, `*`, `/`, `<<` whose result feeds `malloc`/`calloc`/`realloc`, `memcpy`/`memmove`/`memset`, array subscript, pointer arithmetic, or a length-checked comparison
    - **Overflow/underflow path**: can the expression wrap? For `size_t` the wrap is at `SIZE_MAX`; for `int` it is undefined behavior AND wraps in practice. Ask: if both operands are attacker-controlled, what value makes `a + b < a` (overflow) or `a - b > a` (underflow)?
    - **Signedness mismatch**: is a signed value implicitly converted to an unsigned type (negative → huge positive) or vice versa (large unsigned → negative)? Note every implicit cast at call boundaries.
@@ -140,7 +139,7 @@ For each function:
    - **Multiplication**: `count * element_size` is the canonical overflow vector. Check: is `calloc(count, size)` used (safe) or manual `malloc(count * size)` (unsafe without prior check)?
    - **Impact trace**: follow the arithmetic result to the first memory operation — if the value is wrong (too small), what buffer is allocated or indexed, and what write immediately follows? Document the full path: `attacker input → arithmetic → allocation/index → write target`.
 
-8. **Error-Path Memory Safety** (for every function that allocates memory or holds a pointer)
+8. **Error-Path Memory Safety** (for code owning manual allocations/pointers; for managed resources, analyze actual lifetime/cleanup contracts rather than inventing manual-free hazards)
    - **Enumerate all exit points**: list every `return`, `goto`, `break`, or exception path. For each, verify that every allocation made BEFORE that exit is freed exactly once on that path.
    - **Use-after-free pattern**: does any code after a `free(p)` / `curl_free(p)` / `Curl_safefree(p)` dereference `p`? Check: error handlers, retry loops, fallback branches that run after cleanup.
    - **Double-free pattern**: can two code paths both reach `free(p)` for the same pointer? Common in cleanup functions that call sub-cleaners which also free shared state.
@@ -201,7 +200,7 @@ All invariants, assumptions, and data dependencies must propagate across calls.
 
 See [FUNCTION_MICRO_ANALYSIS_EXAMPLE.md](resources/FUNCTION_MICRO_ANALYSIS_EXAMPLE.md) for a complete walkthrough demonstrating:
 - Full micro-analysis of an HTTP route handler that spawns subprocesses
-- Application of First Principles, 5 Whys, and 5 Hows
+- Causal-method evidence when it resolved a concrete uncertainty
 - Block-by-block analysis with invariants and assumptions
 - Cross-function dependency mapping
 - Risk analysis for external interactions
@@ -238,12 +237,11 @@ Drop:
 - copied constants, enum tables, schemas, message ids, field lists, timeout/count tables, service lists, or long workflow traces that should point to source truth
 - facts discoverable with one Read, Grep, or Glob
 
-Quality thresholds apply to the reasoning pass, not to persisted prose:
-- Minimum 3 invariants per non-trivial function considered during analysis
-- Minimum 5 assumptions documented in scratch while deriving module-level contracts
-- Minimum 3 risk considerations for external interactions
-- At least 1 First Principles application
-- At least 3 combined 5 Whys/5 Hows applications
+Coverage is evidence-based, not a quota of statements or reasoning techniques:
+- identify the actual invariants and assumptions that govern the analyzed behavior
+- inspect relevant success, failure, state-transition, and external-interaction paths
+- use First Principles / 5 Whys / 5 Hows where they resolve a concrete uncertainty
+- explicitly record unresolved risks and uninspected paths; do not invent additional assumptions to meet a count
 
 ---
 
@@ -252,11 +250,11 @@ Quality thresholds apply to the reasoning pass, not to persisted prose:
 Before concluding micro-analysis of a function, verify against the [COMPLETENESS_CHECKLIST.md](resources/COMPLETENESS_CHECKLIST.md):
 
 - **Structural Completeness**: All required sections present (Purpose, Inputs, Outputs, Block-by-Block, Dependencies)
-- **Content Depth**: Minimum thresholds met (invariants, assumptions, risk analysis, First Principles)
+- **Content Depth**: Actual contracts, assumptions, and relevant failure paths supported by source evidence
 - **Continuity & Integration**: Cross-references, propagated assumptions, invariant couplings
 - **Anti-Hallucination**: Line number citations, no vague statements, evidence-based claims
 
-Analysis is complete when all checklist items are satisfied and no unresolved "unclear" items remain.
+Report completion only for the inspected scope. Unresolved questions remain explicit limitations, not invented answers or a reason to expand beyond the coordinator's scope.
 
 ---
 

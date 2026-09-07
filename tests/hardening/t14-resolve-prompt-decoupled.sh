@@ -87,7 +87,7 @@ cp -R "$HOME_DECOY_SKILLS/." "$TMP/home/.codex/skills/"
 run_resolve() {
   local agent="$1"; shift
   (cd "$WORK" && HOME="$TMP/home" EDC_AGENT_CLI="$agent" \
-    bash -c ". $SCRIPT_ABS && resolve_prompt $*" 2>&1)
+    bash -c '. "$1" && shift && resolve_prompt "$@"' fixture "$SCRIPT_ABS" "$@" 2>&1)
 }
 
 # ── 14.1: claude branch never emits slash commands ──────────────────────────
@@ -144,14 +144,14 @@ if echo "$out" | grep -Eq "HOME_SKILL_DECOY|REPO_SKILL_DECOY"; then
 else
   check "claude build: ignores HOME and repo skill decoys" 1
 fi
-if echo "$out" | grep -qF "CLI ARGUMENTS: --force --focus broker"; then
+if echo "$out" | grep -qF 'CLI ARGUMENTS (JSON argv): ["--force","--focus","broker"]'; then
   check "claude build: arg-string prefixed when args provided" 1
 else
   check "claude build: arg-string prefixed when args provided" 0
 fi
 
 out=$(run_resolve claude build)
-if echo "$out" | grep -q "CLI ARGUMENTS:"; then
+if echo "$out" | grep -qF "CLI ARGUMENTS (JSON argv):"; then
   check "claude build: NO arg-string prefix when no args" 0
 else
   check "claude build: NO arg-string prefix when no args" 1

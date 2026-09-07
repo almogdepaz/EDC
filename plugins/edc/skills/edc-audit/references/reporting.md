@@ -96,4 +96,4 @@ For pure simplification/bloat findings, prefer the compact form:
 
 Rank biggest cuts first inside each report section when severity is otherwise equal.
 
-If a scoped worker finds no code-quality findings, write exactly enough structure to prove the scan ran, then say: `Lean already. Ship.` Do not pad with generic recommendations.
+If a scoped worker finds no code-quality findings, record the inspected scope and limitations, then say: `No actionable code-quality findings in the inspected scope.` This is not shipment approval or evidence for uninspected behavior. Do not pad with generic recommendations.

@@ -62,7 +62,7 @@ Collect affected real modules from `context-module:*`. For changed `contextless:
 
 Also include any modules that `edc-context/modules/<name>.md` documents as coupled to an affected module (read the cross-module coupling sections).
 
-For changed public or high-risk symbols, when the prompt says `OCTOCODE_STATUS: available`, use definitions, references, callers, and importers as additional blast-radius evidence. Route every discovered repository path through the shared classifier before adding a real affected module; manifest routing remains authoritative. Do not infer business ownership from a call graph.
+For changed public or high-risk symbols, when the prompt says `OCTOCODE_STATUS: available`, use lexical anchors and exact reads alongside definitions, references, callers, and importers as additional blast-radius evidence. Use graph output as a syntactic hypothesis. Route every discovered repository path through the shared classifier before adding a real affected module; manifest routing remains authoritative. Do not infer business ownership from a call graph. AST/LSP/graph results are candidates, not proof of no references or dead code; verify material claims with exact reads and the smallest runnable check when one exists.
 
 ### Step 3 — Re-analyze affected modules
 

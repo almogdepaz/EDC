@@ -14,7 +14,7 @@ Audit workers:
 - must not scan the entire repo by default from a module-scoped task
 - must not report global/cross-module conclusions from a local worker; global/cross-module conclusions belong to synthesis
 
-When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries to verify references, callers, duplication, and dead-export claims.
+When the prompt says `OCTOCODE_STATUS: available`, use its permitted queries to find candidates for references, callers, duplication, and dead exports. AST/LSP/graph output cannot prove dead code or zero references: confirm material claims with lexical search, exact reads, and the smallest runnable verification when one exists.
 
 ## Standards sources
 

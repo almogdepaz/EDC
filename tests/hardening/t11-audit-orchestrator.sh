@@ -141,8 +141,8 @@ chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<MOCK
 #!/usr/bin/env bash
 printf 'probe\n' >> "$TMPDIR_T11/octocode-log"
-[ "\${1:-}" = "--version" ] || exit 2
-printf 'octocode v-test\n'
+[ "\${1:-}" = "tools" ] && [ "\${2:-}" = "--json" ] && [ "\${3:-}" = "--compact" ] || exit 2
+printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK
 chmod +x "$MOCK_BIN/octocode"
 

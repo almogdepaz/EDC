@@ -33,7 +33,7 @@ check "review keeps context routing guidance" "$(main_has "routing/coupling/blas
 check "review requires concrete attack path for findings" "$(has "concrete attack path" && echo 1 || echo 0)"
 check "review allows no-security-findings reports" "$(has "No security findings" && echo 1 || echo 0)"
 check "review methodology is security-titled" "$(file_has "$METHODOLOGY" "Security Review Methodology" && echo 1 || echo 0)"
-check "review uses coordinator-approved Octocode for targeted security evidence" "$(file_has "$METHODOLOGY" 'OCTOCODE_STATUS: available' && file_has "$METHODOLOGY" "reachability, blast-radius, dependency-source, and permitted history research" && echo 1 || echo 0)"
+check "review treats Octocode security evidence as candidate evidence" "$(file_has "$METHODOLOGY" 'OCTOCODE_STATUS: available' && file_has "$METHODOLOGY" "reachability candidates" && file_has "$METHODOLOGY" "exact reads and the smallest runnable verification" && file_has "$METHODOLOGY" "dead-code or zero-reference candidates" && echo 1 || echo 0)"
 check "review coordinator guidance preserves scope, semantic uncertainty, and fallback" "$(file_has "$RUNTIME_LIB" "Do not install or configure Octocode" && file_has "$RUNTIME_LIB" "widen scope" && file_has "$RUNTIME_LIB" "Treat unavailable semantic support as unknown" && file_has "$RUNTIME_LIB" "existing Read, Grep, Glob, and Bash tools" && echo 1 || echo 0)"
 check "reporting is security-titled" "$(file_has "$REPORTING" "Security Report" && echo 1 || echo 0)"
 check "reporting requires exact Findings heading" "$(file_has "$REPORTING" "exact heading \`## Findings\`" && file_has "$REPORTING" "Do not replace" && echo 1 || echo 0)"

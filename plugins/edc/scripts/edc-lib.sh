@@ -1021,6 +1021,7 @@ _find_skill_for_agent() {
 }
 
 EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
+EDC_OCTOCODE_PATH_PROBE_TIMEOUT_SECONDS=10
 EDC_OCTOCODE_CAPABILITY_STATE="${EDC_OCTOCODE_CAPABILITY_STATE:-}"
 EDC_OCTOCODE_CATALOG="${EDC_OCTOCODE_CATALOG:-}"
 unset _EDC_OCTOCODE_CAPABILITY_INITIALIZED
@@ -1069,6 +1070,47 @@ if (hasAll(unified, true)) {
   )
 }
 
+# _octocode_repository_path_usable <legacy|unified>
+# Verify that the compatible catalog can inspect this repository root. Catalog
+# availability alone does not cover Octocode path allowlists or ignore policy.
+_octocode_repository_path_usable() {
+  local catalog="$1" repository_root queries tool
+  repository_root=$(pwd -P) || return 1
+
+  case "$catalog" in
+    unified)
+      tool="localSearch"
+      queries=$(node -e 'process.stdout.write(JSON.stringify({queries: [{path: process.argv[1], operation: "tree", maxDepth: 1}]}))' "$repository_root") || return 1
+      ;;
+    legacy)
+      tool="localViewStructure"
+      queries=$(node -e 'process.stdout.write(JSON.stringify({queries: [{path: process.argv[1], maxDepth: 1}]}))' "$repository_root") || return 1
+      ;;
+    *) return 1 ;;
+  esac
+
+  (
+    set -o pipefail
+    run_with_timeout "$EDC_OCTOCODE_PATH_PROBE_TIMEOUT_SECONDS" "Octocode repository path probe" \
+      octocode tools "$tool" --queries "$queries" --compact --no-color 2>/dev/null | node -e '
+const input = require("fs").readFileSync(0, "utf8");
+let response;
+try {
+  response = JSON.parse(input);
+} catch {
+  process.exit(1);
+}
+if (response === null || typeof response !== "object" || !Array.isArray(response.results) || response.results.length !== 1) {
+  process.exit(1);
+}
+const result = response.results[0];
+if (result === null || typeof result !== "object" || result.status === "error" || result.data?.errorCode !== undefined) {
+  process.exit(1);
+}
+'
+  )
+}
+
 # edc_octocode_capability_init
 # Probe once in this process. Only review-all children may inherit a normalized
 # parent state; ordinary coordinators ignore caller-preseeded state.
@@ -1089,7 +1131,14 @@ edc_octocode_capability_init() {
 
   EDC_OCTOCODE_CATALOG=$(_octocode_catalog) || EDC_OCTOCODE_CATALOG=unavailable
   case "$EDC_OCTOCODE_CATALOG" in
-    legacy|unified) EDC_OCTOCODE_CAPABILITY_STATE=available ;;
+    legacy|unified)
+      if _octocode_repository_path_usable "$EDC_OCTOCODE_CATALOG" >/dev/null 2>&1; then
+        EDC_OCTOCODE_CAPABILITY_STATE=available
+      else
+        EDC_OCTOCODE_CATALOG=unavailable
+        EDC_OCTOCODE_CAPABILITY_STATE=unavailable
+      fi
+      ;;
     *)
       EDC_OCTOCODE_CATALOG=unavailable
       EDC_OCTOCODE_CAPABILITY_STATE=unavailable

@@ -102,6 +102,10 @@ chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<MOCK
 #!/usr/bin/env bash
 printf 'probe\n' >> "$TMPDIR_T6/octocode-log"
+if [ "\${1:-}:\${2:-}" = "tools:localSearch" ]; then
+  printf '%s\n' '{"results":[{"index":0,"data":{"files":[]}}]}'
+  exit 0
+fi
 [ "\${1:-}" = "tools" ] && [ "\${2:-}" = "--json" ] && [ "\${3:-}" = "--compact" ] || exit 2
 printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK
@@ -175,11 +179,11 @@ echo "PASS: stale-context recovery passes manifest.sourceCommit to edc-update"
 
 probe_count=0
 [ ! -f "$TMPDIR_T6/octocode-log" ] || probe_count=$(wc -l < "$TMPDIR_T6/octocode-log" | tr -d ' ')
-if [ "$probe_count" -ne 1 ]; then
-  echo "FAIL: stale standalone security review probed Octocode $probe_count times (expected 1)"
+if [ "$probe_count" -ne 2 ]; then
+  echo "FAIL: stale standalone security review probed Octocode $probe_count times (expected one catalog and one path probe)"
   exit 1
 fi
-echo "PASS: stale standalone security review probes Octocode once"
+echo "PASS: stale standalone security review checks Octocode catalog and repository path once"
 
 final=$(ls review-*.md 2>/dev/null | head -1 || true)
 if [ -z "$final" ]; then

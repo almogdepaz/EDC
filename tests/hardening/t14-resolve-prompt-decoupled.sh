@@ -70,6 +70,29 @@ fi
 if [ "${OCTOCODE_FAKE_HANG:-0}" = "1" ]; then
   while :; do :; done
 fi
+path_probe_kind=""
+case "${1:-}:${2:-}" in
+  tools:localSearch) path_probe_kind="unified" ;;
+  tools:localViewStructure) path_probe_kind="legacy" ;;
+esac
+if [ -n "$path_probe_kind" ]; then
+  [ "${3:-}" = "--queries" ] || exit 2
+  node -e '
+const payload = JSON.parse(process.argv[1]);
+const query = payload?.queries?.[0];
+const operationMatches = process.argv[2] === "unified"
+  ? query?.operation === "tree"
+  : query?.operation === undefined;
+if (payload.queries.length !== 1 || query?.path !== process.cwd() || query?.maxDepth !== 1 || !operationMatches) process.exit(1);
+' "${4:-}" "$path_probe_kind" || exit 2
+  if [ "${OCTOCODE_FAKE_PATH_REJECT:-0}" = "1" ]; then
+    [ "${OCTOCODE_FAKE_DIAGNOSTIC:-0}" = "1" ] && printf 'OCTOCODE_FAKE_PATH_DIAGNOSTIC\n' >&2
+    printf '%s\n' '{"results":[{"index":0,"status":"error","data":{"errorCode":"pathValidationFailed"}}]}'
+    exit 5
+  fi
+  printf '%s\n' '{"results":[{"index":0,"data":{"files":[]}}]}'
+  exit 0
+fi
 [ "${1:-}" = "tools" ] && [ "${2:-}" = "--json" ] && [ "${3:-}" = "--compact" ] || exit 2
 case "${OCTOCODE_FAKE_CATALOG:-unified}" in
   legacy)
@@ -248,11 +271,20 @@ for action in update audit; do
   unified_contract=1
   for marker in "OCTOCODE_STATUS: available" \
                 'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}'\'' --compact --no-color' \
-                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}'\'' --compact --no-color' \
+                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","langType":"<javascript|typescript|python>","pattern":"<ast-pattern-from-lexical-anchor>"}]}'\'' --compact --no-color' \
                 'octocode tools lspGetSemantics --queries '\''{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}'\'' --compact --no-color' \
                 'octocode tools localAnalyzeGraph --queries '\''{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}'\'' --compact --no-color' \
                 "AST/structural search only for JavaScript, TypeScript, or Python syntax questions" \
+                'exactly one of `pattern` or `rule`' \
                 "lexical search and native exact reads for shell or unsupported languages" \
+                '`status: empty` is a completed no-result query within the observed scope' \
+                '`status: error` is a failed row' \
+                'Missing output proves neither' \
+                'When the active schema returns `meta.evidence`, inspect `kind`, `answerReady`, `confidence`, and `complete`' \
+                'When output is partial, run the returned schema-valid `next.*` object' \
+                'A bounded first page or truncated capture is incomplete evidence' \
+                'preserve `entrypoints`, `includeTests`, exclusions, scan caps, diagnostics, and `rustWorkspace`' \
+                'Read exact source with `localGetFileContent` or native exact reads before anchored LSP' \
                 "lexical search" \
                 "native exact reads" \
                 "smallest runnable verification" \
@@ -298,6 +330,23 @@ if echo "$out" | grep -qF "OCTOCODE_STATUS: available" \
   unavailable_contract=0
 fi
 check "broken Octocode CLI quietly emits unavailable fallback state" "$unavailable_contract"
+
+for catalog in unified legacy; do
+  path_probe_log="$TMP/$catalog-path-probes"
+  out=$(OCTOCODE_FAKE_CATALOG="$catalog" OCTOCODE_FAKE_PATH_REJECT=1 OCTOCODE_FAKE_DIAGNOSTIC=1 \
+    OCTOCODE_PROBE_LOG="$path_probe_log" PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)
+  path_rejection_contract=1
+  path_probe_count=0
+  [ ! -f "$path_probe_log" ] || path_probe_count=$(wc -l < "$path_probe_log" | tr -d ' ')
+  [ "$path_probe_count" -eq 2 ] || path_rejection_contract=0
+  echo "$out" | grep -qF "OCTOCODE_STATUS: unavailable" || path_rejection_contract=0
+  echo "$out" | grep -qF "Do not install or configure Octocode" || path_rejection_contract=0
+  if echo "$out" | grep -qF "OCTOCODE_STATUS: available" \
+    || echo "$out" | grep -qF "OCTOCODE_FAKE_PATH_DIAGNOSTIC"; then
+    path_rejection_contract=0
+  fi
+  check "$catalog Octocode repository-path rejection quietly emits unavailable fallback state" "$path_rejection_contract"
+done
 
 preseeded_probe_log="$TMP/preseeded-probes"
 out=$(EDC_OCTOCODE_CAPABILITY_STATE=available OCTOCODE_PROBE_LOG="$preseeded_probe_log" OCTOCODE_FAKE_FAIL=1 PATH="$OCTOCODE_BIN:$PATH" run_resolve claude update)

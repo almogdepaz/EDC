@@ -1021,6 +1021,7 @@ _find_skill_for_agent() {
 }
 
 EDC_OCTOCODE_PROBE_TIMEOUT_SECONDS=2
+EDC_OCTOCODE_PATH_PROBE_TIMEOUT_SECONDS=10
 EDC_OCTOCODE_CAPABILITY_STATE="${EDC_OCTOCODE_CAPABILITY_STATE:-}"
 EDC_OCTOCODE_CATALOG="${EDC_OCTOCODE_CATALOG:-}"
 unset _EDC_OCTOCODE_CAPABILITY_INITIALIZED
@@ -1069,6 +1070,47 @@ if (hasAll(unified, true)) {
   )
 }
 
+# _octocode_repository_path_usable <legacy|unified>
+# Verify that the compatible catalog can inspect this repository root. Catalog
+# availability alone does not cover Octocode path allowlists or ignore policy.
+_octocode_repository_path_usable() {
+  local catalog="$1" repository_root queries tool
+  repository_root=$(pwd -P) || return 1
+
+  case "$catalog" in
+    unified)
+      tool="localSearch"
+      queries=$(node -e 'process.stdout.write(JSON.stringify({queries: [{path: process.argv[1], operation: "tree", maxDepth: 1}]}))' "$repository_root") || return 1
+      ;;
+    legacy)
+      tool="localViewStructure"
+      queries=$(node -e 'process.stdout.write(JSON.stringify({queries: [{path: process.argv[1], maxDepth: 1}]}))' "$repository_root") || return 1
+      ;;
+    *) return 1 ;;
+  esac
+
+  (
+    set -o pipefail
+    run_with_timeout "$EDC_OCTOCODE_PATH_PROBE_TIMEOUT_SECONDS" "Octocode repository path probe" \
+      octocode tools "$tool" --queries "$queries" --compact --no-color 2>/dev/null | node -e '
+const input = require("fs").readFileSync(0, "utf8");
+let response;
+try {
+  response = JSON.parse(input);
+} catch {
+  process.exit(1);
+}
+if (response === null || typeof response !== "object" || !Array.isArray(response.results) || response.results.length !== 1) {
+  process.exit(1);
+}
+const result = response.results[0];
+if (result === null || typeof result !== "object" || result.status === "error" || result.data?.errorCode !== undefined) {
+  process.exit(1);
+}
+'
+  )
+}
+
 # edc_octocode_capability_init
 # Probe once in this process. Only review-all children may inherit a normalized
 # parent state; ordinary coordinators ignore caller-preseeded state.
@@ -1089,7 +1131,14 @@ edc_octocode_capability_init() {
 
   EDC_OCTOCODE_CATALOG=$(_octocode_catalog) || EDC_OCTOCODE_CATALOG=unavailable
   case "$EDC_OCTOCODE_CATALOG" in
-    legacy|unified) EDC_OCTOCODE_CAPABILITY_STATE=available ;;
+    legacy|unified)
+      if _octocode_repository_path_usable "$EDC_OCTOCODE_CATALOG" >/dev/null 2>&1; then
+        EDC_OCTOCODE_CAPABILITY_STATE=available
+      else
+        EDC_OCTOCODE_CATALOG=unavailable
+        EDC_OCTOCODE_CAPABILITY_STATE=unavailable
+      fi
+      ;;
     *)
       EDC_OCTOCODE_CATALOG=unavailable
       EDC_OCTOCODE_CAPABILITY_STATE=unavailable
@@ -1110,7 +1159,7 @@ OCTOCODE RESEARCH CAPABILITY
 ================================================================================
 OCTOCODE_STATUS: available
 
-The coordinator verified a supported Octocode command catalog for this run. Keep every query within the assigned target and existing evidence permissions.
+The coordinator verified a supported Octocode command catalog and current repository path for this run. Keep every query within the assigned target and existing evidence permissions.
 EOF
     case "$EDC_OCTOCODE_CATALOG" in
       legacy)
@@ -1126,11 +1175,17 @@ EOF
 
 This catalog supports unified local research:
 - `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}' --compact --no-color`
-- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}' --compact --no-color`
+- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","langType":"<javascript|typescript|python>","pattern":"<ast-pattern-from-lexical-anchor>"}]}' --compact --no-color`
 - `octocode tools lspGetSemantics --queries '{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}' --compact --no-color`
 - `octocode tools localAnalyzeGraph --queries '{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}' --compact --no-color`
 
-Use AST/structural search only for JavaScript, TypeScript, or Python syntax questions; use lexical search and native exact reads for shell or unsupported languages. Verify structural matches with native exact reads; unsupported structural search is unknown, not a negative result. Use LSP only with an exact-read file, symbol, and line anchor. Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints. Confirm those relationships with lexical search, exact reads, and the smallest runnable verification when one exists. Treat graph edges, reachability, and dead-code candidates as syntactic hypotheses: they must not prove dead code or zero references. Before inferring runtime behavior, use the smallest runnable verification within the assigned scope when one exists; otherwise state the limit.
+Use AST/structural search only for JavaScript, TypeScript, or Python syntax questions; set `langType` and use exactly one of `pattern` or `rule`. Use lexical search and native exact reads for shell or unsupported languages. Verify structural matches with exact source; unsupported structural search is unknown, not a negative result.
+
+Interpret only explicit result fields. `status: empty` is a completed no-result query within the observed scope; `status: error` is a failed row. Missing output proves neither. When the active schema returns `meta.evidence`, inspect `kind`, `answerReady`, `confidence`, and `complete`; downgrade aggregated confidence and completeness when any query is partial or fallback-based. When output is partial, run the returned schema-valid `next.*` object. A bounded first page or truncated capture is incomplete evidence; a numeric cursor or raw `nextQuery` is not an executable continuation by itself.
+
+Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints. For graph results, preserve `entrypoints`, `includeTests`, exclusions, scan caps, diagnostics, and `rustWorkspace`; changing them changes what reachability means. Confirm those relationships with lexical search, exact reads, and the smallest runnable verification when one exists. Treat graph edges, reachability, and dead-code candidates as syntactic hypotheses: they must not prove dead code or zero references.
+
+Read exact source with `localGetFileContent` or native exact reads before anchored LSP. Use LSP only with an exact-read file, symbol, and line anchor; its semantic result does not prove runtime behavior outside the language server's configured project or build context. Before inferring runtime behavior, use the smallest runnable verification within the assigned scope when one exists; otherwise state the limit.
 EOF
         ;;
     esac

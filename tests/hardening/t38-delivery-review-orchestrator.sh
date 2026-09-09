@@ -47,6 +47,10 @@ MOCK
 chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<'MOCK'
 #!/usr/bin/env bash
+if [ "${1:-}:${2:-}" = "tools:localSearch" ]; then
+  printf '%s\n' '{"results":[{"index":0,"data":{"files":[]}}]}'
+  exit 0
+fi
 [ "${1:-}" = "tools" ] && [ "${2:-}" = "--json" ] && [ "${3:-}" = "--compact" ] || exit 2
 printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK

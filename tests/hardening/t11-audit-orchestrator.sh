@@ -141,6 +141,16 @@ chmod +x "$MOCK_BIN/claude"
 cat > "$MOCK_BIN/octocode" <<MOCK
 #!/usr/bin/env bash
 printf 'probe\n' >> "$TMPDIR_T11/octocode-log"
+if [ "\${1:-}:\${2:-}" = "tools:localSearch" ]; then
+  [ "\${3:-}" = "--queries" ] || exit 2
+  node -e '
+const payload = JSON.parse(process.argv[1]);
+const query = payload?.queries?.[0];
+if (payload.queries.length !== 1 || query?.path !== process.cwd() || query?.operation !== "tree" || query?.maxDepth !== 1) process.exit(1);
+' "\${4:-}" || exit 2
+  printf '%s\n' '{"results":[{"index":0,"data":{"files":[]}}]}'
+  exit 0
+fi
 [ "\${1:-}" = "tools" ] && [ "\${2:-}" = "--json" ] && [ "\${3:-}" = "--compact" ] || exit 2
 printf '%s\n' '{"kind":"octocode.toolCatalog","version":1,"toolCount":10,"tools":[{"name":"ghSearch","availability":{"enabled":true}},{"name":"ghGetFileContent","availability":{"enabled":true}},{"name":"ghSearchHistory","availability":{"enabled":true}},{"name":"ghGetHistoryItem","availability":{"enabled":true}},{"name":"npmSearch","availability":{"enabled":true}},{"name":"ghCloneRepo","availability":{"enabled":false}},{"name":"localSearch","availability":{"enabled":true}},{"name":"localAnalyzeGraph","availability":{"enabled":true}},{"name":"localGetFileContent","availability":{"enabled":true}},{"name":"lspGetSemantics","availability":{"enabled":true}}]}'
 MOCK
@@ -230,10 +240,10 @@ out=$(bash "$SCRIPT" 2>&1) || result=$?
 probe_count=$(wc -l < "$TMPDIR_T11/octocode-log" 2>/dev/null | tr -d ' ' || echo 0)
 capabilities=$(grep '^capability:' "$TMPDIR_T11/audit-log" 2>/dev/null | sort || true)
 expected_capabilities=$(printf 'capability:lib:available\ncapability:root:available')
-if [ "$result" -eq 0 ] && [ "$probe_count" -eq 1 ] && [ "$capabilities" = "$expected_capabilities" ]; then
-  echo "PASS: multi-prompt audit probes Octocode once and shares immutable capability state"
+if [ "$result" -eq 0 ] && [ "$probe_count" -eq 2 ] && [ "$capabilities" = "$expected_capabilities" ]; then
+  echo "PASS: multi-prompt audit checks Octocode catalog and repository path once, then shares immutable capability state"
 else
-  echo "FAIL (11b2): expected one Octocode probe and identical available state. exit=$result probes=$probe_count"
+  echo "FAIL (11b2): expected one catalog probe, one path probe, and identical available state. exit=$result probes=$probe_count"
   echo "capabilities=$capabilities"
   echo "--- output ---"; echo "$out"; echo "--- end ---"
   exit 1

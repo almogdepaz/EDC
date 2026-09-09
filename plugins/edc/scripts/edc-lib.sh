@@ -1159,7 +1159,7 @@ OCTOCODE RESEARCH CAPABILITY
 ================================================================================
 OCTOCODE_STATUS: available
 
-The coordinator verified a supported Octocode command catalog for this run. Keep every query within the assigned target and existing evidence permissions.
+The coordinator verified a supported Octocode command catalog and current repository path for this run. Keep every query within the assigned target and existing evidence permissions.
 EOF
     case "$EDC_OCTOCODE_CATALOG" in
       legacy)
@@ -1175,11 +1175,17 @@ EOF
 
 This catalog supports unified local research:
 - `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}' --compact --no-color`
-- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}' --compact --no-color`
+- `octocode tools localSearch --queries '{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","langType":"<javascript|typescript|python>","pattern":"<ast-pattern-from-lexical-anchor>"}]}' --compact --no-color`
 - `octocode tools lspGetSemantics --queries '{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}' --compact --no-color`
 - `octocode tools localAnalyzeGraph --queries '{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}' --compact --no-color`
 
-Use AST/structural search only for JavaScript, TypeScript, or Python syntax questions; use lexical search and native exact reads for shell or unsupported languages. Verify structural matches with native exact reads; unsupported structural search is unknown, not a negative result. Use LSP only with an exact-read file, symbol, and line anchor. Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints. Confirm those relationships with lexical search, exact reads, and the smallest runnable verification when one exists. Treat graph edges, reachability, and dead-code candidates as syntactic hypotheses: they must not prove dead code or zero references. Before inferring runtime behavior, use the smallest runnable verification within the assigned scope when one exists; otherwise state the limit.
+Use AST/structural search only for JavaScript, TypeScript, or Python syntax questions; set `langType` and use exactly one of `pattern` or `rule`. Use lexical search and native exact reads for shell or unsupported languages. Verify structural matches with exact source; unsupported structural search is unknown, not a negative result.
+
+Interpret only explicit result fields. `status: empty` is a completed no-result query within the observed scope; `status: error` is a failed row. Missing output proves neither. When the active schema returns `meta.evidence`, inspect `kind`, `answerReady`, `confidence`, and `complete`; downgrade aggregated confidence and completeness when any query is partial or fallback-based. When output is partial, run the returned schema-valid `next.*` object. A bounded first page or truncated capture is incomplete evidence; a numeric cursor or raw `nextQuery` is not an executable continuation by itself.
+
+Graph analysis is bounded to importable files and does not observe shell execution edges or dynamic entrypoints. For graph results, preserve `entrypoints`, `includeTests`, exclusions, scan caps, diagnostics, and `rustWorkspace`; changing them changes what reachability means. Confirm those relationships with lexical search, exact reads, and the smallest runnable verification when one exists. Treat graph edges, reachability, and dead-code candidates as syntactic hypotheses: they must not prove dead code or zero references.
+
+Read exact source with `localGetFileContent` or native exact reads before anchored LSP. Use LSP only with an exact-read file, symbol, and line anchor; its semantic result does not prove runtime behavior outside the language server's configured project or build context. Before inferring runtime behavior, use the smallest runnable verification within the assigned scope when one exists; otherwise state the limit.
 EOF
         ;;
     esac

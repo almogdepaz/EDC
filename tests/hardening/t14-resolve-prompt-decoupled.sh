@@ -271,11 +271,20 @@ for action in update audit; do
   unified_contract=1
   for marker in "OCTOCODE_STATUS: available" \
                 'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"tree","maxDepth":2},{"path":"<assigned-absolute-path>","operation":"text","searchText":"<symbol-or-pattern>"}]}'\'' --compact --no-color' \
-                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","pattern":"<ast-pattern-from-lexical-anchor>"}]}'\'' --compact --no-color' \
+                'octocode tools localSearch --queries '\''{"queries":[{"path":"<assigned-absolute-path>","operation":"structural","langType":"<javascript|typescript|python>","pattern":"<ast-pattern-from-lexical-anchor>"}]}'\'' --compact --no-color' \
                 'octocode tools lspGetSemantics --queries '\''{"queries":[{"uri":"<absolute-file-path>","type":"references","symbolName":"<symbol-from-exact-read>","lineHint":123}]}'\'' --compact --no-color' \
                 'octocode tools localAnalyzeGraph --queries '\''{"queries":[{"path":"<assigned-absolute-repository-root>","operation":"dependencies","file":"<repository-relative-file>","depth":2},{"path":"<assigned-absolute-repository-root>","operation":"dependents","file":"<repository-relative-file>","depth":2}]}'\'' --compact --no-color' \
                 "AST/structural search only for JavaScript, TypeScript, or Python syntax questions" \
+                'exactly one of `pattern` or `rule`' \
                 "lexical search and native exact reads for shell or unsupported languages" \
+                '`status: empty` is a completed no-result query within the observed scope' \
+                '`status: error` is a failed row' \
+                'Missing output proves neither' \
+                'When the active schema returns `meta.evidence`, inspect `kind`, `answerReady`, `confidence`, and `complete`' \
+                'When output is partial, run the returned schema-valid `next.*` object' \
+                'A bounded first page or truncated capture is incomplete evidence' \
+                'preserve `entrypoints`, `includeTests`, exclusions, scan caps, diagnostics, and `rustWorkspace`' \
+                'Read exact source with `localGetFileContent` or native exact reads before anchored LSP' \
                 "lexical search" \
                 "native exact reads" \
                 "smallest runnable verification" \

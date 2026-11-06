@@ -88,6 +88,17 @@ For each module/scope, count:
 
 Use those counts to locate abstractions whose indirection or maintenance cost exceeds their demonstrated value. Do not turn an abstraction/caller ratio into a finding; verify the concrete harm and preserve stable public contracts and required adapter seams.
 
+## Change coupling
+
+Ask whether these pieces should change together. Hidden links make one logical change require undisclosed coordinated edits; needless links force unrelated responsibilities to change together; surplus adds surface without an independent purpose. Use this framing to investigate existing smell candidates, not as a new reporting taxonomy or permission to redesign the whole repository.
+
+When shotgun surgery or divergent change is suspected, inspect bounded local git history for the assigned paths and representative commit diffs:
+- Look for repeated co-change across apparently separate owners, or one module repeatedly changing for unrelated reasons.
+- Exclude bulk formatting, mechanical renames, generated outputs, and unrelated changes bundled into one commit before drawing conclusions.
+- Confirm the shared rule or unnecessary dependency in current code and callers. Cite representative commits and current source anchors; frequency alone is not a finding.
+
+Stay within assigned scope and existing history permissions; missing history is a coverage limitation, not evidence of low coupling or permission to fetch. Related production code, tests, and migrations often legitimately change together. Colocation is a heuristic, not a requirement that every change touch one file.
+
 ## Duplication detection
 
 Find similar code blocks:
@@ -154,6 +165,15 @@ Flag misleading interfaces:
 - return types that hide failure, partial success, or mutation
 - boolean flag parameters that create hidden modes in public APIs
 - opaque `dict`/object/tuple returns where callers must know undocumented shape
+
+## Interface stability
+
+Check whether a boundary actually shields its callers from changes they should not need to understand:
+- Do implementation-only changes repeatedly force interface and caller edits despite an unchanged behavioral contract?
+- Does a general-purpose function expose caller-specific vocabulary or options that only one workflow understands?
+- Does otherwise stable policy depend directly on volatile implementation details when an existing owner or boundary could contain that dependency?
+
+Verify concrete maintenance cost in the interface, implementation, and affected callers; use relevant history when available. Stability is about the contract and reasons for change, not raw commit counts. Dependency direction is a heuristic, not an absolute import rule. Preserve justified adapters and workflow-specific APIs; prefer an existing boundary or a small local correction over speculative interfaces or a broad rewrite.
 
 ## Side-effect breadth
 

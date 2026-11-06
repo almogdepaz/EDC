@@ -285,7 +285,11 @@ class ArmDispatchTests(Fixture):
         self.assertEqual(argv[argv.index("--model") + 1], "claude-opus-5-5")
         self.assertEqual(argv[argv.index("--max-turns") + 1], "50")
         self.assertEqual(argv[argv.index("--allowedTools") + 1], "Read Grep Glob Write Bash Skill")
-        self.assertEqual(argv[argv.index("--plugin-dir") + 1], str(REPO_ROOT / "plugins" / "edc"))
+        plugin = Path(argv[argv.index("--plugin-dir") + 1])
+        self.assertNotIn(REPO_ROOT, plugin.parents)  # no path back to ground truth
+        self.assertIn(self.work.resolve(), plugin.parents)
+        self.assertTrue((plugin / "skills" / "edc-review" / "SKILL.md").is_file())
+        self.assertTrue(os.access(plugin / "scripts" / "edc", os.X_OK))
         prompt = argv[argv.index("-p") + 1]
         self.assertIn("Apply the EDC module-context methodology on ONLY these files:  a.c", prompt)
         self.assert_opaque(call["cwd"])

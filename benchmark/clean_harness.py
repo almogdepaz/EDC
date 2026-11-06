@@ -32,7 +32,6 @@ BENCHMARK_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCHMARK_DIR.parent
 CLEAN_BIN = BENCHMARK_DIR / "clean-bin"
 PLUGIN_DIR = REPO_ROOT / "plugins" / "edc"
-DEFAULT_EDC_BIN = PLUGIN_DIR / "scripts" / "edc"
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_GT_ROOT = BENCHMARK_DIR / "clean"
 OUT_MARKER = ".clean-harness-run"
@@ -150,6 +149,25 @@ def ignore_complement(tracked, keep) -> list[str]:
     return [p for _, p in sorted(patterns)]
 
 
+def stage_plugin(work: Path) -> Path:
+    """Content-addressed copy of plugins/edc under the work dir. Audited agents
+    follow --plugin-dir paths; pointing them into this repo would also lead
+    them to benchmark/*/ground-truth.md."""
+    digest = hashlib.sha256()
+    for path in sorted(p for p in PLUGIN_DIR.rglob("*") if p.is_file()):
+        digest.update(str(path.relative_to(PLUGIN_DIR)).encode() + b"\0" + path.read_bytes() + b"\0")
+    dest = work / "plugin" / digest.hexdigest()[:16] / "edc"
+    if not dest.is_dir():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.parent / f".tmp-{os.getpid()}"
+        shutil.copytree(PLUGIN_DIR, tmp, symlinks=True)
+        try:
+            os.replace(tmp, dest)
+        except OSError:  # a concurrent run staged the same content first
+            shutil.rmtree(tmp)
+    return dest
+
+
 def run_logged(cmd, cwd, env, timeout, stdout_path, stderr_path) -> tuple[int, float, bool]:
     """Run cmd in its own process group; returns (exit, seconds, timed_out).
     On timeout: SIGTERM the group, SIGKILL 5s later (autoresearch.sh's watchdog)."""
@@ -200,6 +218,7 @@ class Run:
         self.snap, self.out, self.work, self.env = snap, out, work, env
         self.files = entry["affected_files"]
         self.calls = out / "calls"
+        self.plugin = stage_plugin(work)
         self.result = {"report_text": "", "report": "", "arm_exit": "", "ok": False, "timed_out": False,
                        "duration": 0.0, "build_duration": None, "build_calls": None, "passes_run": "",
                        "loop_end": "", "call_dirs": [self.calls], "text_logs": [], "notes": []}
@@ -236,7 +255,7 @@ class Run:
     def edc_module(self):
         file_list = "".join(f" {f}" for f in self.files)
         cmd = [str(CLEAN_BIN / "claude"), "-p", EDC_MODULE_PROMPT.format(file_list=file_list),
-               "--plugin-dir", str(PLUGIN_DIR),
+               "--plugin-dir", str(self.plugin),
                "--allowedTools", "Read Grep Glob Write Bash Skill",
                "--disallowedTools", DISALLOWED_TOOLS,
                "--max-turns", "50", "--output-format", "stream-json", "--verbose",
@@ -258,7 +277,7 @@ class Run:
         file_list = "".join(f" {n}" for n in names)
         prompt = REVIEW_SKILL_PROMPT.format(ctx_note=REVIEW_SKILL_CTX_NOTE, file_list=file_list)
         cmd = [str(CLEAN_BIN / "claude"), "-p", prompt,
-               "--plugin-dir", str(PLUGIN_DIR),
+               "--plugin-dir", str(self.plugin),
                "--allowedTools", "Read Glob Grep Write Skill",
                "--disallowedTools", DISALLOWED_TOOLS,
                "--max-turns", "20", "--model", self.model,
@@ -267,7 +286,7 @@ class Run:
 
     def edc_security(self):
         r = self.result
-        edc = os.environ.get("EDC_BENCH_EDC_BIN") or str(DEFAULT_EDC_BIN)
+        edc = os.environ.get("EDC_BENCH_EDC_BIN") or str(self.plugin / "scripts" / "edc")
         tracked = subprocess.run(["git", "ls-files"], cwd=self.snap, capture_output=True, text=True,
                                  check=True).stdout.splitlines()
         ignores = []

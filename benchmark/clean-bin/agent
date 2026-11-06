@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# `agent`-compatible shim for enemy (plan 041), backed by `claude -p`.
+# enemy calls: agent --workspace <repo> --trust -p --output-format text
+#   [--model M] [--force] --sandbox enabled|disabled [--approve-mcps]
+# with the prompt on stdin. The model follows EDC_BENCH_MODEL (enemy's
+# --model is ignored). Tools: read/write in the workspace plus ls/wc; no git,
+# no web tools, no MCP servers. Raw stream-json goes to the clean-bin/claude
+# call log; enemy sees the result text.
+set -uo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "${1:-}" in
+  --version) echo "agent-shim (claude $(claude --version 2>/dev/null | awk '{print $1}'))"; exit 0 ;;
+  status) echo "Logged in (claude shim)"; exit 0 ;;
+esac
+workspace=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --workspace) workspace="$2"; shift 2 ;;
+    --output-format|--model|--sandbox) shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$workspace" ] || { echo "agent-shim: missing --workspace" >&2; exit 2; }
+cd "$workspace" || exit 2
+claude -p --model "${EDC_BENCH_MODEL:-claude-opus-5-5}" --output-format stream-json --verbose \
+  --permission-mode acceptEdits --strict-mcp-config \
+  --disallowedTools "WebFetch WebSearch" \
+  --allowedTools Read Grep Glob Write Edit "Bash(ls:*)" "Bash(wc:*)" \
+  | python3 "$here/../clean_stream_text.py"
+exit "${PIPESTATUS[0]}"

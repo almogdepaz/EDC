@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Fake `claude -p` for harness tests. Never calls a model.
+
+FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block
+FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, stdin}).
+In ok mode it writes edc-context/reports/issues.md in cwd and emits a
+stream-json result event.
+"""
+import json, os, sys
+argv = sys.argv[1:]
+if "--version" in argv:
+    print("0.0.0 (fake)"); sys.exit(0)
+stdin = "" if sys.stdin.isatty() else sys.stdin.read()
+log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
+if log:
+    with open(log, "a") as fh:
+        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": stdin}) + "\n")
+mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+def emit(obj):
+    print(json.dumps(obj), flush=True)
+emit({"type": "system", "subtype": "init", "session_id": "fake"})
+if mode == "blocked_api":
+    emit({"type": "result", "subtype": "success", "is_error": True, "stop_reason": "stop_sequence",
+          "result": "API Error: Opus 4.8's safeguards flagged this message. Details: `[cyber]`"})
+    sys.exit(1)
+if mode == "soft_block":
+    emit({"type": "result", "is_error": False, "stop_reason": "end_turn",
+          "result": "A safety classifier stopped the response that was writing the artifact, so the file write never ran."})
+    sys.exit(0)
+os.makedirs("edc-context/reports", exist_ok=True)
+with open("edc-context/reports/issues.md", "w") as fh:
+    fh.write("# issues\n\n## heap buffer overflow in a.c\n- severity: critical\n- a.c:3 hostname length check bypassed, overflow on copy into heap buffer\n")
+emit({"type": "result", "is_error": False, "stop_reason": "end_turn", "num_turns": 2,
+      "result": "wrote edc-context/reports/issues.md"})

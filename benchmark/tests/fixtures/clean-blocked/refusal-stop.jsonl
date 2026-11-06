@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"s2","model":"claude-opus-5-5"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Writing the pass artifact now"}],"stop_reason":"refusal"},"session_id":"s2"}
+{"type":"result","subtype":"success","is_error":false,"stop_reason":"refusal","session_id":"s2","result":"Writing the pass artifact now"}

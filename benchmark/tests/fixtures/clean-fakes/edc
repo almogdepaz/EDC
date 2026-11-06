@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Fake edc CLI for harness tests: logs argv; build makes one claude call;
+# security-review writes a review file and the EDC_RESULT_FILE json.
+set -uo pipefail
+[ -n "${FAKE_EDC_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_EDC_ARGV_LOG"
+args=("$@"); [ "${args[0]}" = "--model" ] && args=("${args[@]:2}")
+case "${args[0]}" in
+  build)
+    mkdir -p edc-context && echo '{}' > edc-context/manifest.json
+    echo hi | claude -p --output-format stream-json --verbose > /dev/null ;;
+  security-review)
+    echo hi | claude -p --output-format stream-json --verbose > /dev/null
+    printf '# review\n\n## heap buffer overflow in a.c\na.c:3 hostname length check bypassed, overflow on copy into heap buffer\n' > review-HEAD.md
+    [ -n "${EDC_RESULT_FILE:-}" ] && printf '{"exitCode":0,"finalReview":"review-HEAD.md"}\n' > "$EDC_RESULT_FILE" ;;
+esac

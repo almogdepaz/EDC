@@ -466,6 +466,7 @@ def child_env(model: str, bin_dir: Path) -> dict:
     """The arm's env: no value mentions this repo (PWD/OLDPWD/_ of the shell
     that started clean.sh would), repo dirs leave PATH, the staged bin leads."""
     repo_forms = {str(REPO_ROOT), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}  # resolved, as invoked
+    repo_forms |= {form.replace(os.sep, "-") for form in repo_forms}  # claude code per-project dirs (session tmp)
     path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not in_repo(d)]
     env = {k: v for k, v in os.environ.items() if not any(form in v for form in repo_forms)}
     for key in ("EDC_RESULTS_FILE", "ENEMY_BIN", "EDC_BENCH_EDC_BIN", "PWD", "OLDPWD"):

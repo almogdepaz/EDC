@@ -482,7 +482,9 @@ class RepoPathTests(ArmDispatchTests):
 
     def test_no_repo_path_reaches_audited_calls(self):
         repo = str(REPO_ROOT)
+        encoded = repo.replace("/", "-")  # claude code's per-project dir form (~/.claude/projects, session tmp)
         decoys = {"PWD": str(BENCHMARK_DIR), "OLDPWD": repo, "DECOY_REPO_PATH": repo + "/x",
+                  "DECOY_ENCODED_PATH": f"/private/tmp/claude-501/{encoded}/session",
                   "PATH": f"{BENCHMARK_DIR / 'clean-bin'}:{self.fakes}:{os.environ['PATH']}"}
         for arm in ("edc-module", "edc-review-skill", "edc-security", "enemy-3"):
             with self.subTest(arm=arm):
@@ -495,6 +497,7 @@ class RepoPathTests(ArmDispatchTests):
                     self.assertNotIn(repo, call["cwd"])
                     for key, value in call["env"].items():
                         self.assertNotIn(repo, value, key)
+                        self.assertNotIn(encoded, value, key)
                     staged = Path(call["env"]["PATH"].split(os.pathsep)[0])
                     self.assertIn(self.work.resolve(), staged.parents)
                     self.assertEqual(staged.name, "clean-bin")

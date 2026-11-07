@@ -9,11 +9,37 @@ FAKE_CLAUDE_READ: comma-separated paths to emit Read tool_uses for (ok flow);
 FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin,
   commits, files}); commits/files record the cwd's git commit count and its
   top-level files at call time (the harness deletes the snapshot afterwards).
+FAKE_CLAUDE_ANCESTORS_UNTIL: a pid; the log line also gets "ancestors": this
+  process and each parent below that pid, with its exec-time argv+env strings
+  (sysctl KERN_PROCARGS2, what `ps -E` shows) and its cwd/fd paths (lsof).
 A `--output-format json` call is answered as score.py's judge (verdict exact).
 In ok mode it writes edc-context/reports/issues.md in cwd and emits a
 stream-json result event.
 """
-import json, os, subprocess, sys
+import ctypes, json, os, struct, subprocess, sys
+
+
+def _sysctl(mib, size):
+    libc = ctypes.CDLL(None, use_errno=True)
+    buf, n = ctypes.create_string_buffer(size), ctypes.c_size_t(size)
+    if libc.sysctl((ctypes.c_int * len(mib))(*mib), len(mib), buf, ctypes.byref(n), None, 0) != 0:
+        raise OSError(ctypes.get_errno(), "sysctl")
+    return buf.raw[:n.value]
+
+
+def ancestors(stop):
+    """[{pid, strings, files}] from this process up to (excluding) stop (macOS)."""
+    out, pid = [], os.getpid()
+    while pid > 1 and pid != stop:
+        raw = _sysctl([1, 49, pid], 1 << 20)  # CTL_KERN, KERN_PROCARGS2: argc, exec path, argv, env
+        strings = [s.decode(errors="replace") for s in raw[4:].split(b"\0") if s]
+        lsof = subprocess.run(["lsof", "-p", str(pid), "-a", "-d", "cwd,0-9", "-Fn"], capture_output=True, text=True)
+        files = [line[1:] for line in lsof.stdout.splitlines() if line.startswith("n")]
+        out.append({"pid": pid, "strings": strings, "files": files})
+        pid = struct.unpack_from("i", _sysctl([1, 14, 1, pid], 648), 560)[0]  # KERN_PROC_PID: kp_eproc.e_ppid
+    return out
+
+
 argv = sys.argv[1:]
 if "--version" in argv:
     print("0.0.0 (fake)"); sys.exit(0)
@@ -22,10 +48,18 @@ log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
 if log:
     with open(log, "a") as fh:
         rev = subprocess.run(["git", "rev-list", "--all"], capture_output=True, text=True)
-        files = {n: open(n, errors="replace").read() for n in sorted(os.listdir(".")) if os.path.isfile(n)}
+        files = {}
+        for n in sorted(os.listdir(".")):
+            if os.path.isfile(n):
+                try:
+                    files[n] = open(n, errors="replace").read()
+                except OSError:  # unreadable files of an unrelated cwd (the judge runs from /)
+                    pass
         fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin,
                              "commits": len(rev.stdout.split()) if rev.returncode == 0 else rev.stderr,
-                             "files": files}) + "\n")
+                             "files": files,
+                             "ancestors": ancestors(int(os.environ["FAKE_CLAUDE_ANCESTORS_UNTIL"]))
+                             if os.environ.get("FAKE_CLAUDE_ANCESTORS_UNTIL") else []}) + "\n")
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json":
     # score.py judge call

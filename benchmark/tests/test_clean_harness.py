@@ -747,6 +747,38 @@ class HarnessPathTests(ArmDispatchTests):
                     self.assertTrue((out / "calls-build").is_dir())
                     self.assertTrue((out / "edc-result.json").is_file())
 
+    def test_audited_agent_ancestors_expose_no_harness_inputs(self):
+        # 041 review P3/P1: `ps -E` / lsof on the agent's ancestors (harness, arm wrappers) must not
+        # show the repo, the gt root, the entry, the arm or the results tree (argv, env, cwd, open fds)
+        for arm, entry in (("edc-module", "CVE-2099-0001"), ("edc-security", "PLANT-proj-01"),
+                           ("enemy-3", "CVE-2099-0001"), ("edc-review-skill", "PLANT-proj-01")):
+            with self.subTest(arm=arm):
+                (self.root / "claude-argv.jsonl").unlink(missing_ok=True)
+                self.run_arm(arm, entry=entry, env=self.env(FAKE_CLAUDE_ANCESTORS_UNTIL=str(os.getpid())))
+                calls = self.claude_calls()
+                self.assertTrue(calls)
+                leaks = (str(REPO_ROOT), os.path.realpath(REPO_ROOT), str(self.gt_root), entry, arm, "/results/")
+                for call in calls:
+                    self.assertGreaterEqual(len(call["ancestors"]), 3)  # fake, wrapper, ..., harness
+                    found = [(proc["strings"][:2], value[:200]) for proc in call["ancestors"]
+                             for value in proc["strings"] + proc["files"] if any(leak in value for leak in leaks)]
+                    self.assertEqual(found, [])
+
+    def test_reexec_keeps_relative_inputs_and_removes_args_file(self):
+        tmp = self.root / "tmpdir"
+        tmp.mkdir()
+        results = self.root / "iso" / "rel.tsv"
+        cmd = ["bash", str(CLEAN_SH), "--arm", "edc-module", "--gt-root", os.path.relpath(self.gt_root, self.root),
+               "--project", "proj", "--entry", "CVE-2099-0001", "--skip-judge", "--work-dir", "w"]
+        env = self.env(TMPDIR=str(tmp), EDC_RESULTS_FILE=os.path.relpath(results, self.root))
+        proc = subprocess.run(cmd, env=env, cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        with results.open(newline="") as fh:
+            (row,) = csv.DictReader(fh, delimiter="\t")
+        self.assertEqual(row["outcome"], "exact")
+        self.assertTrue(Path(row["out_dir"]).is_relative_to(self.root.resolve() / "w"))
+        self.assertEqual(list(tmp.iterdir()), [])
+
     def test_run_dirs_are_removed_after_scoring(self):
         for arm in ("edc-module", "edc-review-skill"):
             with self.subTest(arm=arm):

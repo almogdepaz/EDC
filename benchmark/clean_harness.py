@@ -7,9 +7,10 @@ One run = one arm x one ground-truth entry x one repetition:
   2. run the arm against it with a staged copy of clean-bin/ first on PATH
      (call logging and, for enemy, the `agent` shim); no path into this repo
      reaches the arm's PATH, argv, cwd or env. What the arm writes through
-     env paths (call logs, EDC_RESULT_FILE) goes to an opaque
+     env paths (call logs, EDC_RESULT_FILE) or its stdout/stderr goes to an opaque
      <work>/io/<id>/ dir, so the env names neither the entry, the arm nor
-     the results tree;
+     the results tree. The harness, an ancestor of the agent, re-execs
+     itself (reexec) so its own argv, env and cwd carry none of its inputs;
   3. score the report (judge_report: score.py's judge without its keyword
      gate; plants are judged at file:line), detect blocked runs from the
      structured call logs (clean_blocked.py) and scan them for tool access
@@ -36,6 +37,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -256,7 +258,8 @@ class Run:
     def __init__(self, args, entry, model, snap, out, work, env, bin_dir, io):
         self.args, self.entry, self.model = args, entry, model
         self.snap, self.out, self.work, self.env, self.bin = snap, out, work, env, bin_dir
-        self.io = io  # paths the arm learns from its env live here (opaque; moved into out after the run)
+        # paths the arm can learn (env, its stdio fds via lsof) live here: opaque, moved into out after the run
+        self.io = io
         self.files = entry["affected_files"]
         self.calls = io / "calls"
         self.plugin = stage_plugin(work)
@@ -276,7 +279,7 @@ class Run:
 
     def single_call(self, arm, cmd, cwd, report_candidates):
         r = self.result
-        stdout, stderr = self.out / "arm-stdout.jsonl", self.out / "arm-stderr.log"
+        stdout, stderr = self.io / "arm-stdout.jsonl", self.io / "arm-stderr.log"
         rc, r["duration"], r["timed_out"] = run_logged(cmd, cwd, self.arm_env(self.calls), self.timeout(arm),
                                                        stdout, stderr)
         r["arm_exit"], r["text_logs"] = rc, [stderr]
@@ -342,9 +345,9 @@ class Run:
             build_cmd += ignores
         rc, r["build_duration"], timed_out = run_logged(
             build_cmd, self.snap, self.arm_env(build_calls), self.timeout("edc-security"),
-            self.out / "build-stdout.log", self.out / "build-stderr.log")
+            self.io / "build-stdout.log", self.io / "build-stderr.log")
         r["build_calls"] = call_count(build_calls)
-        r["text_logs"] = [self.out / "build-stdout.log", self.out / "build-stderr.log"]
+        r["text_logs"] = [self.io / "build-stdout.log", self.io / "build-stderr.log"]
         if rc != 0 or timed_out:
             r["arm_exit"], r["timed_out"] = f"build:{rc}", timed_out
             r["notes"].append("edc build failed; review skipped")
@@ -354,9 +357,9 @@ class Run:
                       "--no-context-refresh", *ignores]
         rc, r["duration"], r["timed_out"] = run_logged(
             review_cmd, self.snap, self.arm_env(self.calls, EDC_RESULT_FILE=str(result_file)),
-            self.timeout("edc-security"), self.out / "review-stdout.log", self.out / "review-stderr.log")
+            self.timeout("edc-security"), self.io / "review-stdout.log", self.io / "review-stderr.log")
         r["arm_exit"] = rc
-        r["text_logs"] += [self.out / "review-stdout.log", self.out / "review-stderr.log"]
+        r["text_logs"] += [self.io / "review-stdout.log", self.io / "review-stderr.log"]
         report = None
         try:
             final = json.loads(result_file.read_text()).get("finalReview")
@@ -380,7 +383,7 @@ class Run:
             # enemy audit takes a single positional target.
             cmd += ["--instructions",
                     "Also audit these files as part of the primary scope: " + ", ".join(self.files[1:])]
-        stdout, stderr = self.out / "enemy-stdout.log", self.out / "enemy-stderr.log"
+        stdout, stderr = self.io / "enemy-stdout.log", self.io / "enemy-stderr.log"
         rc, r["duration"], r["timed_out"] = run_logged(cmd, self.snap, self.arm_env(self.calls),
                                                        self.timeout("enemy-3"), stdout, stderr)
         r["arm_exit"], r["text_logs"] = rc, [stdout, stderr]
@@ -670,7 +673,10 @@ def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
 
 
 def main(argv=None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    return run_cli(parse_args(sys.argv[1:] if argv is None else argv))
+
+
+def run_cli(args) -> int:
     if args.arm == "edc-deep":
         print("edc-deep: not implemented until p4", file=sys.stderr)
         return 2
@@ -684,5 +690,45 @@ def main(argv=None) -> int:
     return 0
 
 
+# The harness is an ancestor of every audited agent, whose `ps -E` / lsof show the harness's exec-time
+# argv, env and cwd: the repo path, --gt-root, --entry, EDC_RESULTS_FILE, PWD. So the script entry point
+# re-execs itself with those inputs in a private temp file (unlinked on read), a locale-only env and cwd /.
+BOOT = ("import json,os,sys;p=sys.argv[1];a=json.load(open(p));os.unlink(p);"
+        "sys.path.insert(0,a['dir']);import clean_harness;sys.exit(clean_harness.boot(a))")
+EXEC_ENV_KEYS = ("LANG", "LC_ALL", "LC_CTYPE")
+PATH_ARGS = ("gt_root", "work_dir", "out_dir")
+PATH_ENV_KEYS = ("EDC_RESULTS_FILE", "EDC_BENCH_WORKDIR", "ENEMY_BIN", "EDC_BENCH_EDC_BIN")
+
+
+def reexec(argv) -> None:
+    fd, path = tempfile.mkstemp(prefix=".clean-args-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "dir": str(BENCHMARK_DIR)}, fh)
+    try:
+        os.execve(sys.executable, [sys.executable, "-I", "-c", BOOT, path],
+                  {k: os.environ[k] for k in EXEC_ENV_KEYS if k in os.environ})
+    except OSError:
+        os.unlink(path)
+        raise
+
+
+def boot(saved: dict) -> int:
+    """Second stage of reexec: restore the caller's env, make relative path
+    inputs absolute against its cwd, then run from /."""
+    os.environ.clear()
+    os.environ.update(saved["env"])
+    os.chdir(saved["cwd"])
+    args = parse_args(saved["argv"])
+    for key in PATH_ARGS:
+        if getattr(args, key) is not None:
+            setattr(args, key, getattr(args, key).absolute())
+    for key in PATH_ENV_KEYS:
+        value = os.environ.get(key)
+        if value and os.sep in value:  # a bare ENEMY_BIN name stays a PATH lookup
+            os.environ[key] = os.path.abspath(value)
+    os.chdir("/")
+    return run_cli(args)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    reexec(sys.argv[1:])

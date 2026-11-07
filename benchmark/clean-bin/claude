@@ -4,6 +4,13 @@
 # without this dir on PATH). For `-p/--print` calls with
 # EDC_BENCH_CALL_LOG_DIR set it keeps stdout (stream-json), stderr, argv and
 # the exit code per call; model_calls = number of *.argv files.
+#
+# Isolation: every `-p` call is an audited agent call, so it gets
+# `--setting-sources $EDC_BENCH_SETTING_SOURCES` (set by clean_harness.py)
+# prepended, keeping user ~/.claude settings, hooks, plugins, permission
+# rules and CLAUDE.md out of the agent. Prepended, not appended: callers
+# may end with a variadic option such as --allowed-tools. A caller-supplied
+# --setting-sources is refused rather than silently overridden.
 set -uo pipefail
 real="${EDC_BENCH_REAL_CLAUDE:?clean-bin/claude: EDC_BENCH_REAL_CLAUDE not set}"
 log_dir="${EDC_BENCH_CALL_LOG_DIR:-}"
@@ -11,7 +18,19 @@ is_print=0
 for arg in "$@"; do
   case "$arg" in -p|--print) is_print=1; break ;; esac
 done
-if [ -z "$log_dir" ] || [ "$is_print" -eq 0 ]; then
+if [ "$is_print" -eq 0 ]; then
+  exec "$real" "$@"
+fi
+sources="${EDC_BENCH_SETTING_SOURCES:?clean-bin/claude: EDC_BENCH_SETTING_SOURCES not set}"
+for arg in "$@"; do
+  case "$arg" in
+    --setting-sources|--setting-sources=*)
+      echo "clean-bin/claude: caller passed --setting-sources; the harness owns it" >&2
+      exit 2 ;;
+  esac
+done
+set -- --setting-sources "$sources" "$@"
+if [ -z "$log_dir" ]; then
   exec "$real" "$@"
 fi
 mkdir -p "$log_dir"

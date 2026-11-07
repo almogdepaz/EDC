@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -255,9 +256,9 @@ class ArmDispatchTests(Fixture):
         env.update(extra)
         return env
 
-    def run_arm(self, arm, entry="CVE-2099-0001", env=None, check=True):
+    def run_arm(self, arm, entry="CVE-2099-0001", env=None, check=True, judge=False):
         cmd = ["bash", str(CLEAN_SH), "--arm", arm, "--gt-root", str(self.gt_root), "--project", "proj",
-               "--entry", entry, "--skip-judge"]
+               "--entry", entry, *([] if judge else ["--skip-judge"])]
         proc = subprocess.run(cmd, env=env or self.env(), capture_output=True, text=True)
         if check:
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -341,9 +342,12 @@ class ArmDispatchTests(Fixture):
         cargv = call["argv"]
         self.assertEqual(cargv[cargv.index("--model") + 1], "fake-model")
         self.assertIn("stream-json", cargv)
-        allowed = cargv[cargv.index("--allowedTools") + 1:]
-        self.assertFalse(any("git" in t.lower() or "Web" in t or "Bash" == t for t in allowed), allowed)
-        self.assertEqual(cargv[cargv.index("--disallowedTools") + 1], "WebFetch WebSearch")
+        # only ls/wc are pre-approved; unscoped Read/Write/Edit rules would allow absolute paths outside
+        # the workspace, so file tools rely on the default working-directory confinement (acceptEdits)
+        self.assertEqual(cargv[cargv.index("--allowedTools") + 1:], ["Bash(ls:*)", "Bash(wc:*)"])
+        self.assertEqual(cargv[cargv.index("--permission-mode") + 1], "acceptEdits")
+        self.assertEqual(cargv[cargv.index("--disallowedTools") + 1], "WebFetch WebSearch Bash(git:*)")
+        self.assertEqual(cargv[cargv.index("--tools") + 1], "Read,Write,Edit,Bash")
         self.assertIn("--strict-mcp-config", cargv)
         self.assertEqual(call["stdin"].strip(), "pass 2 prompt")
         self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(snap))
@@ -411,10 +415,63 @@ class ResultsIsolationTests(ArmDispatchTests):
                 self.assertEqual(self.claude_calls(), [])
 
 
-# ArmDispatchTests' tests should not run twice through the subclass.
-for _name in [n for n in dir(ArmDispatchTests) if n.startswith("test_")]:
-    if _name not in ResultsIsolationTests.__dict__:
-        setattr(ResultsIsolationTests, _name, None)
+ISOLATION_FLAG = ["--setting-sources", "project,local"]
+
+
+class SettingSourcesTests(ArmDispatchTests):
+    """Every audited `claude -p` call loads only project/local settings; the judge is not audited."""
+
+    def assert_isolated_calls(self, calls, expected):
+        self.assertEqual(len(calls), expected, calls)
+        for call in calls:
+            self.assertEqual(call["argv"][:2], ISOLATION_FLAG, call["argv"])
+            self.assertEqual(call["argv"].count("--setting-sources"), 1, call["argv"])
+
+    def test_flag_reaches_every_audited_call(self):
+        # edc-security: the build call and the review call are both made by edc itself
+        for arm, expected in (("edc-module", 1), ("edc-review-skill", 1), ("edc-security", 2), ("enemy-3", 1)):
+            with self.subTest(arm=arm):
+                (self.root / "claude-argv.jsonl").unlink(missing_ok=True)
+                self.run_arm(arm)
+                self.assert_isolated_calls(self.claude_calls(), expected)
+                self.assertEqual(self.record(arm)["isolation"], "setting-sources=project,local")
+
+    def test_judge_call_is_not_isolated(self):
+        self.run_arm("edc-module", judge=True)
+        calls = self.claude_calls()
+        judge = [c for c in calls if "--output-format" in c["argv"]
+                 and c["argv"][c["argv"].index("--output-format") + 1] == "json"]
+        self.assertEqual(len(judge), 1, calls)
+        self.assertNotIn("--setting-sources", judge[0]["argv"])
+        self.assert_isolated_calls([c for c in calls if c not in judge], 1)
+        self.assertEqual(self.record("edc-module")["verdict"], "exact")
+
+    def wrapper(self, *args, **env):
+        full = {**os.environ, "EDC_BENCH_REAL_CLAUDE": str(FAKES / "claude"),
+                "FAKE_CLAUDE_ARGV_LOG": str(self.root / "claude-argv.jsonl"), **env}
+        full.pop("EDC_BENCH_CALL_LOG_DIR", None)
+        return subprocess.run([str(BENCHMARK_DIR / "clean-bin" / "claude"), *args], env=full,
+                              capture_output=True, text=True, cwd=self.root)
+
+    def test_wrapper_refuses_print_call_without_isolation_setting(self):
+        env = {k: v for k, v in os.environ.items() if k != "EDC_BENCH_SETTING_SOURCES"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            proc = self.wrapper("-p", "hi")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertEqual(self.claude_calls(), [])
+
+    def test_wrapper_refuses_caller_setting_sources(self):
+        proc = self.wrapper("-p", "--setting-sources", "user", "hi", EDC_BENCH_SETTING_SOURCES="project,local")
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--setting-sources", proc.stderr)
+        self.assertEqual(self.claude_calls(), [])
+
+
+# ArmDispatchTests' tests should not run twice through the subclasses.
+for _cls in (ResultsIsolationTests, SettingSourcesTests):
+    for _name in [n for n in dir(ArmDispatchTests) if n.startswith("test_")]:
+        if _name not in _cls.__dict__:
+            setattr(_cls, _name, None)
 
 
 if __name__ == "__main__":

@@ -48,12 +48,17 @@ ENEMY_MAX_PASSES = "3"
 # Web tools are disallowed in every arm the harness controls; the legacy
 # allowed-tool sets are otherwise unchanged.
 DISALLOWED_TOOLS = "WebFetch WebSearch"
+# Setting sources for every audited `claude -p` call (injected by
+# clean-bin/claude, recorded as `isolation`). User settings are excluded;
+# the judge (score.py) runs outside the wrapper and is not affected.
+SETTING_SOURCES = "project,local"
+ISOLATION = f"setting-sources={SETTING_SOURCES}"
 
 RECORD_FIELDS = [
     "timestamp", "run_id", "arm", "project", "entry", "kind", "run", "model", "outcome", "verdict",
     "confidence", "duration_s", "build_duration_s", "model_calls", "build_model_calls", "passes_run",
     "loop_end", "arm_exit", "blocked", "blocked_signal", "cve_ids_named", "build_scope",
-    "snapshot_commit", "report", "out_dir", "notes",
+    "isolation", "snapshot_commit", "report", "out_dir", "notes",
 ]
 
 # --- prompts (verbatim from the legacy runners) -------------------------------
@@ -435,6 +440,7 @@ def child_env(model: str) -> dict:
         raise HarnessError("claude not found on PATH")
     env["PATH"] = os.pathsep.join([str(CLEAN_BIN), *path_dirs])
     env["EDC_BENCH_REAL_CLAUDE"] = real
+    env["EDC_BENCH_SETTING_SOURCES"] = SETTING_SOURCES
     for key in ("EDC_BENCH_MODEL", "EDC_BUILD_MODEL", "EDC_REVIEW_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
         env[key] = model
     return env
@@ -493,6 +499,7 @@ def run(args) -> dict:
         "blocked": "yes" if blocked else "no", "blocked_signal": signal_,
         "cve_ids_named": ",".join(named),
         "build_scope": args.build_scope if args.arm == "edc-security" else "",
+        "isolation": ISOLATION,
         "snapshot_commit": snapshot_commit, "report": res["report"], "out_dir": str(out),
         "notes": "; ".join([*res["notes"], notes]),
     }

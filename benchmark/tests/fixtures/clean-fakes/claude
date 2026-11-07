@@ -3,6 +3,7 @@
 
 FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block
 FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, stdin}).
+A `--output-format json` call is answered as score.py's judge (verdict exact).
 In ok mode it writes edc-context/reports/issues.md in cwd and emits a
 stream-json result event.
 """
@@ -16,6 +17,11 @@ if log:
     with open(log, "a") as fh:
         fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": stdin}) + "\n")
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json":
+    # score.py judge call
+    print(json.dumps({"type": "result", "result":
+                      'QUOTE: x\nVERDICT_JSON: {"verdict": "exact", "confidence": 0.9, "explanation": "fake judge"}'}))
+    sys.exit(0)
 def emit(obj):
     print(json.dumps(obj), flush=True)
 emit({"type": "system", "subtype": "init", "session_id": "fake"})

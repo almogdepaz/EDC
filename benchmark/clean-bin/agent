@@ -4,8 +4,17 @@
 #   [--model M] [--force] --sandbox enabled|disabled [--approve-mcps]
 # with the prompt on stdin. The model follows EDC_BENCH_MODEL (enemy's
 # --model is ignored). Tools: read/write in the workspace plus ls/wc; no git,
-# no web tools, no MCP servers. Raw stream-json goes to the clean-bin/claude
-# call log; enemy sees the result text.
+# no web tools, no MCP servers. --tools limits the available set (no Task,
+# Workflow, SendMessage, ...; claude 2.1.319 has no Grep/Glob tools, search
+# goes through Bash). Only ls/wc are pre-approved: Read inside the working
+# directory needs no rule and acceptEdits approves Write/Edit there, while an
+# unscoped Read/Write/Edit rule would also approve absolute paths outside it.
+# Claude Code still auto-approves Bash commands it classifies as read-only
+# (cat, grep, git log, ...), so git is denied explicitly. Other commands need
+# approval, which -p denies (user settings, e.g. a sandbox auto-allow, are
+# excluded by clean-bin/claude).
+# Raw stream-json goes to the clean-bin/claude call log; enemy sees the
+# result text.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
@@ -24,7 +33,8 @@ done
 cd "$workspace" || exit 2
 claude -p --model "${EDC_BENCH_MODEL:-claude-opus-5-5}" --output-format stream-json --verbose \
   --permission-mode acceptEdits --strict-mcp-config \
-  --disallowedTools "WebFetch WebSearch" \
-  --allowedTools Read Grep Glob Write Edit "Bash(ls:*)" "Bash(wc:*)" \
+  --tools "Read,Write,Edit,Bash" \
+  --disallowedTools "WebFetch WebSearch Bash(git:*)" \
+  --allowedTools "Bash(ls:*)" "Bash(wc:*)" \
   | python3 "$here/../clean_stream_text.py"
 exit "${PIPESTATUS[0]}"

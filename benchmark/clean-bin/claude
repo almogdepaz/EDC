@@ -8,8 +8,10 @@
 # Isolation: every `-p` call is an audited agent call, so it gets
 # `--setting-sources $EDC_BENCH_SETTING_SOURCES` (set by clean_harness.py)
 # prepended, keeping user ~/.claude settings, hooks, plugins, permission
-# rules and CLAUDE.md out of the agent. Prepended, not appended: callers
-# may end with a variadic option such as --allowed-tools. A caller-supplied
+# rules and CLAUDE.md out of the agent, plus --strict-mcp-config (unless the
+# caller passed it), because account-level claude.ai MCP connectors still
+# load under --setting-sources. Prepended, not appended: callers may end with
+# a variadic option such as --allowed-tools. A caller-supplied
 # --setting-sources is refused rather than silently overridden.
 set -uo pipefail
 real="${EDC_BENCH_REAL_CLAUDE:?clean-bin/claude: EDC_BENCH_REAL_CLAUDE not set}"
@@ -22,14 +24,16 @@ if [ "$is_print" -eq 0 ]; then
   exec "$real" "$@"
 fi
 sources="${EDC_BENCH_SETTING_SOURCES:?clean-bin/claude: EDC_BENCH_SETTING_SOURCES not set}"
+strict_mcp=(--strict-mcp-config)
 for arg in "$@"; do
   case "$arg" in
     --setting-sources|--setting-sources=*)
       echo "clean-bin/claude: caller passed --setting-sources; the harness owns it" >&2
       exit 2 ;;
+    --strict-mcp-config) strict_mcp=() ;;
   esac
 done
-set -- --setting-sources "$sources" "$@"
+set -- --setting-sources "$sources" ${strict_mcp[@]+"${strict_mcp[@]}"} "$@"
 if [ -z "$log_dir" ]; then
   exec "$real" "$@"
 fi

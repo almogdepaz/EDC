@@ -48,11 +48,11 @@ ENEMY_MAX_PASSES = "3"
 # Web tools are disallowed in every arm the harness controls; the legacy
 # allowed-tool sets are otherwise unchanged.
 DISALLOWED_TOOLS = "WebFetch WebSearch"
-# Setting sources for every audited `claude -p` call (injected by
-# clean-bin/claude, recorded as `isolation`). User settings are excluded;
-# the judge (score.py) runs outside the wrapper and is not affected.
+# Setting sources for every audited `claude -p` call. clean-bin/claude
+# injects them together with --strict-mcp-config; both are recorded as
+# `isolation`. The judge (score.py) runs outside the wrapper, unaffected.
 SETTING_SOURCES = "project,local"
-ISOLATION = f"setting-sources={SETTING_SOURCES}"
+ISOLATION = f"setting-sources={SETTING_SOURCES};strict-mcp-config"
 
 RECORD_FIELDS = [
     "timestamp", "run_id", "arm", "project", "entry", "kind", "run", "model", "outcome", "verdict",

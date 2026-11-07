@@ -426,6 +426,8 @@ class SettingSourcesTests(ArmDispatchTests):
         for call in calls:
             self.assertEqual(call["argv"][:2], ISOLATION_FLAG, call["argv"])
             self.assertEqual(call["argv"].count("--setting-sources"), 1, call["argv"])
+            # account-level claude.ai MCP connectors survive --setting-sources
+            self.assertEqual(call["argv"].count("--strict-mcp-config"), 1, call["argv"])
 
     def test_flag_reaches_every_audited_call(self):
         # edc-security: the build call and the review call are both made by edc itself
@@ -434,7 +436,7 @@ class SettingSourcesTests(ArmDispatchTests):
                 (self.root / "claude-argv.jsonl").unlink(missing_ok=True)
                 self.run_arm(arm)
                 self.assert_isolated_calls(self.claude_calls(), expected)
-                self.assertEqual(self.record(arm)["isolation"], "setting-sources=project,local")
+                self.assertEqual(self.record(arm)["isolation"], "setting-sources=project,local;strict-mcp-config")
 
     def test_judge_call_is_not_isolated(self):
         self.run_arm("edc-module", judge=True)
@@ -443,6 +445,7 @@ class SettingSourcesTests(ArmDispatchTests):
                  and c["argv"][c["argv"].index("--output-format") + 1] == "json"]
         self.assertEqual(len(judge), 1, calls)
         self.assertNotIn("--setting-sources", judge[0]["argv"])
+        self.assertNotIn("--strict-mcp-config", judge[0]["argv"])
         self.assert_isolated_calls([c for c in calls if c not in judge], 1)
         self.assertEqual(self.record("edc-module")["verdict"], "exact")
 

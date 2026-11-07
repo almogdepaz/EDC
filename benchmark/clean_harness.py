@@ -10,7 +10,8 @@ One run = one arm x one ground-truth entry x one repetition:
      env paths (call logs, EDC_RESULT_FILE) goes to an opaque
      <work>/io/<id>/ dir, so the env names neither the entry, the arm nor
      the results tree;
-  3. score the report with score.score_cve, detect blocked runs from the
+  3. score the report (judge_report: score.py's judge without its keyword
+     gate; plants are judged at file:line), detect blocked runs from the
      structured call logs (clean_blocked.py) and scan them for tool access
      outside the run's roots (clean_access.py; `contaminated` outcome; the
      results tree, the results-file dir and other runs' snap/flat/io dirs
@@ -421,6 +422,36 @@ def preflight_enemy() -> None:
                            "and point ENEMY_BIN at it")
 
 
+# --- scoring ------------------------------------------------------------------
+
+def judge_report(report_text: str, entry: dict, skip_judge: bool) -> tuple[str, float, str]:
+    """score.score_cve for the clean harness: every non-empty report goes to
+    the judge. score_cve's keyword gate (score.py KEYWORD_THRESHOLD) drops
+    correct findings whose category has no CATEGORY_KEYWORDS entry (most p2
+    entries), so the keyword score is only recorded in notes. --skip-judge
+    keeps score_cve's keyword-only scoring. A plant's `line` goes to the judge
+    with the bug pattern (not into affected files: the judge's LOCATE step
+    searches the report for those names)."""
+    import score  # judge uses the harness env (real claude, not the call logger)
+    files = ", ".join(entry["affected_files"])
+    bug_pattern, category = entry.get("bug_pattern", ""), entry.get("category", "")
+    if not report_text.strip():
+        return "missed", 0.0, "no issues file"
+    if skip_judge:
+        return score.score_cve(report_text, entry["id"], bug_pattern, category, entry.get("description", ""),
+                               files, skip_judge=True)
+    _, kw_notes = score.keyword_score(report_text, bug_pattern, category, files)
+    judged_pattern = bug_pattern
+    if entry.get("line"):
+        judged_pattern += (f" (planted at {entry['affected_files'][0]}:{entry['line']}; "
+                           "line numbers refer to the reviewed tree)")
+    verdict, confidence, explanation = score.llm_judge(report_text, entry["id"], judged_pattern, category,
+                                                       entry.get("description", ""), files)
+    if verdict == "judge_error":  # same notes shape as score_cve
+        return "judge_error", 0.0, f"judge_error({explanation}); keywords({kw_notes})"
+    return verdict, confidence, f"judge: {explanation}; keywords({kw_notes})"
+
+
 # --- record -------------------------------------------------------------------
 
 def check_record_header(path: Path) -> None:
@@ -611,10 +642,7 @@ def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
     forbidden = [work / "cache", work / "results", work / "snap", work / "flat", work / "io", r.out,
                  results_path.parent]
     outside, contaminated = scan_access(logs, [r.snap, r.plugin, *r.scratch, r.io], forbidden=forbidden)
-    import score  # judge uses the harness env (real claude, not the call logger)
-    verdict, confidence, notes = score.score_cve(
-        res["report_text"], entry["id"], entry.get("bug_pattern", ""), entry.get("category", ""),
-        entry.get("description", ""), ", ".join(entry["affected_files"]), skip_judge=args.skip_judge)
+    verdict, confidence, notes = judge_report(res["report_text"], entry, args.skip_judge)
     if contaminated:  # the agent may have seen the answer; p3 excludes these from recall
         outcome = "contaminated"
     elif blocked:

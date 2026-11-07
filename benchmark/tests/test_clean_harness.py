@@ -678,6 +678,48 @@ class ContaminationRecordTests(ArmDispatchTests):
                 self.assertIn(f"Read {gt}", row["outside_access"])
 
 
+class JudgeTests(ArmDispatchTests):
+    """041 review P2: no keyword gate before the judge; plants are judged at file:line."""
+
+    def judge_calls(self):
+        return [c for c in self.claude_calls() if "--output-format" in c["argv"]
+                and c["argv"][c["argv"].index("--output-format") + 1] == "json"]
+
+    def test_report_without_category_keywords_reaches_judge(self):
+        # p2-style entry: category has no CATEGORY_KEYWORDS key, bug_pattern words absent from the report
+        gt = self.gt_root / "proj" / "ground-truth.md"
+        gt.write_text(gt.read_text()
+                      .replace("- **category:** heap-buffer-overflow", "- **category:** integer-narrowing")
+                      .replace("hostname length check bypassed, overflow on copy",
+                               "size field narrowed before the bounds comparison"))
+        entry = clean_gt.find_entry(gt, "CVE-2099-0001")
+        report = "# issues\n\n## heap buffer overflow in a.c\n- a.c:3 hostname length check bypassed\n"
+        import score
+        self.assertTrue(score.score_cve(report, entry["id"], entry["bug_pattern"], entry["category"],
+                                        entry["description"], "a.c")[2].startswith("keyword_filter("))
+        self.run_arm("edc-module", judge=True)
+        (judge,) = self.judge_calls()
+        self.assertIn("size field narrowed before the bounds comparison", judge["argv"][judge["argv"].index("-p") + 1])
+        row = self.record("edc-module")
+        self.assertEqual((row["outcome"], row["verdict"]), ("exact", "exact"))
+        self.assertIn("keywords(", row["notes"])
+
+    def test_plant_line_reaches_judge(self):
+        self.run_arm("edc-module", entry="PLANT-proj-01", judge=True)
+        (judge,) = self.judge_calls()
+        prompt = judge["argv"][judge["argv"].index("-p") + 1]
+        self.assertIn("boundary comparison accepts zero", prompt)
+        self.assertIn("b.c:2", prompt)
+        self.assertNotIn("b.c:2", prompt.split("Affected files:")[1].splitlines()[0])  # LOCATE searches file names
+
+    def test_empty_report_skips_judge(self):
+        import score
+        entry = clean_gt.find_entry(self.gt_root / "proj" / "ground-truth.md", "CVE-2099-0001")
+        with unittest.mock.patch.object(score, "llm_judge", side_effect=AssertionError("judge called")):
+            for text in ("", "  \n"):
+                self.assertEqual(clean_harness.judge_report(text, entry, skip_judge=False)[:2], ("missed", 0.0))
+
+
 class HarnessPathTests(ArmDispatchTests):
     """041 review P1/P4: harness-owned paths neither leak to the agent nor go unflagged."""
 
@@ -726,7 +768,8 @@ class HarnessPathTests(ArmDispatchTests):
         for label, path in cases.items():
             with self.subTest(label):
                 self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_READ=path, EDC_RESULTS_FILE=str(results)))
-                row = [r for r in csv.DictReader(results.open(newline=""), delimiter="\t")][-1]
+                with results.open(newline="") as fh:
+                    row = list(csv.DictReader(fh, delimiter="\t"))[-1]
                 self.assertEqual(row["outcome"], "contaminated", row["outside_access"])
                 self.assertIn(f"Read {path}", row["outside_access"])
 
@@ -843,7 +886,8 @@ class AccessScanTests(unittest.TestCase):
 
 
 # ArmDispatchTests' tests should not run twice through the subclasses.
-for _cls in (ResultsIsolationTests, SettingSourcesTests, RepoPathTests, ContaminationRecordTests, HarnessPathTests):
+for _cls in (ResultsIsolationTests, SettingSourcesTests, RepoPathTests, ContaminationRecordTests, HarnessPathTests,
+             JudgeTests):
     for _name in [n for n in dir(ArmDispatchTests) if n.startswith("test_")]:
         if _name not in _cls.__dict__:
             setattr(_cls, _name, None)

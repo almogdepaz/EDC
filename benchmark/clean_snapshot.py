@@ -3,9 +3,13 @@
 
 A snapshot is a fresh one-commit git repo whose tree is the vulnerable state:
   cve     -> tree of fix_commit~1
-  planted -> tree of base_commit with the entry's patch applied (git apply)
+  planted -> tree of base_commit with the entry's patch applied to the index
+             before extraction (git apply --cached), so the plant is written
+             like every other file
 The source history lives only in a partial-clone cache outside the snapshot;
 no object from the cache is reachable from (or stored in) the snapshot.
+Every file and dir outside .git gets the same mtime, so `ls -lt` /
+`find -newer` cannot single out the planted (or any) file.
 """
 
 import os
@@ -20,6 +24,7 @@ SNAPSHOT_IDENTITY = {
     "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "bench@localhost",
     "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
 }
+SNAPSHOT_MTIME = 946684800  # 2000-01-01T00:00:00Z, the snapshot commit date
 
 
 class SnapshotError(RuntimeError):
@@ -82,15 +87,27 @@ def _prefetch_blobs(cache: Path, commit: str) -> None:
              input="\n".join(missing) + "\n")
 
 
-def _extract_tree(cache: Path, commit: str, dest: Path) -> None:
-    """Write commit's tree into dest via a throwaway index (no git archive:
-    export-ignore attributes would silently drop files)."""
+def _extract_tree(cache: Path, commit: str, dest: Path, patch: Path = None) -> None:
+    """Write commit's tree (plus patch, applied to the throwaway index first)
+    into dest via a throwaway index (no git archive: export-ignore attributes
+    would silently drop files)."""
     _prefetch_blobs(cache, commit)
     with tempfile.TemporaryDirectory() as tmp:
         env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
         base = ["--git-dir", str(cache), "--work-tree", str(dest)]
         _git([*base, "read-tree", commit], env=env, isolated=True)
+        if patch is not None:
+            # the patched index is the snapshot tree; checkout-index writes it like any other
+            _git([*base, "apply", "--cached", "--whitespace=nowarn", str(patch)], env=env, isolated=True)
         _git([*base, "checkout-index", "--all", "--force"], env=env, isolated=True)
+
+
+def _uniform_mtimes(dest: Path) -> None:
+    """One mtime for every file, symlink and dir outside .git (deepest first,
+    so setting a child does not disturb its dir afterwards)."""
+    paths = [p for p in dest.rglob("*") if ".git" not in p.relative_to(dest).parts]
+    for path in sorted(paths, key=lambda p: len(p.parts), reverse=True) + [dest]:
+        os.utime(path, (SNAPSHOT_MTIME, SNAPSHOT_MTIME), follow_symlinks=False)
 
 
 def make_snapshot(cache: Path, entry: dict, project_dir: Path, dest: Path) -> str:
@@ -100,15 +117,16 @@ def make_snapshot(cache: Path, entry: dict, project_dir: Path, dest: Path) -> st
         raise SnapshotError(f"snapshot dir not empty: {dest}")
     dest.mkdir(parents=True, exist_ok=True)
     commit = vulnerable_commit(Path(cache), entry)
-    _extract_tree(Path(cache), commit, dest)
-
-    _git(["init", "--quiet", "--template=", "--initial-branch=main"], cwd=dest, isolated=True)
+    patch = None
     if entry["kind"] == "planted":
         project_dir = Path(project_dir).resolve()
         patch = (project_dir / entry["patch"]).resolve()
         if project_dir not in patch.parents or not patch.is_file():
             raise SnapshotError(f"patch {entry['patch']} not found under {project_dir}")
-        _git(["apply", "--whitespace=nowarn", str(patch)], cwd=dest, isolated=True)
+    _extract_tree(Path(cache), commit, dest, patch)
+
+    _git(["init", "--quiet", "--template=", "--initial-branch=main"], cwd=dest, isolated=True)
+    _uniform_mtimes(dest)  # after init (it touches dest), before add (the index records them)
 
     missing = [f for f in entry["affected_files"] if not (dest / f).is_file()]
     if missing:

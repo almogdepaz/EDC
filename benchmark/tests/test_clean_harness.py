@@ -178,6 +178,34 @@ class SnapshotTests(Fixture):
         for later in (self.b, self.c):
             self.assertNotEqual(git(snap, "cat-file", "-e", later, check=False).returncode, 0)
 
+    def assert_uniform_mtimes(self, snap):
+        """No file or dir outside .git stands out by mtime (`ls -lt` / `find -newer`)."""
+        paths = [snap] + [p for p in snap.rglob("*") if ".git" not in p.relative_to(snap).parts]
+        self.assertGreater(len(paths), 5)
+        mtimes = {p.lstat().st_mtime_ns for p in paths}
+        self.assertEqual(len(mtimes), 1, sorted((p.lstat().st_mtime_ns, str(p.relative_to(snap))) for p in paths))
+
+    def test_snapshots_have_uniform_mtimes(self):
+        for entry_id in ("CVE-2099-0001", "PLANT-proj-01"):
+            with self.subTest(entry=entry_id):
+                shutil.rmtree(self.work / "snap", ignore_errors=True)
+                snap = self.snapshot(entry_id)
+                self.assert_uniform_mtimes(snap)
+                self.assertEqual(git(snap, "status", "--porcelain").stdout, "")
+                self.assertEqual(len(git(snap, "rev-list", "--all").stdout.split()), 1)
+
+    def test_planted_snapshot_is_patched_tree(self):
+        """The plant is part of the extracted tree: the snapshot tree is base + patch."""
+        snap = self.snapshot("PLANT-proj-01")
+        self.assertIn("/* planted */", (snap / "b.c").read_text())
+        expected = self.root / "expected"
+        git(self.root, "clone", "-q", str(self.src), str(expected))
+        git(expected, "checkout", "-q", self.a)
+        git(expected, "apply", str(self.gt_root / "proj" / "plants" / "PLANT-proj-01.diff"))
+        git(expected, "add", "-A")
+        self.assertEqual(git(snap, "rev-parse", "HEAD^{tree}").stdout.strip(),
+                         git(expected, "write-tree").stdout.strip())
+
     def test_planted_patch_that_does_not_apply_fails(self):
         (self.gt_root / "proj" / "plants" / "PLANT-proj-01.diff").write_text(PLANT_DIFF.replace("n > 0", "n > 9"))
         with self.assertRaises(clean_snapshot.SnapshotError):

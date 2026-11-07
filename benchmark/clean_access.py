@@ -20,8 +20,9 @@ denies outside paths); a denied attempt exposed nothing and never contaminates.
 An outside access is *contaminating* when its path can expose the answer:
 ground-truth files, a `benchmark/` or `.plans/` dir, an edc checkout
 (`~/Dev/edc*`), Claude Code transcripts of edc sessions
-(`~/.claude/projects/<-home->-Dev-edc*`), or a forbidden root (the harness's
-full-history clone cache). Listing `~/Dev` itself is outside access but not
+(`~/.claude/projects/<-home->-Dev-edc*`), or a forbidden root (the harness
+passes its full-history clone cache, the results tree and results-file dir,
+and the snap/flat/io dirs of other runs). Listing `~/Dev` itself is outside access but not
 contamination; reading into an edc checkout is.
 
 The Bash scan is lexical: `cd` chains, variables other than `$HOME`, globs,

@@ -4,12 +4,16 @@
 FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block | outside_read
   (outside_read: a Read tool_use of ~/Dev/edc/benchmark/curl/ground-truth.md,
   then the ok flow)
-FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin}).
+FAKE_CLAUDE_READ: comma-separated paths to emit Read tool_uses for (ok flow);
+  `$CALLS` expands to EDC_BENCH_CALL_LOG_DIR, `$CWD` to the cwd.
+FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin,
+  commits, files}); commits/files record the cwd's git commit count and its
+  top-level files at call time (the harness deletes the snapshot afterwards).
 A `--output-format json` call is answered as score.py's judge (verdict exact).
 In ok mode it writes edc-context/reports/issues.md in cwd and emits a
 stream-json result event.
 """
-import json, os, sys
+import json, os, subprocess, sys
 argv = sys.argv[1:]
 if "--version" in argv:
     print("0.0.0 (fake)"); sys.exit(0)
@@ -17,7 +21,11 @@ stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
 if log:
     with open(log, "a") as fh:
-        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin}) + "\n")
+        rev = subprocess.run(["git", "rev-list", "--all"], capture_output=True, text=True)
+        files = {n: open(n, errors="replace").read() for n in sorted(os.listdir(".")) if os.path.isfile(n)}
+        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin,
+                             "commits": len(rev.stdout.split()) if rev.returncode == 0 else rev.stderr,
+                             "files": files}) + "\n")
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json":
     # score.py judge call
@@ -39,6 +47,10 @@ if mode == "outside_read":
     gt = os.path.join(os.path.expanduser("~"), "Dev", "edc", "benchmark", "curl", "ground-truth.md")
     emit({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": gt}}]}})
+for i, raw in enumerate(filter(None, os.environ.get("FAKE_CLAUDE_READ", "").split(","))):
+    path = raw.replace("$CALLS", os.environ.get("EDC_BENCH_CALL_LOG_DIR", "")).replace("$CWD", os.getcwd())
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": f"r{i}", "name": "Read", "input": {"file_path": path}}]}})
 os.makedirs("edc-context/reports", exist_ok=True)
 with open("edc-context/reports/issues.md", "w") as fh:
     fh.write("# issues\n\n## heap buffer overflow in a.c\n- severity: critical\n- a.c:3 hostname length check bypassed, overflow on copy into heap buffer\n")

@@ -384,7 +384,7 @@ class ArmDispatchTests(Fixture):
         prompt = argv[argv.index("-p") + 1]
         self.assertIn("Apply the EDC module-context methodology on ONLY these files:  a.c", prompt)
         self.assert_opaque(call["cwd"])
-        self.assertEqual(len(git(call["cwd"], "rev-list", "--all").stdout.split()), 1)
+        self.assertEqual(call["commits"], 1)
         row = self.record("edc-module")
         self.assertEqual((row["arm"], row["outcome"], row["verdict"], row["model_calls"], row["blocked"]),
                          ("edc-module", "exact", "exact", "1", "no"))
@@ -400,8 +400,7 @@ class ArmDispatchTests(Fixture):
         self.assertIn("Use the edc-review methodology. This is a FULL-FILE review", prompt)
         self.assertIn("No pre-built context available", prompt)
         self.assert_opaque(call["cwd"])
-        flat = sorted(p.name for p in Path(call["cwd"]).iterdir() if p.name != "edc-context")
-        self.assertEqual(flat, ["a.c"])
+        self.assertEqual(sorted(call["files"]), ["a.c"])
         self.assertEqual(self.record("edc-review-skill")["outcome"], "exact")
 
     def test_edc_security_arm(self):
@@ -461,7 +460,7 @@ class ArmDispatchTests(Fixture):
         self.run_arm("edc-module", entry="PLANT-proj-01")
         (call,) = self.claude_calls()
         self.assert_opaque(call["cwd"])
-        self.assertIn("/* planted */", (Path(call["cwd"]) / "b.c").read_text())
+        self.assertIn("/* planted */", call["files"]["b.c"])
         self.assertEqual(self.record("edc-module", entry="PLANT-proj-01")["kind"], "planted")
 
     def test_edc_deep_is_reserved(self):
@@ -638,6 +637,20 @@ class RepoPathTests(ArmDispatchTests):
             self.assertNotIn(f"{home}/Dev/edc", value, key)
             self.assertNotIn(encoded, value, key)
 
+    def test_git_config_env_pairs_stay_consistent(self):
+        # claude code's sandbox exports safe.directory entries for edc checkouts as GIT_CONFIG_KEY_n/VALUE_n;
+        # dropping a VALUE_n alone leaves GIT_CONFIG_COUNT pointing at a missing pair and breaks git in the arm
+        home = str(Path.home())
+        decoys = {"GIT_CONFIG_COUNT": "3", "GIT_CONFIG_KEY_0": "safe.directory", "GIT_CONFIG_VALUE_0": str(REPO_ROOT),
+                  "GIT_CONFIG_KEY_1": "bench.keep", "GIT_CONFIG_VALUE_1": "yes",
+                  "GIT_CONFIG_KEY_2": "safe.directory", "GIT_CONFIG_VALUE_2": f"{home}/Dev/edc/.git"}
+        self.run_arm("edc-module", env=self.env(**decoys))
+        (call,) = self.claude_calls()
+        self.assertEqual(call["commits"], 1)
+        git_env = {k: v for k, v in call["env"].items() if k.startswith("GIT_CONFIG_") and k != "GIT_CONFIG_PARAMETERS"}
+        self.assertEqual({k: v for k, v in git_env.items() if k not in GIT_ENV},
+                         {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "bench.keep", "GIT_CONFIG_VALUE_0": "yes"})
+
     def test_work_dir_inside_repo_is_refused(self):
         inside = REPO_ROOT / ".clean-test-work"
         self.addCleanup(shutil.rmtree, inside, True)  # in case the guard regresses
@@ -663,6 +676,73 @@ class ContaminationRecordTests(ArmDispatchTests):
                 self.assertEqual((row["outcome"], row["verdict"]), ("contaminated", "exact"))
                 self.assertTrue(row["outside_access"].startswith(f"{calls}: "), row["outside_access"])
                 self.assertIn(f"Read {gt}", row["outside_access"])
+
+
+class HarnessPathTests(ArmDispatchTests):
+    """041 review P1/P4: harness-owned paths neither leak to the agent nor go unflagged."""
+
+    def test_audited_env_has_no_entry_arm_or_results_path(self):
+        for arm, entry in (("edc-module", "CVE-2099-0001"), ("edc-security", "PLANT-proj-01"),
+                           ("enemy-3", "CVE-2099-0001"), ("edc-review-skill", "PLANT-proj-01")):
+            with self.subTest(arm=arm):
+                (self.root / "claude-argv.jsonl").unlink(missing_ok=True)
+                self.run_arm(arm, entry=entry)
+                calls = self.claude_calls()
+                self.assertTrue(calls)
+                for call in calls:
+                    for key, value in call["env"].items():
+                        for leak in (entry, arm, "/results/"):
+                            self.assertNotIn(leak, value, key)
+                    io = Path(call["env"]["EDC_BENCH_CALL_LOG_DIR"])
+                    self.assertEqual(io.parent.parent, self.work / "clean" / "io")
+                    if "EDC_RESULT_FILE" in call["env"]:
+                        self.assertEqual(Path(call["env"]["EDC_RESULT_FILE"]).parent, io.parent)
+                out = self.work / "clean" / "results" / arm / entry / "run-1"
+                row = self.record(arm, entry)
+                self.assertEqual(row["model_calls"], "1")
+                self.assertTrue(sorted((out / "calls").glob("call-*.jsonl")))
+                if arm == "edc-security":
+                    self.assertTrue((out / "calls-build").is_dir())
+                    self.assertTrue((out / "edc-result.json").is_file())
+
+    def test_run_dirs_are_removed_after_scoring(self):
+        for arm in ("edc-module", "edc-review-skill"):
+            with self.subTest(arm=arm):
+                self.run_arm(arm)
+                for kind in ("snap", "flat", "io"):
+                    d = self.work / "clean" / kind
+                    self.assertEqual(list(d.iterdir()) if d.exists() else [], [], kind)
+
+    def test_harness_dirs_of_other_runs_are_contaminating(self):
+        clean = self.work / "clean"
+        results = self.root / "iso" / "arm.tsv"
+        cases = {
+            "results tree": str(clean / "results" / "enemy-3" / "CVE-2099-0001" / "run-1" / "issues.md"),
+            "other snap": str(clean / "snap" / "0123456789abcdef" / ".audit" / "findings" / "nemesis-verified.md"),
+            "other flat": str(clean / "flat" / "0123456789abcdef" / "edc-context" / "reports" / "issues.md"),
+            "other io": str(clean / "io" / "0123456789abcdef" / "calls" / "call-1.jsonl"),
+            "results-file dir": str(results.parent / "other-arm.tsv"),
+        }
+        for label, path in cases.items():
+            with self.subTest(label):
+                self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_READ=path, EDC_RESULTS_FILE=str(results)))
+                row = [r for r in csv.DictReader(results.open(newline=""), delimiter="\t")][-1]
+                self.assertEqual(row["outcome"], "contaminated", row["outside_access"])
+                self.assertIn(f"Read {path}", row["outside_access"])
+
+    def test_own_run_dirs_are_not_outside(self):
+        self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_READ="$CWD/a.c,$CALLS/call-1.argv"))
+        row = self.record("edc-module")
+        self.assertEqual((row["outcome"], row["outside_access"]), ("exact", "0"))
+
+    def test_results_dir_containing_work_dir_is_refused(self):
+        for results in (self.work / "r.tsv", Path.home() / "r.tsv"):
+            with self.subTest(results=str(results)):
+                proc = self.run_arm("edc-module", env=self.env(EDC_RESULTS_FILE=str(results)), check=False)
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertIn("EDC_RESULTS_FILE", proc.stderr)
+                self.assertFalse(results.exists())
+                self.assertEqual(self.claude_calls(), [])
 
 
 class AccessScanTests(unittest.TestCase):
@@ -763,7 +843,7 @@ class AccessScanTests(unittest.TestCase):
 
 
 # ArmDispatchTests' tests should not run twice through the subclasses.
-for _cls in (ResultsIsolationTests, SettingSourcesTests, RepoPathTests, ContaminationRecordTests):
+for _cls in (ResultsIsolationTests, SettingSourcesTests, RepoPathTests, ContaminationRecordTests, HarnessPathTests):
     for _name in [n for n in dir(ArmDispatchTests) if n.startswith("test_")]:
         if _name not in _cls.__dict__:
             setattr(_cls, _name, None)

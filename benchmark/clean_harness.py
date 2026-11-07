@@ -6,10 +6,16 @@ One run = one arm x one ground-truth entry x one repetition:
      (clean_snapshot.py; the audited agent never sees later commits);
   2. run the arm against it with a staged copy of clean-bin/ first on PATH
      (call logging and, for enemy, the `agent` shim); no path into this repo
-     reaches the arm's PATH, argv, cwd or env;
+     reaches the arm's PATH, argv, cwd or env. What the arm writes through
+     env paths (call logs, EDC_RESULT_FILE) goes to an opaque
+     <work>/io/<id>/ dir, so the env names neither the entry, the arm nor
+     the results tree;
   3. score the report with score.score_cve, detect blocked runs from the
      structured call logs (clean_blocked.py) and scan them for tool access
-     outside the run's roots (clean_access.py; `contaminated` outcome);
+     outside the run's roots (clean_access.py; `contaminated` outcome; the
+     results tree, the results-file dir and other runs' snap/flat/io dirs
+     are forbidden), then move the io dir into the out dir and delete the
+     snapshot and flat copy;
   4. write one row to an isolated TSV ($EDC_RESULTS_FILE, else
      <out-dir>/record.tsv), replacing an earlier row of the same run_id; an
      exception after the entry is resolved still writes an `error` row.
@@ -246,11 +252,12 @@ def save_report(src: Path, out: Path, name=None) -> Path:
 # --- arms ---------------------------------------------------------------------
 
 class Run:
-    def __init__(self, args, entry, model, snap, out, work, env, bin_dir):
+    def __init__(self, args, entry, model, snap, out, work, env, bin_dir, io):
         self.args, self.entry, self.model = args, entry, model
         self.snap, self.out, self.work, self.env, self.bin = snap, out, work, env, bin_dir
+        self.io = io  # paths the arm learns from its env live here (opaque; moved into out after the run)
         self.files = entry["affected_files"]
-        self.calls = out / "calls"
+        self.calls = io / "calls"
         self.plugin = stage_plugin(work)
         self.scratch = []  # run-owned dirs the agent may use besides snap and plugin
         self.result = {"report_text": "", "report": "", "arm_exit": "", "ok": False, "timed_out": False,
@@ -327,7 +334,7 @@ class Run:
         ignores = []
         for pattern in ignore_complement(tracked, self.files):
             ignores += ["--ignore", pattern]
-        build_calls = self.out / "calls-build"
+        build_calls = self.io / "calls-build"
         r["call_dirs"] = [build_calls, self.calls]
         build_cmd = [edc, "--model", self.model, "build", "--agent", "claude", str(self.snap)]
         if self.args.build_scope == "affected":
@@ -341,7 +348,7 @@ class Run:
             r["arm_exit"], r["timed_out"] = f"build:{rc}", timed_out
             r["notes"].append("edc build failed; review skipped")
             return
-        result_file = self.out / "edc-result.json"
+        result_file = self.io / "edc-result.json"
         review_cmd = [edc, "--model", self.model, "security-review", "--agent", "claude", "--full",
                       "--no-context-refresh", *ignores]
         rc, r["duration"], r["timed_out"] = run_logged(
@@ -477,6 +484,27 @@ def in_repo(path) -> bool:
     return resolved == REPO_ROOT or REPO_ROOT in resolved.parents
 
 
+GIT_CONFIG_PAIR_RE = re.compile(r"^GIT_CONFIG_(?:KEY|VALUE)_\d+$")
+
+
+def _keep_git_config_pairs(env: dict, dirty) -> None:
+    """GIT_CONFIG_COUNT/KEY_n/VALUE_n (claude code's sandbox exports
+    safe.directory entries this way) must stay consistent: dropping one
+    VALUE_n alone breaks every git call. Drop dirty pairs and renumber."""
+    try:
+        count = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    pairs = [(os.environ.get(f"GIT_CONFIG_KEY_{i}"), os.environ.get(f"GIT_CONFIG_VALUE_{i}", "")) for i in range(count)]
+    for key in [k for k in env if k == "GIT_CONFIG_COUNT" or GIT_CONFIG_PAIR_RE.match(k)]:
+        del env[key]
+    kept = [(k, v) for k, v in pairs if k is not None and not dirty(k) and not dirty(v)]
+    if kept:
+        env["GIT_CONFIG_COUNT"] = str(len(kept))
+        for i, (k, v) in enumerate(kept):
+            env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = k, v
+
+
 def child_env(model: str, bin_dir: Path) -> dict:
     """The arm's env: no value mentions this repo or any other edc checkout
     (~/Dev/edc*; PWD/OLDPWD/_ of the shell that started clean.sh would), those
@@ -484,9 +512,12 @@ def child_env(model: str, bin_dir: Path) -> dict:
     repo_forms = {str(REPO_ROOT), os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # resolved, as invoked
                   os.path.join(str(Path.home()), "Dev", "edc")}  # prefix of every ~/Dev/edc* checkout
     repo_forms |= {form.replace(os.sep, "-") for form in repo_forms}  # claude code per-project dirs (session tmp)
-    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep)
-                 if d and not in_repo(d) and not any(form in d for form in repo_forms)]
-    env = {k: v for k, v in os.environ.items() if not any(form in v for form in repo_forms)}
+    def dirty(value):
+        return any(form in value for form in repo_forms)
+
+    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not in_repo(d) and not dirty(d)]
+    env = {k: v for k, v in os.environ.items() if not dirty(v)}
+    _keep_git_config_pairs(env, dirty)
     for key in ("EDC_RESULTS_FILE", "ENEMY_BIN", "EDC_BENCH_EDC_BIN", "PWD", "OLDPWD"):
         env.pop(key, None)  # harness inputs, or stale for the arm's cwd
     real = shutil.which("claude", path=os.pathsep.join(path_dirs))
@@ -509,6 +540,13 @@ def run(args) -> dict:
     for path in (work, out):
         if in_repo(path):
             raise HarnessError(f"{path} is inside the repo; audited agents must not get paths into it")
+    for root, label in ((out, "--out-dir"), (results_path.parent, "EDC_RESULTS_FILE dir")):
+        # audited agents must not read these (forbidden roots); one that contains the work or home dir
+        # would turn every snapshot or home read into contamination
+        for contained, what in ((work, "the work dir"), (Path.home().resolve(), "the home dir")):
+            if root == contained or root in contained.parents:
+                raise HarnessError(f"{label} {root} contains {what}; use a dedicated directory "
+                                   "(EDC_RESULTS_FILE / --out-dir are forbidden to audited agents)")
     check_record_header(results_path)
     if args.arm == "enemy-3":
         preflight_enemy()
@@ -529,7 +567,7 @@ def run(args) -> dict:
         "isolation": ISOLATION, "out_dir": str(out),
     }
     try:
-        row.update(run_entry(args, entry, model, work, out, env, bin_dir, project_dir))
+        row.update(run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_path))
     except Exception as exc:
         row["notes"] = f"exception={type(exc).__name__}: {exc}"
         write_record(results_path, row)
@@ -538,21 +576,41 @@ def run(args) -> dict:
     return row
 
 
-def run_entry(args, entry, model, work, out, env, bin_dir, project_dir) -> dict:
-    """Snapshot, arm, detection and scoring for one run; returns its record fields."""
-    cache = clean_snapshot.ensure_cache(clean_gt.read_repo_url(project_dir), work / "cache" / f"{args.project}.git")
+def run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_path) -> dict:
+    """Snapshot, arm, detection and scoring for one run; returns its record
+    fields. The snapshot and flat copy are deleted and the io dir moved into
+    out afterwards, also when the run fails."""
     snap = work / "snap" / opaque_id(args.arm, args.project, args.entry, args.run)
-    if snap.exists():
-        shutil.rmtree(snap)
-    snapshot_commit = clean_snapshot.make_snapshot(cache, entry, project_dir, snap)
+    io = work / "io" / opaque_id("io", args.arm, args.project, args.entry, args.run)
+    r = None
+    try:
+        cache = clean_snapshot.ensure_cache(clean_gt.read_repo_url(project_dir),
+                                            work / "cache" / f"{args.project}.git")
+        for d in (snap, io):
+            if d.exists():
+                shutil.rmtree(d)
+        io.mkdir(parents=True)
+        snapshot_commit = clean_snapshot.make_snapshot(cache, entry, project_dir, snap)
+        r = Run(args, entry, model, snap, out, work, env, bin_dir, io)
+        getattr(r, args.arm.replace("-", "_"))()
+        return score_run(args, entry, r, results_path, snapshot_commit)
+    finally:
+        for d in [snap, *(r.scratch if r else [])]:
+            shutil.rmtree(d, ignore_errors=True)
+        if io.is_dir():
+            for child in io.iterdir():
+                shutil.move(str(child), str(out / child.name))
+            io.rmdir()
 
-    r = Run(args, entry, model, snap, out, work, env, bin_dir)
-    getattr(r, args.arm.replace("-", "_"))()
-    res = r.result
 
+def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
+    res, work = r.result, r.work
     logs = [p for d in res["call_dirs"] for p in call_logs(d)]
     blocked, signal_ = detect_blocked(logs, res["text_logs"])
-    outside, contaminated = scan_access(logs, [snap, r.plugin, *r.scratch], forbidden=[work / "cache"])
+    # other runs' dirs (and earlier results) can hold this entry's findings; the current run's are allowed
+    forbidden = [work / "cache", work / "results", work / "snap", work / "flat", work / "io", r.out,
+                 results_path.parent]
+    outside, contaminated = scan_access(logs, [r.snap, r.plugin, *r.scratch, r.io], forbidden=forbidden)
     import score  # judge uses the harness env (real claude, not the call logger)
     verdict, confidence, notes = score.score_cve(
         res["report_text"], entry["id"], entry.get("bug_pattern", ""), entry.get("category", ""),

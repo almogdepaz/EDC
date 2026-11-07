@@ -23,10 +23,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --allowed-tools|--allowedTools|--disallowed-tools|--disallowedTools)
       variadic=1; shift ;;
-    -p|--print|--verbose|--dangerously-skip-permissions|--exclude-dynamic-system-prompt-sections)
-      variadic=0; shift ;;
-    --*)
+    --output-format|--model|--settings|--system-prompt-file)
       variadic=0; shift 2 ;;
+    --*|-p)
+      variadic=0; shift ;;
     *)
       if [ "$variadic" -eq 0 ]; then prompt="$1"; fi
       shift ;;

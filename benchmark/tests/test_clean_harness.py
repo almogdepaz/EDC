@@ -760,6 +760,7 @@ class HarnessPathTests(ArmDispatchTests):
                     self.assertTrue((out / "calls-build").is_dir())
                     self.assertTrue((out / "edc-result.json").is_file())
 
+    @unittest.skipUnless(sys.platform == "darwin", "the fake reads ancestors via macOS sysctl KERN_PROCARGS2")
     def test_audited_agent_ancestors_expose_no_harness_inputs(self):
         # 041 review P3/P1: `ps -E` / lsof on the agent's ancestors (harness, arm wrappers) must not
         # show the repo, the gt root, the entry, the arm or the results tree (argv, env, cwd, open fds)
@@ -1025,6 +1026,7 @@ class AccessScanTests(unittest.TestCase):
             "text blocks": ([{"type": "text", "text": "fixed in CVE-2023-38545 (socks5)"}], "CVE-2023-38545"),
             "plant id": ("## PLANT-curl-02\n", "PLANT-curl-"),
             "gt path": ("/x/Dev/edc/benchmark/clean/curl/notes", "/benchmark/clean/"),
+            "gt file name": ("./curl/ground-truth.md:12: - **category:**", "ground-truth.md"),
         }
         for label, (content, marker) in cases.items():
             with self.subTest(label):

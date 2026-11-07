@@ -347,7 +347,7 @@ class ArmDispatchTests(Fixture):
         self.assertEqual(cargv[cargv.index("--allowedTools") + 1:], ["Bash(ls:*)", "Bash(wc:*)"])
         self.assertEqual(cargv[cargv.index("--permission-mode") + 1], "acceptEdits")
         self.assertEqual(cargv[cargv.index("--disallowedTools") + 1], "WebFetch WebSearch Bash(git:*)")
-        self.assertEqual(cargv[cargv.index("--tools") + 1], "Read,Write,Edit,Bash")
+        self.assertEqual(cargv[cargv.index("--tools") + 1], "Read,Grep,Glob,Write,Edit,Bash")
         self.assertIn("--strict-mcp-config", cargv)
         self.assertEqual(call["stdin"].strip(), "pass 2 prompt")
         self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(snap))

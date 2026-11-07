@@ -5,7 +5,10 @@ Structured first: `claude -p --output-format stream-json` call logs captured
 by `clean-bin/claude`. A call is blocked when an assistant message or the
 result event has stop_reason "refusal", or the result event carries a
 safeguard/policy block text (api error or the soft "safety classifier
-stopped the response" shape). Text logs are a fallback; score.py's broad
+stopped the response" shape). The generic passive phrase ("blocked by the
+safety system") also counts, but only in an `is_error` result: reports use
+the same words for the code's own checks. Text logs (arm stdout/stderr, which
+carry report prose) are matched against the exact block texts only; score.py's broad
 REFUSAL_RE (which also matches ordinary security prose such as "malicious
 request") is consulted only when no structured call log exists.
 """
@@ -22,9 +25,12 @@ BLOCK_PATTERNS = [
     r"violates? (?:our|the) Usage Policy",
     r"API Error: Claude Code is unable to respond",
     r"safety classifier (?:stopped|blocked|flagged|interrupted)",
-    r"(?:blocked|stopped|flagged) by (?:a |the )?safety (?:classifier|check|system|filter)",
 ]
 BLOCK_RE = re.compile("|".join(BLOCK_PATTERNS), re.IGNORECASE)
+# Matches report prose ("stopped by the safety check at line 672"): error results only.
+ERROR_BLOCK_RE = re.compile("|".join(
+    [*BLOCK_PATTERNS, r"(?:blocked|stopped|flagged) by (?:a |the )?safety (?:classifier|check|system|filter)"]),
+    re.IGNORECASE)
 
 
 def _events(path: Path):
@@ -55,7 +61,7 @@ def _structured_signal(path: Path) -> str:
             if event.get("stop_reason") == "refusal":
                 return "json:result_stop_reason=refusal"
             text = str(event.get("result") or "")
-            match = BLOCK_RE.search(text)
+            match = (ERROR_BLOCK_RE if event.get("is_error") else BLOCK_RE).search(text)
             if match:
                 prefix = "result_error" if event.get("is_error") else "result_text"
                 return f"json:{prefix}={match.group(0)}"

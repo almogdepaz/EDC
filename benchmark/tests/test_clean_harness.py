@@ -258,6 +258,33 @@ class BlockedDetectionTests(unittest.TestCase):
     def test_clean_run_is_not_blocked_even_with_security_prose(self):
         self.assertEqual(self.detect(["clean.jsonl"], ["clean-text.log"]), (False, ""))
 
+    # report prose about a missing/bypassed check (041 review P5)
+    PROSE = ["The length is stopped by the safety check at line 672 only when the flag is set.",
+             "Oversized names are flagged by the safety filter but still copied.",
+             "The request is blocked by a safety check that the slow path skips.",
+             "Input is blocked by the safety system unless the state is reset."]
+
+    def test_security_prose_about_safety_checks_is_not_blocked(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        for sentence in self.PROSE:
+            with self.subTest(sentence=sentence):
+                log, text = tmp / "call.jsonl", tmp / "out.log"
+                log.write_text(json.dumps({"type": "result", "is_error": False, "stop_reason": "end_turn",
+                                           "result": f"# issues\n\n{sentence}\n"}) + "\n")
+                text.write_text(f"pass 1 report:\n{sentence}\n")
+                self.assertEqual(clean_blocked.detect_blocked([log], [text]), (False, ""))
+                self.assertEqual(clean_blocked.detect_blocked([], [text])[0], False)
+
+    def test_generic_safety_phrase_counts_in_error_results(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        log = tmp / "call.jsonl"
+        log.write_text(json.dumps({"type": "result", "is_error": True, "result": "Request blocked by the safety system."}))
+        blocked, signal = clean_blocked.detect_blocked([log], [])
+        self.assertTrue(blocked)
+        self.assertTrue(signal.startswith("json:result_error="), signal)
+
     def test_text_fallback_detects_api_block_without_call_logs(self):
         blocked, signal = self.detect([], ["api-block-text.log"])
         self.assertTrue(blocked)

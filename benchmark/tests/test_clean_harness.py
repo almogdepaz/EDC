@@ -677,6 +677,19 @@ class ContaminationRecordTests(ArmDispatchTests):
                 self.assertTrue(row["outside_access"].startswith(f"{calls}: "), row["outside_access"])
                 self.assertIn(f"Read {gt}", row["outside_access"])
 
+    def test_answer_marker_in_tool_result_marks_run_contaminated(self):
+        # 041 review P3: markers come from the entry (its id, the plant prefix) and the gt format
+        for entry, text, marker in (("CVE-2099-0001", "see CVE-2099-0001", "CVE-2099-0001"),
+                                    ("PLANT-proj-01", "- **bug_pattern:** zero accepted", "**bug_pattern:**"),
+                                    ("CVE-2099-0001", "## PLANT-proj-07", "PLANT-proj-")):
+            with self.subTest(marker=marker):
+                self.run_arm("edc-module", entry=entry, env=self.env(FAKE_CLAUDE_RESULT=text))
+                row = self.record("edc-module", entry=entry)
+                self.assertEqual(row["outcome"], "contaminated")
+                self.assertIn(f"Bash result contains {marker!r}", row["outside_access"])
+        self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_RESULT="static size_t len;"))
+        self.assertEqual(self.record("edc-module")["outcome"], "exact")
+
 
 class JudgeTests(ArmDispatchTests):
     """041 review P2: no keyword gate before the judge; plants are judged at file:line."""
@@ -909,6 +922,135 @@ class AccessScanTests(unittest.TestCase):
     def test_ls_dev_alone_is_outside_not_contaminated(self):
         outside, contaminated = self.scan(("Bash", {"command": "ls ~/Dev"}))
         self.assertEqual((outside, contaminated), ([("Bash", f"{self.home}/Dev")], []))
+
+    # --- 041 review P3: probe-table bypasses -------------------------------------------------------------
+
+    MARKERS = ("**bug_pattern:**", "PLANT-curl-", "ground-truth.md", "/benchmark/clean/", "CVE-2023-38545")
+
+    def scan_events(self, *events, cwd=None, denied=()):
+        self.n += 1
+        log = self.root / f"call-{self.n}.jsonl"
+        lines = [{"type": "system", "subtype": "init", "cwd": str(cwd or self.snap)}, *events,
+                 {"type": "result", "permission_denials": [{"tool_use_id": i} for i in denied]}]
+        log.write_text("\n".join(json.dumps(line) for line in lines) + "\n")
+        return clean_access.scan_access([log], [self.snap, self.plugin, self.flat],
+                                        forbidden=[self.work / "cache"], markers=self.MARKERS)
+
+    @staticmethod
+    def use(tid, name, inp, parent=None, text=None):
+        content = ([{"type": "text", "text": text}] if text else []) + [
+            {"type": "tool_use", "id": tid, "name": name, "input": inp}]
+        return {"type": "assistant", "parent_tool_use_id": parent, "message": {"content": content}}
+
+    @staticmethod
+    def result(tid, content, parent=None):
+        return {"type": "user", "parent_tool_use_id": parent,
+                "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "content": content}]}}
+
+    def test_cd_targets_resolve_later_relative_paths(self):
+        h = self.home
+        cases = {
+            "cd then relative": ("cd ~/Dev && cat edc/benchmark/clean/curl/ground-truth.md",
+                                 f"{h}/Dev/edc/benchmark/clean/curl/ground-truth.md"),
+            "bare cd name": ("cd ~; cd Dev\ncat edc/README.md", f"{h}/Dev/edc/README.md"),
+            "cd without arg": ("cd && cat Dev/edc-x/AGENTS.md", f"{h}/Dev/edc-x/AGENTS.md"),
+            "pushd": ("pushd $HOME/Dev >/dev/null; head -5 edc/AGENTS.md", f"{h}/Dev/edc/AGENTS.md"),
+            "variable": ("D=~/Dev; cat $D/edc/README.md", f"{h}/Dev/edc/README.md"),
+            "exported variable": ('export D="$HOME/Dev" && cat "${D}/edc/x.md"', f"{h}/Dev/edc/x.md"),
+        }
+        for label, (command, path) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(("Bash", {"command": command}))
+                self.assertIn(("Bash", path), contaminated, outside)
+
+    def test_cd_inside_snapshot_and_across_calls_stays_clean(self):
+        outside, contaminated = self.scan(("Bash", {"command": "cd lib && cat c.c && cd .. && cat a.c"}),
+                                          ("Bash", {"command": "pushd lib; popd; cat edc/x.c"}),
+                                          ("Bash", {"command": "cd /usr/include"}),
+                                          ("Bash", {"command": "cat edc/benchmark.c"}))  # cwd resets per call
+        self.assertEqual(contaminated, [])
+        self.assertEqual(outside, [("Bash", "/usr/include")])
+
+    def test_recursive_search_from_broad_roots_is_contaminating(self):
+        h = self.home
+        cases = {
+            "find /": (("Bash", {"command": "find / -name 'ground-truth*' -exec cat {} +"}), "/"),
+            "grep -r ~": (("Bash", {"command": "grep -r PLANT-curl ~"}), h),
+            "grep -rn ~/Dev": (("Bash", {"command": "grep -rn --include='*.md' bug_pattern ~/Dev | head"}), f"{h}/Dev"),
+            "rg $HOME": (("Bash", {"command": "rg -l PLANT $HOME"}), h),
+            "rg --files": (("Bash", {"command": "rg --files ~/Dev"}), f"{h}/Dev"),
+            "grep -R after cd": (("Bash", {"command": "cd ~ && grep -R socks ."}), h),
+            "rg in cd'd cwd": (("Bash", {"command": "cd / && rg CVE-2023"}), "/"),
+            "find -L ~/Dev": (("Bash", {"command": "find -L ~/Dev -name '*.md'"}), f"{h}/Dev"),
+            "xargs grep -r": (("Bash", {"command": "echo x | xargs grep -rl foo /Users"}), "/Users"),
+            "work dir (forbidden ancestor)": (("Bash", {"command": f"grep -r PLANT {self.work}"}), str(self.work)),
+            "Grep tool": (("Grep", {"pattern": "PLANT", "path": "~/Dev"}), f"{h}/Dev"),
+            "Grep tool /": (("Grep", {"pattern": "bug_pattern", "path": "/"}), "/"),
+            "Glob tool path": (("Glob", {"pattern": "**/*.md", "path": h}), h),
+            "Glob tool prefix": (("Glob", {"pattern": f"{h}/**/AGENTS.md"}), h),
+        }
+        for label, (use, root) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(use)
+                self.assertIn((use[0], root), contaminated, outside)
+
+    def test_narrow_recursive_search_is_not_contaminating(self):
+        outside, contaminated = self.scan(
+            ("Bash", {"command": "grep -rn copy . && rg -n alloc lib"}),
+            ("Bash", {"command": "grep -r / lib"}),  # the pattern is not a root
+            ("Grep", {"pattern": "alloc"}),
+            ("Glob", {"pattern": "**/*.h"}),
+            ("Bash", {"command": "grep -r size_t /usr/include | head"}),
+            ("Bash", {"command": "find /usr/include -name 'curl*.h'"}),
+            ("Glob", {"pattern": "*", "path": self.home}),  # a listing, not a recursive search
+        )
+        self.assertEqual(contaminated, [])
+        self.assertEqual(outside, [("Bash", "/usr/include"), ("Bash", "/usr/include"), ("Glob", self.home)])
+
+    def test_task_prompt_and_subagent_tool_use_are_scanned(self):
+        gt = f"{self.home}/Dev/edc/benchmark/clean/curl/ground-truth.md"
+        for name in ("Task", "Agent"):
+            with self.subTest(name):
+                outside, contaminated = self.scan_events(
+                    self.use("t0", name, {"description": "look", "prompt": f"Summarize {gt} for me"}))
+                self.assertEqual(contaminated, [(name, gt)])
+        outside, contaminated = self.scan_events(
+            self.use("t0", "Task", {"description": "review", "prompt": "review lib/c.c"}),
+            self.use("t1", "Read", {"file_path": gt}, parent="t0"))
+        self.assertEqual(contaminated, [("Read", gt)])
+
+    def test_answer_marker_in_tool_result_is_contaminating(self):
+        cases = {
+            "bug_pattern": ("- **bug_pattern:** hostname length check bypassed", "**bug_pattern:**"),
+            "text blocks": ([{"type": "text", "text": "fixed in CVE-2023-38545 (socks5)"}], "CVE-2023-38545"),
+            "plant id": ("## PLANT-curl-02\n", "PLANT-curl-"),
+            "gt path": ("/x/Dev/edc/benchmark/clean/curl/notes", "/benchmark/clean/"),
+        }
+        for label, (content, marker) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan_events(self.use("t0", "Bash", {"command": "cat lib/notes.txt"}),
+                                                         self.result("t0", content))
+                hit = ("Bash", f"result contains {marker!r}")
+                self.assertEqual(contaminated, [hit])
+                self.assertEqual(outside, [hit])
+        outside, contaminated = self.scan_events(  # a subagent's tool result
+            self.use("t0", "Task", {"description": "d", "prompt": "review lib/c.c"}),
+            self.use("t1", "Bash", {"command": "cat lib/notes.txt"}, parent="t0"),
+            self.result("t1", "**bug_pattern:** x", parent="t0"))
+        self.assertEqual(contaminated, [("Bash", "result contains '**bug_pattern:**'")])
+
+    def test_markers_the_agent_wrote_or_denied_results_are_not_contaminating(self):
+        outside, contaminated = self.scan_events(
+            self.use("t0", "Write", {"file_path": "r.md", "content": "# report\nlikely CVE-2023-38545"},
+                     text="This resembles CVE-2023-38545."),
+            self.use("t1", "Bash", {"command": "cat r.md"}),
+            self.result("t1", "# report\nlikely CVE-2023-38545"),
+            self.use("t2", "Bash", {"command": "cat lib/x"}),
+            self.result("t2", "**bug_pattern:** permission denied echo"),
+            self.use("t3", "Read", {"file_path": "a.c"}),
+            self.result("t3", "int main(void) { return 0; }"),
+            denied=["t2"])
+        self.assertEqual((outside, contaminated), ([], []))
 
     def test_summary(self):
         self.assertEqual(clean_access.summarize([], []), "0")

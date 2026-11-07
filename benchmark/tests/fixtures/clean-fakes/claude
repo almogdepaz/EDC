@@ -6,6 +6,8 @@ FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block | outside_read
   then the ok flow)
 FAKE_CLAUDE_READ: comma-separated paths to emit Read tool_uses for (ok flow);
   `$CALLS` expands to EDC_BENCH_CALL_LOG_DIR, `$CWD` to the cwd.
+FAKE_CLAUDE_RESULT: text of a tool result the ok flow emits (after a Bash
+  `cat notes.txt` tool_use).
 FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin,
   commits, files}); commits/files record the cwd's git commit count and its
   top-level files at call time (the harness deletes the snapshot afterwards).
@@ -85,6 +87,11 @@ for i, raw in enumerate(filter(None, os.environ.get("FAKE_CLAUDE_READ", "").spli
     path = raw.replace("$CALLS", os.environ.get("EDC_BENCH_CALL_LOG_DIR", "")).replace("$CWD", os.getcwd())
     emit({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": f"r{i}", "name": "Read", "input": {"file_path": path}}]}})
+if os.environ.get("FAKE_CLAUDE_RESULT"):
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "x0", "name": "Bash", "input": {"command": "cat notes.txt"}}]}})
+    emit({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "x0", "content": os.environ["FAKE_CLAUDE_RESULT"]}]}})
 os.makedirs("edc-context/reports", exist_ok=True)
 with open("edc-context/reports/issues.md", "w") as fh:
     fh.write("# issues\n\n## heap buffer overflow in a.c\n- severity: critical\n- a.c:3 hostname length check bypassed, overflow on copy into heap buffer\n")

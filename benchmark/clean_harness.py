@@ -14,7 +14,8 @@ One run = one arm x one ground-truth entry x one repetition:
   3. score the report (judge_report: score.py's judge without its keyword
      gate; plants are judged at file:line), detect blocked runs from the
      structured call logs (clean_blocked.py) and scan them for tool access
-     outside the run's roots (clean_access.py; `contaminated` outcome; the
+     outside the run's roots and for answer markers in tool results
+     (clean_access.py; `contaminated` outcome; the
      results tree, the results-file dir and other runs' snap/flat/io dirs
      are forbidden), then move the io dir into the out dir and delete the
      snapshot and flat copy;
@@ -637,6 +638,12 @@ def run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_
             io.rmdir()
 
 
+def answer_markers(project: str, entry: dict) -> tuple:
+    """Strings a tool result shows only when it exposes ground truth: the gt
+    entry format, gt paths, plant ids of the project, this entry's id."""
+    return ("**bug_pattern:**", f"PLANT-{project}-", "ground-truth.md", "/benchmark/clean/", entry["id"])
+
+
 def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
     res, work = r.result, r.work
     logs = [p for d in res["call_dirs"] for p in call_logs(d)]
@@ -644,7 +651,8 @@ def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
     # other runs' dirs (and earlier results) can hold this entry's findings; the current run's are allowed
     forbidden = [work / "cache", work / "results", work / "snap", work / "flat", work / "io", r.out,
                  results_path.parent]
-    outside, contaminated = scan_access(logs, [r.snap, r.plugin, *r.scratch, r.io], forbidden=forbidden)
+    outside, contaminated = scan_access(logs, [r.snap, r.plugin, *r.scratch, r.io], forbidden=forbidden,
+                                        markers=answer_markers(args.project, entry))
     verdict, confidence, notes = judge_report(res["report_text"], entry, args.skip_judge)
     if contaminated:  # the agent may have seen the answer; p3 excludes these from recall
         outcome = "contaminated"

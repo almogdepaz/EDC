@@ -10,14 +10,17 @@ One run = one arm x one ground-truth entry x one repetition:
   3. score the report with score.score_cve, detect blocked runs from the
      structured call logs (clean_blocked.py) and scan them for tool access
      outside the run's roots (clean_access.py; `contaminated` outcome);
-  4. append one row to an isolated TSV ($EDC_RESULTS_FILE, else
-     <out-dir>/record.tsv). Legacy benchmark/results*.tsv paths are refused.
+  4. write one row to an isolated TSV ($EDC_RESULTS_FILE, else
+     <out-dir>/record.tsv), replacing an earlier row of the same run_id; an
+     exception after the entry is resolved still writes an `error` row.
+     Legacy benchmark/results*.tsv paths are refused.
 
 Usage: benchmark/clean.sh --arm <arm> --project <p> --entry <id> [options]
 """
 
 import argparse
 import csv
+import fcntl
 import hashlib
 import json
 import os
@@ -413,20 +416,32 @@ def preflight_enemy() -> None:
 
 # --- record -------------------------------------------------------------------
 
-def write_record(path: Path, row: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    clean = {k: re.sub(r"[\t\r\n]+", " ", str(row.get(k, ""))) for k in RECORD_FIELDS}
-    exists = path.exists() and path.stat().st_size > 0
-    if exists:
+def check_record_header(path: Path) -> None:
+    if path.exists() and path.stat().st_size > 0:
         with path.open(newline="") as fh:
             header = fh.readline().rstrip("\r\n").split("\t")
         if header != RECORD_FIELDS:
             raise HarnessError(f"{path} has a different header; use a fresh EDC_RESULTS_FILE")
-    with path.open("a", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=RECORD_FIELDS, delimiter="\t", lineterminator="\n")
-        if not exists:
+
+
+def write_record(path: Path, row: dict) -> None:
+    """Write row, replacing any row with the same run_id (a rerun of one run).
+    Concurrent runs may share the file: read-modify-replace under a lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    clean = {k: re.sub(r"[\t\r\n]+", " ", str(row.get(k, ""))) for k in RECORD_FIELDS}
+    with open(path.parent / f".{path.name}.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        check_record_header(path)
+        rows = []
+        if path.exists() and path.stat().st_size > 0:
+            with path.open(newline="") as fh:
+                rows = [r for r in csv.DictReader(fh, delimiter="\t") if r.get("run_id") != clean["run_id"]]
+        tmp = path.parent / f".{path.name}.tmp-{os.getpid()}"
+        with tmp.open("w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=RECORD_FIELDS, delimiter="\t", lineterminator="\n")
             writer.writeheader()
-        writer.writerow(clean)
+            writer.writerows([*rows, clean])
+        os.replace(tmp, path)
 
 
 def prepare_dir(path: Path) -> None:
@@ -463,11 +478,14 @@ def in_repo(path) -> bool:
 
 
 def child_env(model: str, bin_dir: Path) -> dict:
-    """The arm's env: no value mentions this repo (PWD/OLDPWD/_ of the shell
-    that started clean.sh would), repo dirs leave PATH, the staged bin leads."""
-    repo_forms = {str(REPO_ROOT), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}  # resolved, as invoked
+    """The arm's env: no value mentions this repo or any other edc checkout
+    (~/Dev/edc*; PWD/OLDPWD/_ of the shell that started clean.sh would), those
+    dirs leave PATH, the staged bin leads."""
+    repo_forms = {str(REPO_ROOT), os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # resolved, as invoked
+                  os.path.join(str(Path.home()), "Dev", "edc")}  # prefix of every ~/Dev/edc* checkout
     repo_forms |= {form.replace(os.sep, "-") for form in repo_forms}  # claude code per-project dirs (session tmp)
-    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not in_repo(d)]
+    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep)
+                 if d and not in_repo(d) and not any(form in d for form in repo_forms)]
     env = {k: v for k, v in os.environ.items() if not any(form in v for form in repo_forms)}
     for key in ("EDC_RESULTS_FILE", "ENEMY_BIN", "EDC_BENCH_EDC_BIN", "PWD", "OLDPWD"):
         env.pop(key, None)  # harness inputs, or stale for the arm's cwd
@@ -491,6 +509,7 @@ def run(args) -> dict:
     for path in (work, out):
         if in_repo(path):
             raise HarnessError(f"{path} is inside the repo; audited agents must not get paths into it")
+    check_record_header(results_path)
     if args.arm == "enemy-3":
         preflight_enemy()
     bin_dir = stage_bin(work)
@@ -500,13 +519,33 @@ def run(args) -> dict:
     entry = clean_gt.find_entry(project_dir / "ground-truth.md", args.entry)
     if not entry["affected_files"]:
         raise HarnessError(f"{args.entry} has no affected_file")
+    prepare_dir(out)  # refuses a foreign out dir before any snapshot/cache work
+    row = {
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "run_id": f"{args.arm}:{args.project}:{entry['id']}:{args.run}",
+        "arm": args.arm, "project": args.project, "entry": entry["id"], "kind": entry["kind"],
+        "run": args.run, "model": model, "outcome": "error",
+        "build_scope": args.build_scope if args.arm == "edc-security" else "",
+        "isolation": ISOLATION, "out_dir": str(out),
+    }
+    try:
+        row.update(run_entry(args, entry, model, work, out, env, bin_dir, project_dir))
+    except Exception as exc:
+        row["notes"] = f"exception={type(exc).__name__}: {exc}"
+        write_record(results_path, row)
+        raise
+    write_record(results_path, row)
+    return row
+
+
+def run_entry(args, entry, model, work, out, env, bin_dir, project_dir) -> dict:
+    """Snapshot, arm, detection and scoring for one run; returns its record fields."""
     cache = clean_snapshot.ensure_cache(clean_gt.read_repo_url(project_dir), work / "cache" / f"{args.project}.git")
     snap = work / "snap" / opaque_id(args.arm, args.project, args.entry, args.run)
     if snap.exists():
         shutil.rmtree(snap)
     snapshot_commit = clean_snapshot.make_snapshot(cache, entry, project_dir, snap)
 
-    prepare_dir(out)
     r = Run(args, entry, model, snap, out, work, env, bin_dir)
     getattr(r, args.arm.replace("-", "_"))()
     res = r.result
@@ -529,11 +568,8 @@ def run(args) -> dict:
     else:
         outcome = verdict
     named = sorted(set(CVE_ID_RE.findall(res["report_text"])))
-    row = {
-        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "run_id": f"{args.arm}:{args.project}:{entry['id']}:{args.run}",
-        "arm": args.arm, "project": args.project, "entry": entry["id"], "kind": entry["kind"],
-        "run": args.run, "model": model, "outcome": outcome, "verdict": verdict,
+    return {
+        "outcome": outcome, "verdict": verdict,
         "confidence": f"{confidence:.2f}", "duration_s": f"{res['duration']:.1f}",
         "build_duration_s": "" if res["build_duration"] is None else f"{res['build_duration']:.1f}",
         "model_calls": call_count(r.calls),
@@ -541,14 +577,10 @@ def run(args) -> dict:
         "passes_run": res["passes_run"], "loop_end": res["loop_end"], "arm_exit": res["arm_exit"],
         "blocked": "yes" if blocked else "no", "blocked_signal": signal_,
         "cve_ids_named": ",".join(named),
-        "build_scope": args.build_scope if args.arm == "edc-security" else "",
-        "isolation": ISOLATION,
         "outside_access": summarize(outside, contaminated),
-        "snapshot_commit": snapshot_commit, "report": res["report"], "out_dir": str(out),
+        "snapshot_commit": snapshot_commit, "report": res["report"],
         "notes": "; ".join([*res["notes"], notes]),
     }
-    write_record(results_path, row)
-    return row
 
 
 def main(argv=None) -> int:

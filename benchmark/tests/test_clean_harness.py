@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -206,6 +207,33 @@ class SnapshotTests(Fixture):
         self.assertEqual(git(snap, "rev-parse", "HEAD^{tree}").stdout.strip(),
                          git(expected, "write-tree").stdout.strip())
 
+    def test_concurrent_cache_creation_is_atomic(self):
+        cache = self.work / "cache" / "proj.git"
+        errors = []
+
+        def fetch():
+            try:
+                clean_snapshot.ensure_cache(f"file://{self.src}", cache)
+            except Exception as exc:  # noqa: BLE001 - collected for the assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=fetch) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(git(cache, "rev-parse", self.c).returncode, 0)
+        leftovers = [p.name for p in cache.parent.iterdir() if p.name != "proj.git" and not p.name.endswith(".lock")]
+        self.assertEqual(leftovers, [])
+
+    def test_cache_dir_without_head_is_refused(self):
+        cache = self.work / "cache" / "proj.git"
+        cache.mkdir(parents=True)
+        (cache / "partial").write_text("")
+        with self.assertRaises(clean_snapshot.SnapshotError):
+            clean_snapshot.ensure_cache(f"file://{self.src}", cache)
+
     def test_planted_patch_that_does_not_apply_fails(self):
         (self.gt_root / "proj" / "plants" / "PLANT-proj-01.diff").write_text(PLANT_DIFF.replace("n > 0", "n > 9"))
         with self.assertRaises(clean_snapshot.SnapshotError):
@@ -318,9 +346,9 @@ class ArmDispatchTests(Fixture):
         env.update(extra)
         return env
 
-    def run_arm(self, arm, entry="CVE-2099-0001", env=None, check=True, judge=False):
+    def run_arm(self, arm, entry="CVE-2099-0001", env=None, check=True, judge=False, extra=()):
         cmd = ["bash", str(CLEAN_SH), "--arm", arm, "--gt-root", str(self.gt_root), "--project", "proj",
-               "--entry", entry, *([] if judge else ["--skip-judge"])]
+               "--entry", entry, *([] if judge else ["--skip-judge"]), *extra]
         proc = subprocess.run(cmd, env=env or self.env(), capture_output=True, text=True)
         if check:
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
@@ -461,11 +489,43 @@ class ResultsIsolationTests(ArmDispatchTests):
         before = hashlib.sha256(legacy.read_bytes()).hexdigest()
         results = self.root / "iso" / "arm.tsv"
         self.run_arm("edc-module", env=self.env(EDC_RESULTS_FILE=str(results)))
-        self.run_arm("edc-module", env=self.env(EDC_RESULTS_FILE=str(results)))
-        with results.open(newline="") as fh:
-            rows = list(csv.DictReader(fh, delimiter="\t"))
-        self.assertEqual(len(rows), 2)
+        self.run_arm("edc-module", env=self.env(EDC_RESULTS_FILE=str(results)), extra=["--run", "2"])
+        self.assertEqual([r["run"] for r in self.rows(results)], ["1", "2"])
         self.assertEqual(hashlib.sha256(legacy.read_bytes()).hexdigest(), before)
+
+    def rows(self, path):
+        with path.open(newline="") as fh:
+            return list(csv.DictReader(fh, delimiter="\t"))
+
+    def test_rerun_of_same_run_replaces_its_row(self):
+        results = self.root / "iso" / "arm.tsv"
+        env = self.env(EDC_RESULTS_FILE=str(results))
+        self.run_arm("edc-module", env=env)
+        self.run_arm("edc-module", env=env, extra=["--run", "2"])
+        self.run_arm("edc-module", env=self.env(EDC_RESULTS_FILE=str(results), FAKE_CLAUDE_MODE="blocked_api"))
+        rows = self.rows(results)
+        self.assertEqual([(r["run"], r["outcome"]) for r in rows], [("2", "exact"), ("1", "blocked")])
+
+    def test_exception_writes_error_row(self):
+        gt = self.gt_root / "proj" / "ground-truth.md"
+        gt.write_text(gt.read_text().replace("- **affected_file:** a.c", "- **affected_file:** nope.c"))
+        proc = self.run_arm("edc-module", check=False)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        row = self.record("edc-module")
+        self.assertEqual((row["outcome"], row["entry"], row["kind"]), ("error", "CVE-2099-0001", "cve"))
+        self.assertIn("exception=SnapshotError", row["notes"])
+        self.assertEqual(self.claude_calls(), [])
+
+    def test_foreign_out_dir_is_refused_before_snapshot(self):
+        out = self.work / "clean" / "results" / "edc-module" / "CVE-2099-0001" / "run-1"
+        out.mkdir(parents=True)
+        (out / "mine.txt").write_text("keep")
+        proc = self.run_arm("edc-module", check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("not created by the clean harness", proc.stderr)
+        self.assertEqual((out / "mine.txt").read_text(), "keep")
+        self.assertFalse((self.work / "clean" / "snap").exists())
+        self.assertFalse((self.work / "clean" / "cache").exists())
 
     def test_legacy_results_path_is_refused(self):
         for name in ("results.tsv", "results-iter-7.tsv", "curl/results-baseline.tsv"):
@@ -565,6 +625,18 @@ class RepoPathTests(ArmDispatchTests):
                                      (BENCHMARK_DIR / "clean_stream_text.py").read_bytes())
         for log in ("enemy-argv.log", "edc-argv.log"):
             self.assertNotIn(repo, (self.root / log).read_text(), log)
+
+    def test_other_edc_checkouts_leave_the_arm_env(self):
+        home = str(Path.home())
+        encoded = home.replace("/", "-") + "-Dev-edc"
+        decoys = {"PATH": f"{home}/Dev/edc-other/bin:{home}/Dev/edc/bin:{self.fakes}:{os.environ['PATH']}",
+                  "DECOY_OTHER_CHECKOUT": f"{home}/Dev/edc-other/x",
+                  "DECOY_OTHER_ENCODED": f"/private/tmp/claude-501/{encoded}-other/session"}
+        self.run_arm("edc-module", env=self.env(**decoys))
+        (call,) = self.claude_calls()
+        for key, value in call["env"].items():
+            self.assertNotIn(f"{home}/Dev/edc", value, key)
+            self.assertNotIn(encoded, value, key)
 
     def test_work_dir_inside_repo_is_refused(self):
         inside = REPO_ROOT / ".clean-test-work"

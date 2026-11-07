@@ -12,7 +12,10 @@ Every file and dir outside .git gets the same mtime, so `ls -lt` /
 `find -newer` cannot single out the planted (or any) file.
 """
 
+import contextlib
+import fcntl
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -45,12 +48,32 @@ def _git(args, cwd=None, env=None, isolated=False, check=True, input=None):
     return proc
 
 
+@contextlib.contextmanager
+def _cache_lock(cache: Path):
+    """Exclusive lock for creating or fetching into `cache` (concurrent runs share it)."""
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache.parent / f".{cache.name}.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
 def ensure_cache(repo_url: str, cache: Path) -> Path:
-    """Bare blob:none clone of repo_url at `cache` (created once, reused)."""
+    """Bare blob:none clone of repo_url at `cache` (created once, reused). The
+    clone goes to a temp dir renamed into place, so `cache` is either absent
+    or complete."""
     cache = Path(cache)
-    if not (cache / "HEAD").exists():
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        _git(["clone", "--quiet", "--bare", "--filter=blob:none", repo_url, str(cache)])
+    if (cache / "HEAD").exists():
+        return cache
+    with _cache_lock(cache):
+        if cache.exists() and not (cache / "HEAD").exists():
+            raise SnapshotError(f"{cache} exists but is not a git dir (interrupted clone?); remove it")
+        if not cache.exists():
+            tmp = Path(tempfile.mkdtemp(dir=cache.parent, prefix=f".{cache.name}.tmp-"))
+            try:
+                _git(["clone", "--quiet", "--bare", "--filter=blob:none", repo_url, str(tmp / "repo")])
+                os.replace(tmp / "repo", cache)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
     return cache
 
 
@@ -59,8 +82,9 @@ def resolve_commit(cache: Path, rev: str) -> str:
     probe = ["--git-dir", str(cache), "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"]
     proc = _git(probe, check=False)
     if proc.returncode != 0:
-        _git(["--git-dir", str(cache), "fetch", "--quiet", "--filter=blob:none", "origin",
-              "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"])
+        with _cache_lock(cache):
+            _git(["--git-dir", str(cache), "fetch", "--quiet", "--filter=blob:none", "origin",
+                  "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"])
         proc = _git(probe, check=False)
     if proc.returncode != 0:
         raise SnapshotError(f"commit {rev} not found in {cache}")
@@ -82,9 +106,10 @@ def _prefetch_blobs(cache: Path, commit: str) -> None:
     listing = _git(["--git-dir", str(cache), "rev-list", "--objects", "--missing=print", f"{commit}^{{tree}}"])
     missing = [line[1:] for line in listing.stdout.splitlines() if line.startswith("?")]
     if missing:
-        _git(["--git-dir", str(cache), "-c", "fetch.negotiationAlgorithm=noop", "fetch", "--quiet", "origin",
-              "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin"],
-             input="\n".join(missing) + "\n")
+        with _cache_lock(cache):
+            _git(["--git-dir", str(cache), "-c", "fetch.negotiationAlgorithm=noop", "fetch", "--quiet", "origin",
+                  "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none",
+                  "--stdin"], input="\n".join(missing) + "\n")
 
 
 def _extract_tree(cache: Path, commit: str, dest: Path, patch: Path = None) -> None:

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Fake `claude -p` for harness tests. Never calls a model.
 
-FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block
-FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, stdin}).
+FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block | outside_read
+  (outside_read: a Read tool_use of ~/Dev/edc/benchmark/curl/ground-truth.md,
+  then the ok flow)
+FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin}).
 A `--output-format json` call is answered as score.py's judge (verdict exact).
 In ok mode it writes edc-context/reports/issues.md in cwd and emits a
 stream-json result event.
@@ -15,7 +17,7 @@ stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
 if log:
     with open(log, "a") as fh:
-        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": stdin}) + "\n")
+        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin}) + "\n")
 mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
 if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json":
     # score.py judge call
@@ -24,7 +26,7 @@ if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "jso
     sys.exit(0)
 def emit(obj):
     print(json.dumps(obj), flush=True)
-emit({"type": "system", "subtype": "init", "session_id": "fake"})
+emit({"type": "system", "subtype": "init", "session_id": "fake", "cwd": os.getcwd()})
 if mode == "blocked_api":
     emit({"type": "result", "subtype": "success", "is_error": True, "stop_reason": "stop_sequence",
           "result": "API Error: Opus 4.8's safeguards flagged this message. Details: `[cyber]`"})
@@ -33,6 +35,10 @@ if mode == "soft_block":
     emit({"type": "result", "is_error": False, "stop_reason": "end_turn",
           "result": "A safety classifier stopped the response that was writing the artifact, so the file write never ran."})
     sys.exit(0)
+if mode == "outside_read":
+    gt = os.path.join(os.path.expanduser("~"), "Dev", "edc", "benchmark", "curl", "ground-truth.md")
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": gt}}]}})
 os.makedirs("edc-context/reports", exist_ok=True)
 with open("edc-context/reports/issues.md", "w") as fh:
     fh.write("# issues\n\n## heap buffer overflow in a.c\n- severity: critical\n- a.c:3 hostname length check bypassed, overflow on copy into heap buffer\n")

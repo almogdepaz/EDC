@@ -4,10 +4,12 @@
 One run = one arm x one ground-truth entry x one repetition:
   1. build an isolated one-commit snapshot of the vulnerable tree
      (clean_snapshot.py; the audited agent never sees later commits);
-  2. run the arm against it with clean-bin/ first on PATH (call logging and,
-     for enemy, the `agent` shim);
-  3. score the report with score.score_cve and detect blocked runs from the
-     structured call logs (clean_blocked.py);
+  2. run the arm against it with a staged copy of clean-bin/ first on PATH
+     (call logging and, for enemy, the `agent` shim); no path into this repo
+     reaches the arm's PATH, argv, cwd or env;
+  3. score the report with score.score_cve, detect blocked runs from the
+     structured call logs (clean_blocked.py) and scan them for tool access
+     outside the run's roots (clean_access.py; `contaminated` outcome);
   4. append one row to an isolated TSV ($EDC_RESULTS_FILE, else
      <out-dir>/record.tsv). Legacy benchmark/results*.tsv paths are refused.
 
@@ -30,7 +32,9 @@ from pathlib import Path
 
 BENCHMARK_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCHMARK_DIR.parent
-CLEAN_BIN = BENCHMARK_DIR / "clean-bin"
+# What the arm executes from this repo (clean-bin/), staged under the work
+# dir by stage_bin. clean-bin/agent runs ../clean_stream_text.py.
+STAGED_BIN_FILES = ("clean-bin/claude", "clean-bin/agent", "clean_stream_text.py")
 PLUGIN_DIR = REPO_ROOT / "plugins" / "edc"
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_GT_ROOT = BENCHMARK_DIR / "clean"
@@ -39,6 +43,7 @@ OUT_MARKER = ".clean-harness-run"
 sys.path.insert(0, str(BENCHMARK_DIR))
 import clean_gt  # noqa: E402
 import clean_snapshot  # noqa: E402
+from clean_access import scan_access, summarize  # noqa: E402
 from clean_blocked import detect_blocked, result_text  # noqa: E402
 
 ARMS = ("edc-module", "edc-review-skill", "edc-security", "enemy-3", "edc-deep")
@@ -58,7 +63,7 @@ RECORD_FIELDS = [
     "timestamp", "run_id", "arm", "project", "entry", "kind", "run", "model", "outcome", "verdict",
     "confidence", "duration_s", "build_duration_s", "model_calls", "build_model_calls", "passes_run",
     "loop_end", "arm_exit", "blocked", "blocked_signal", "cve_ids_named", "build_scope",
-    "isolation", "snapshot_commit", "report", "out_dir", "notes",
+    "isolation", "outside_access", "snapshot_commit", "report", "out_dir", "notes",
 ]
 
 # --- prompts (verbatim from the legacy runners) -------------------------------
@@ -154,23 +159,43 @@ def ignore_complement(tracked, keep) -> list[str]:
     return [p for _, p in sorted(patterns)]
 
 
-def stage_plugin(work: Path) -> Path:
-    """Content-addressed copy of plugins/edc under the work dir. Audited agents
-    follow --plugin-dir paths; pointing them into this repo would also lead
-    them to benchmark/*/ground-truth.md."""
+def _stage(work: Path, kind: str, leaf: str, src_root: Path, files, copy) -> Path:
+    """Content-addressed copy under <work>/<kind>/<digest>/<leaf>; copy(dest)
+    fills a fresh directory. Arms must not get paths into this repo: they
+    lead to benchmark/*/ground-truth.md."""
     digest = hashlib.sha256()
-    for path in sorted(p for p in PLUGIN_DIR.rglob("*") if p.is_file()):
-        digest.update(str(path.relative_to(PLUGIN_DIR)).encode() + b"\0" + path.read_bytes() + b"\0")
-    dest = work / "plugin" / digest.hexdigest()[:16] / "edc"
+    for path in sorted(files):
+        digest.update(str(path.relative_to(src_root)).encode() + b"\0" + path.read_bytes() + b"\0")
+    dest = work / kind / digest.hexdigest()[:16] / leaf
     if not dest.is_dir():
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.parent / f".tmp-{os.getpid()}"
-        shutil.copytree(PLUGIN_DIR, tmp, symlinks=True)
+        copy(tmp)
         try:
             os.replace(tmp, dest)
         except OSError:  # a concurrent run staged the same content first
             shutil.rmtree(tmp)
     return dest
+
+
+def stage_plugin(work: Path) -> Path:
+    """plugins/edc for --plugin-dir (audited agents follow that path)."""
+    files = [p for p in PLUGIN_DIR.rglob("*") if p.is_file()]
+    return _stage(work, "plugin", "edc", PLUGIN_DIR, files,
+                  lambda dest: shutil.copytree(PLUGIN_DIR, dest, symlinks=True))
+
+
+def stage_bin(work: Path) -> Path:
+    """clean-bin/ (+ clean_stream_text.py) at the same relative layout; returns
+    the staged clean-bin dir that goes first on the arm's PATH."""
+    files = [BENCHMARK_DIR / rel for rel in STAGED_BIN_FILES]
+
+    def copy(dest: Path):
+        for rel in STAGED_BIN_FILES:
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(BENCHMARK_DIR / rel, dest / rel)
+
+    return _stage(work, "bin", "harness", BENCHMARK_DIR, files, copy) / "clean-bin"
 
 
 def run_logged(cmd, cwd, env, timeout, stdout_path, stderr_path) -> tuple[int, float, bool]:
@@ -218,12 +243,13 @@ def save_report(src: Path, out: Path, name=None) -> Path:
 # --- arms ---------------------------------------------------------------------
 
 class Run:
-    def __init__(self, args, entry, model, snap, out, work, env):
+    def __init__(self, args, entry, model, snap, out, work, env, bin_dir):
         self.args, self.entry, self.model = args, entry, model
-        self.snap, self.out, self.work, self.env = snap, out, work, env
+        self.snap, self.out, self.work, self.env, self.bin = snap, out, work, env, bin_dir
         self.files = entry["affected_files"]
         self.calls = out / "calls"
         self.plugin = stage_plugin(work)
+        self.scratch = []  # run-owned dirs the agent may use besides snap and plugin
         self.result = {"report_text": "", "report": "", "arm_exit": "", "ok": False, "timed_out": False,
                        "duration": 0.0, "build_duration": None, "build_calls": None, "passes_run": "",
                        "loop_end": "", "call_dirs": [self.calls], "text_logs": [], "notes": []}
@@ -259,7 +285,7 @@ class Run:
 
     def edc_module(self):
         file_list = "".join(f" {f}" for f in self.files)
-        cmd = [str(CLEAN_BIN / "claude"), "-p", EDC_MODULE_PROMPT.format(file_list=file_list),
+        cmd = [str(self.bin / "claude"), "-p", EDC_MODULE_PROMPT.format(file_list=file_list),
                "--plugin-dir", str(self.plugin),
                "--allowedTools", "Read Grep Glob Write Bash Skill",
                "--disallowedTools", DISALLOWED_TOOLS,
@@ -274,6 +300,7 @@ class Run:
         if flat.exists():
             shutil.rmtree(flat)
         flat.mkdir(parents=True)
+        self.scratch.append(flat)
         names = [Path(f).name for f in self.files]
         if len(set(names)) != len(names):
             raise HarnessError(f"affected files share a basename; flat copy would collide: {self.files}")
@@ -281,7 +308,7 @@ class Run:
             shutil.copyfile(self.snap / f, flat / Path(f).name)
         file_list = "".join(f" {n}" for n in names)
         prompt = REVIEW_SKILL_PROMPT.format(ctx_note=REVIEW_SKILL_CTX_NOTE, file_list=file_list)
-        cmd = [str(CLEAN_BIN / "claude"), "-p", prompt,
+        cmd = [str(self.bin / "claude"), "-p", prompt,
                "--plugin-dir", str(self.plugin),
                "--allowedTools", "Read Glob Grep Write Skill",
                "--disallowedTools", DISALLOWED_TOOLS,
@@ -430,15 +457,23 @@ def parse_args(argv):
     return p.parse_args(argv)
 
 
-def child_env(model: str) -> dict:
-    env = dict(os.environ)
-    env.pop("EDC_RESULTS_FILE", None)
-    path_dirs = [d for d in env.get("PATH", "").split(os.pathsep)
-                 if d and Path(d).resolve() != CLEAN_BIN.resolve()]
+def in_repo(path) -> bool:
+    resolved = Path(path).resolve()
+    return resolved == REPO_ROOT or REPO_ROOT in resolved.parents
+
+
+def child_env(model: str, bin_dir: Path) -> dict:
+    """The arm's env: no value mentions this repo (PWD/OLDPWD/_ of the shell
+    that started clean.sh would), repo dirs leave PATH, the staged bin leads."""
+    repo_forms = {str(REPO_ROOT), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}  # resolved, as invoked
+    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and not in_repo(d)]
+    env = {k: v for k, v in os.environ.items() if not any(form in v for form in repo_forms)}
+    for key in ("EDC_RESULTS_FILE", "ENEMY_BIN", "EDC_BENCH_EDC_BIN", "PWD", "OLDPWD"):
+        env.pop(key, None)  # harness inputs, or stale for the arm's cwd
     real = shutil.which("claude", path=os.pathsep.join(path_dirs))
     if not real:
-        raise HarnessError("claude not found on PATH")
-    env["PATH"] = os.pathsep.join([str(CLEAN_BIN), *path_dirs])
+        raise HarnessError("claude not found on PATH (outside this repo)")
+    env["PATH"] = os.pathsep.join([str(bin_dir), *path_dirs])
     env["EDC_BENCH_REAL_CLAUDE"] = real
     env["EDC_BENCH_SETTING_SOURCES"] = SETTING_SOURCES
     for key in ("EDC_BENCH_MODEL", "EDC_BUILD_MODEL", "EDC_REVIEW_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
@@ -452,9 +487,13 @@ def run(args) -> dict:
     out = (args.out_dir or work / "results" / args.arm / args.entry / f"run-{args.run}").resolve()
     results_path = check_results_path(Path(os.environ["EDC_RESULTS_FILE"]) if os.environ.get("EDC_RESULTS_FILE")
                                       else out / "record.tsv")
+    for path in (work, out):
+        if in_repo(path):
+            raise HarnessError(f"{path} is inside the repo; audited agents must not get paths into it")
     if args.arm == "enemy-3":
         preflight_enemy()
-    env = child_env(model)
+    bin_dir = stage_bin(work)
+    env = child_env(model, bin_dir)
 
     project_dir = args.gt_root.resolve() / args.project
     entry = clean_gt.find_entry(project_dir / "ground-truth.md", args.entry)
@@ -467,17 +506,20 @@ def run(args) -> dict:
     snapshot_commit = clean_snapshot.make_snapshot(cache, entry, project_dir, snap)
 
     prepare_dir(out)
-    r = Run(args, entry, model, snap, out, work, env)
+    r = Run(args, entry, model, snap, out, work, env, bin_dir)
     getattr(r, args.arm.replace("-", "_"))()
     res = r.result
 
     logs = [p for d in res["call_dirs"] for p in call_logs(d)]
     blocked, signal_ = detect_blocked(logs, res["text_logs"])
+    outside, contaminated = scan_access(logs, [snap, r.plugin, *r.scratch], forbidden=[work / "cache"])
     import score  # judge uses the harness env (real claude, not the call logger)
     verdict, confidence, notes = score.score_cve(
         res["report_text"], entry["id"], entry.get("bug_pattern", ""), entry.get("category", ""),
         entry.get("description", ""), ", ".join(entry["affected_files"]), skip_judge=args.skip_judge)
-    if blocked:
+    if contaminated:  # the agent may have seen the answer; p3 excludes these from recall
+        outcome = "contaminated"
+    elif blocked:
         outcome = "blocked"
     elif res["timed_out"]:
         outcome = "timeout"
@@ -500,6 +542,7 @@ def run(args) -> dict:
         "cve_ids_named": ",".join(named),
         "build_scope": args.build_scope if args.arm == "edc-security" else "",
         "isolation": ISOLATION,
+        "outside_access": summarize(outside, contaminated),
         "snapshot_commit": snapshot_commit, "report": res["report"], "out_dir": str(out),
         "notes": "; ".join([*res["notes"], notes]),
     }

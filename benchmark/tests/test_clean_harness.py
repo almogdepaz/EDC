@@ -30,6 +30,7 @@ clean_gt = importlib.import_module("clean_gt")
 clean_snapshot = importlib.import_module("clean_snapshot")
 clean_blocked = importlib.import_module("clean_blocked")
 clean_harness = importlib.import_module("clean_harness")
+clean_access = importlib.import_module("clean_access")
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@localhost",
@@ -243,16 +244,22 @@ class BlockedDetectionTests(unittest.TestCase):
 
 
 class ArmDispatchTests(Fixture):
+    def setUp(self):
+        super().setUp()
+        # the harness strips repo paths from the arm's PATH and env, so the fakes live outside the repo
+        self.fakes = self.root / "fakes"
+        shutil.copytree(FAKES, self.fakes)
+
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("EDC_", "FAKE_"))}
         env.update(GIT_ENV)
-        env["PATH"] = f"{FAKES}:{env['PATH']}"
+        env["PATH"] = f"{self.fakes}:{env['PATH']}"
         env["EDC_BENCH_WORKDIR"] = str(self.work)
         env["FAKE_CLAUDE_ARGV_LOG"] = str(self.root / "claude-argv.jsonl")
         env["FAKE_ENEMY_ARGV_LOG"] = str(self.root / "enemy-argv.log")
         env["FAKE_EDC_ARGV_LOG"] = str(self.root / "edc-argv.log")
-        env["ENEMY_BIN"] = str(FAKES / "enemy")
-        env["EDC_BENCH_EDC_BIN"] = str(FAKES / "edc")
+        env["ENEMY_BIN"] = str(self.fakes / "enemy")
+        env["EDC_BENCH_EDC_BIN"] = str(self.fakes / "edc")
         env.update(extra)
         return env
 
@@ -470,8 +477,163 @@ class SettingSourcesTests(ArmDispatchTests):
         self.assertEqual(self.claude_calls(), [])
 
 
+class RepoPathTests(ArmDispatchTests):
+    """No path into this repo (which holds benchmark/*/ground-truth.md) reaches an audited call."""
+
+    def test_no_repo_path_reaches_audited_calls(self):
+        repo = str(REPO_ROOT)
+        decoys = {"PWD": str(BENCHMARK_DIR), "OLDPWD": repo, "DECOY_REPO_PATH": repo + "/x",
+                  "PATH": f"{BENCHMARK_DIR / 'clean-bin'}:{self.fakes}:{os.environ['PATH']}"}
+        for arm in ("edc-module", "edc-review-skill", "edc-security", "enemy-3"):
+            with self.subTest(arm=arm):
+                (self.root / "claude-argv.jsonl").unlink(missing_ok=True)
+                self.run_arm(arm, env=self.env(**decoys))
+                calls = self.claude_calls()
+                self.assertTrue(calls)
+                for call in calls:
+                    self.assertNotIn(repo, json.dumps(call["argv"]))
+                    self.assertNotIn(repo, call["cwd"])
+                    for key, value in call["env"].items():
+                        self.assertNotIn(repo, value, key)
+                    staged = Path(call["env"]["PATH"].split(os.pathsep)[0])
+                    self.assertIn(self.work.resolve(), staged.parents)
+                    self.assertEqual(staged.name, "clean-bin")
+                    for name in ("claude", "agent"):
+                        self.assertTrue(os.access(staged / name, os.X_OK), name)
+                        self.assertEqual((staged / name).read_bytes(),
+                                         (BENCHMARK_DIR / "clean-bin" / name).read_bytes())
+                    # clean-bin/agent runs ../clean_stream_text.py
+                    self.assertEqual((staged.parent / "clean_stream_text.py").read_bytes(),
+                                     (BENCHMARK_DIR / "clean_stream_text.py").read_bytes())
+        for log in ("enemy-argv.log", "edc-argv.log"):
+            self.assertNotIn(repo, (self.root / log).read_text(), log)
+
+    def test_work_dir_inside_repo_is_refused(self):
+        inside = REPO_ROOT / ".clean-test-work"
+        self.addCleanup(shutil.rmtree, inside, True)  # in case the guard regresses
+        proc = self.run_arm("edc-module", env=self.env(EDC_BENCH_WORKDIR=str(inside)), check=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("inside the repo", proc.stderr)
+        self.assertFalse(inside.exists())
+        self.assertEqual(self.claude_calls(), [])
+
+
+class ContaminationRecordTests(ArmDispatchTests):
+    def test_clean_run_has_no_outside_access(self):
+        self.run_arm("edc-module")
+        row = self.record("edc-module")
+        self.assertEqual((row["outcome"], row["outside_access"]), ("exact", "0"))
+
+    def test_ground_truth_read_marks_run_contaminated(self):
+        gt = str(Path.home() / "Dev" / "edc" / "benchmark" / "curl" / "ground-truth.md")
+        for arm, calls in (("edc-module", 1), ("edc-security", 2)):  # edc-security: build + review logs
+            with self.subTest(arm=arm):
+                self.run_arm(arm, env=self.env(FAKE_CLAUDE_MODE="outside_read"))
+                row = self.record(arm)
+                self.assertEqual((row["outcome"], row["verdict"]), ("contaminated", "exact"))
+                self.assertTrue(row["outside_access"].startswith(f"{calls}: "), row["outside_access"])
+                self.assertIn(f"Read {gt}", row["outside_access"])
+
+
+class AccessScanTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()
+        self.work = self.root / "work"
+        self.snap = self.work / "snap" / "s1"
+        self.plugin = self.work / "plugin" / "p1" / "edc"
+        self.flat = self.work / "flat" / "f1"
+        for d in (self.snap, self.plugin, self.flat):
+            d.mkdir(parents=True)
+        self.home = str(Path.home())
+        self.n = 0
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def scan(self, *tool_uses, cwd=None, denied=()):
+        self.n += 1
+        log = self.root / f"call-{self.n}.jsonl"
+        lines = [{"type": "system", "subtype": "init", "cwd": str(cwd or self.snap)}]
+        for i, (name, inp) in enumerate(tool_uses):
+            lines.append({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "reading"}, {"type": "tool_use", "id": f"t{i}", "name": name, "input": inp}]}})
+        lines.append({"type": "result", "permission_denials": [
+            {"tool_name": tool_uses[i][0], "tool_use_id": f"t{i}", "tool_input": tool_uses[i][1]} for i in denied]})
+        log.write_text("\n".join(json.dumps(line) for line in lines) + "\nnot json\n")
+        return clean_access.scan_access([log], [self.snap, self.plugin, self.flat],
+                                        forbidden=[self.work / "cache"])
+
+    def test_inside_access_and_shell_noise_are_clean(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.work)  # /tmp vs /private/tmp
+        outside, contaminated = self.scan(
+            ("Read", {"file_path": "a.c"}),
+            ("Read", {"file_path": str(self.snap / "lib" / "c.c")}),
+            ("Grep", {"pattern": "x/y", "path": str(self.plugin / "skills")}),
+            ("Glob", {"pattern": "**/*.c"}),
+            ("Write", {"file_path": str(self.flat / "edc-context" / "reports" / "issues.md"), "content": "/etc/x"}),
+            ("Bash", {"command": "grep -n 'copy(' a.c 2>/dev/null | head -5"}),
+            ("Bash", {"command": "sed -n 's/a/b/p' lib/c.c && wc -l ./a.c"}),
+            ("Bash", {"command": "curl -s https://example.invalid/x/y"}),
+            ("Bash", {"command": f"ls {alias}/snap/s1"}),
+            # awk/sed regexes and heredoc bodies are not paths (seen in real smoke transcripts)
+            ("Bash", {"command": "awk '/Curl_x/{f=1} f&&/CONNECT_|ret/{print}' lib/socks.c; ls /\n"
+                                 "cat > r.md <<'EOF'\n/* note */ rejects `/:#?!@{}[]`\nEOF"}),
+            ("Skill", {"skill": "edc:edc-review"}),
+        )
+        self.assertEqual((outside, contaminated), ([], []))
+
+    def test_outside_access_without_ground_truth_is_not_contaminated(self):
+        outside, contaminated = self.scan(
+            ("Read", {"file_path": "/etc/hosts"}),
+            ("Bash", {"command": "ls ~/Dev"}),
+            ("Bash", {"command": "cat " + "../" * 30 + "etc/passwd"}),
+        )
+        self.assertEqual(outside, [("Read", "/etc/hosts"), ("Bash", f"{self.home}/Dev"), ("Bash", "/etc/passwd")])
+        self.assertEqual(contaminated, [])
+
+    def test_ground_truth_access_is_contaminated(self):
+        gt = f"{self.home}/Dev/edc/benchmark/curl/ground-truth.md"
+        claude_project = self.home.replace("/", "-") + "-Dev-edc-enemy-port-p1"
+        cases = {
+            "read": ("Read", {"file_path": gt}),
+            "grep path": ("Grep", {"pattern": "socks", "path": f"{self.home}/Dev/edc-enemy-port-p1"}),
+            "glob pattern": ("Glob", {"pattern": "/somewhere/**/ground-truth.md"}),
+            "plans": ("Bash", {"command": f"cd {self.home}/x && cat {self.home}/x/.plans/041-p1-report.md"}),
+            "compound": ("Bash", {"command": f"ls ~/Dev; cat {gt} | head"}),
+            "home var": ("Bash", {"command": "cat $HOME/Dev/edc-foo/README.md"}),
+            "benchmark dir": ("Write", {"file_path": "/elsewhere/benchmark/x.md"}),
+            "fix history": ("Read", {"file_path": str(self.work / "cache" / "curl.git" / "HEAD")}),
+            "relative escape": ("Bash", {"command": "cat " + "../" * 30 + f"{self.home[1:]}/Dev/edc/README.md"}),
+            "edc transcripts": ("Read", {"file_path": f"{self.home}/.claude/projects/{claude_project}/s.jsonl"}),
+        }
+        for label, use in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(use)
+                self.assertTrue(contaminated, outside)
+                self.assertTrue(set(contaminated) <= set(outside))
+
+    def test_denied_ground_truth_access_is_outside_not_contaminated(self):
+        # the enemy shim's permission layer denies outside paths; nothing was exposed
+        gt = f"{self.home}/Dev/edc/benchmark/curl/ground-truth.md"
+        outside, contaminated = self.scan(("Bash", {"command": f"cat {gt}"}), ("Read", {"file_path": gt}),
+                                          denied=[0, 1])
+        self.assertEqual((outside, contaminated), ([("Bash", gt), ("Read", gt)], []))
+
+    def test_ls_dev_alone_is_outside_not_contaminated(self):
+        outside, contaminated = self.scan(("Bash", {"command": "ls ~/Dev"}))
+        self.assertEqual((outside, contaminated), ([("Bash", f"{self.home}/Dev")], []))
+
+    def test_summary(self):
+        self.assertEqual(clean_access.summarize([], []), "0")
+        out = [("Read", "/a"), ("Bash", "/b"), ("Read", "/c"), ("Read", "/gt"), ("Bash", "/e")]
+        self.assertEqual(clean_access.summarize(out, [("Read", "/gt")]),
+                         "5: Read /gt, Read /a, Bash /b (+2 more)")
+
+
 # ArmDispatchTests' tests should not run twice through the subclasses.
-for _cls in (ResultsIsolationTests, SettingSourcesTests):
+for _cls in (ResultsIsolationTests, SettingSourcesTests, RepoPathTests, ContaminationRecordTests):
     for _name in [n for n in dir(ArmDispatchTests) if n.startswith("test_")]:
         if _name not in _cls.__dict__:
             setattr(_cls, _name, None)

@@ -56,8 +56,10 @@ edc_spawn() {
         cmd+=(--system-prompt-file "$prompt_file" \
               --exclude-dynamic-system-prompt-sections \
               --allowed-tools "Read,Write,Bash,Grep,Glob")
-        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-null "" \
-          "${cmd[@]}" "execute the task per the system prompt."
+        # Prompt goes on stdin: a positional after the variadic --allowed-tools
+        # is parsed as another tool name and claude -p exits with no input.
+        edc_run_filtered_stream "$timeout_secs" "$phase" "$capture" "$model" stdin-text \
+          "execute the task per the system prompt." "${cmd[@]}"
         rc=$?
       else
         cmd+=(--allowed-tools "Skill,Bash,Read,Write,Edit,Grep,Glob")

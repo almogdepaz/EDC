@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Fake `claude -p` for harness tests. Never calls a model.
+
+FAKE_CLAUDE_MODE: ok (default) | blocked_api | soft_block | outside_read
+  (outside_read: a Read tool_use of ~/Dev/edc/benchmark/curl/ground-truth.md,
+  then the ok flow)
+FAKE_CLAUDE_READ: comma-separated paths to emit Read tool_uses for (ok flow);
+  `$CALLS` expands to EDC_BENCH_CALL_LOG_DIR, `$CWD` to the cwd.
+FAKE_CLAUDE_RESULT: text of a tool result the ok flow emits (after a Bash
+  `cat notes.txt` tool_use).
+FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin,
+  commits, files}); commits/files record the cwd's git commit count and its
+  top-level files at call time (the harness deletes the snapshot afterwards).
+FAKE_CLAUDE_ANCESTORS_UNTIL: a pid; the log line also gets "ancestors": this
+  process and each parent below that pid, with its exec-time argv+env strings
+  (sysctl KERN_PROCARGS2, what `ps -E` shows) and its cwd/fd paths (lsof).
+FAKE_CLAUDE_SLEEP: seconds to sleep after the init event (ok flow), so a test
+  can signal the harness mid-run; the log line carries the fake's "pid".
+FAKE_CLAUDE_IO_FILE: a file name the ok flow writes (junk) next to its call-log
+  dir, i.e. into the run's io dir.
+A `--output-format json` call is answered as score.py's judge (verdict exact).
+In ok mode it writes edc-context/reports/issues.md in cwd and emits a
+stream-json result event.
+"""
+import ctypes, json, os, struct, subprocess, sys, time
+
+
+def _sysctl(mib, size):
+    libc = ctypes.CDLL(None, use_errno=True)
+    buf, n = ctypes.create_string_buffer(size), ctypes.c_size_t(size)
+    if libc.sysctl((ctypes.c_int * len(mib))(*mib), len(mib), buf, ctypes.byref(n), None, 0) != 0:
+        raise OSError(ctypes.get_errno(), "sysctl")
+    return buf.raw[:n.value]
+
+
+def ancestors(stop):
+    """[{pid, strings, files}] from this process up to (excluding) stop (macOS)."""
+    out, pid = [], os.getpid()
+    while pid > 1 and pid != stop:
+        raw = _sysctl([1, 49, pid], 1 << 20)  # CTL_KERN, KERN_PROCARGS2: argc, exec path, argv, env
+        strings = [s.decode(errors="replace") for s in raw[4:].split(b"\0") if s]
+        lsof = subprocess.run(["lsof", "-p", str(pid), "-a", "-d", "cwd,0-9", "-Fn"], capture_output=True, text=True)
+        files = [line[1:] for line in lsof.stdout.splitlines() if line.startswith("n")]
+        out.append({"pid": pid, "strings": strings, "files": files})
+        pid = struct.unpack_from("i", _sysctl([1, 14, 1, pid], 648), 560)[0]  # KERN_PROC_PID: kp_eproc.e_ppid
+    return out
+
+
+argv = sys.argv[1:]
+if "--version" in argv:
+    print("0.0.0 (fake)"); sys.exit(0)
+stdin = "" if sys.stdin.isatty() else sys.stdin.read()
+log = os.environ.get("FAKE_CLAUDE_ARGV_LOG")
+if log:
+    with open(log, "a") as fh:
+        rev = subprocess.run(["git", "rev-list", "--all"], capture_output=True, text=True)
+        files = {}
+        for n in sorted(os.listdir(".")):
+            if os.path.isfile(n):
+                try:
+                    files[n] = open(n, errors="replace").read()
+                except OSError:  # unreadable files of an unrelated cwd (the judge runs from /)
+                    pass
+        fh.write(json.dumps({"pid": os.getpid(), "argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin,
+                             "commits": len(rev.stdout.split()) if rev.returncode == 0 else rev.stderr,
+                             "files": files,
+                             "ancestors": ancestors(int(os.environ["FAKE_CLAUDE_ANCESTORS_UNTIL"]))
+                             if os.environ.get("FAKE_CLAUDE_ANCESTORS_UNTIL") else []}) + "\n")
+mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+if "--output-format" in argv and argv[argv.index("--output-format") + 1] == "json":
+    # score.py judge call
+    print(json.dumps({"type": "result", "result":
+                      'QUOTE: x\nVERDICT_JSON: {"verdict": "exact", "confidence": 0.9, "explanation": "fake judge"}'}))
+    sys.exit(0)
+def emit(obj):
+    print(json.dumps(obj), flush=True)
+emit({"type": "system", "subtype": "init", "session_id": "fake", "cwd": os.getcwd()})
+if mode == "blocked_api":
+    emit({"type": "result", "subtype": "success", "is_error": True, "stop_reason": "stop_sequence",
+          "result": "API Error: Opus 4.8's safeguards flagged this message. Details: `[cyber]`"})
+    sys.exit(1)
+if mode == "soft_block":
+    emit({"type": "result", "is_error": False, "stop_reason": "end_turn",
+          "result": "A safety classifier stopped the response that was writing the artifact, so the file write never ran."})
+    sys.exit(0)
+if mode == "outside_read":
+    gt = os.path.join(os.path.expanduser("~"), "Dev", "edc", "benchmark", "curl", "ground-truth.md")
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": gt}}]}})
+if os.environ.get("FAKE_CLAUDE_SLEEP"):
+    time.sleep(float(os.environ["FAKE_CLAUDE_SLEEP"]))
+if os.environ.get("FAKE_CLAUDE_IO_FILE"):
+    io_dir = os.path.dirname(os.environ["EDC_BENCH_CALL_LOG_DIR"])
+    with open(os.path.join(io_dir, os.environ["FAKE_CLAUDE_IO_FILE"]), "w") as fh:
+        fh.write("junk\tjunk\nnot\ta row\n")
+for i, raw in enumerate(filter(None, os.environ.get("FAKE_CLAUDE_READ", "").split(","))):
+    path = raw.replace("$CALLS", os.environ.get("EDC_BENCH_CALL_LOG_DIR", "")).replace("$CWD", os.getcwd())
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": f"r{i}", "name": "Read", "input": {"file_path": path}}]}})
+if os.environ.get("FAKE_CLAUDE_RESULT"):
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "x0", "name": "Bash", "input": {"command": "cat notes.txt"}}]}})
+    emit({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "x0", "content": os.environ["FAKE_CLAUDE_RESULT"]}]}})
+os.makedirs("edc-context/reports", exist_ok=True)
+with open("edc-context/reports/issues.md", "w") as fh:
+    fh.write("# issues\n\n## heap buffer overflow in a.c\n- severity: critical\n- a.c:3 hostname length check bypassed, overflow on copy into heap buffer\n")
+emit({"type": "result", "is_error": False, "stop_reason": "end_turn", "num_turns": 2,
+      "result": "wrote edc-context/reports/issues.md"})

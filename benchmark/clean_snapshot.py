@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""Snapshot isolation for the clean benchmark (plan 041).
+
+A snapshot is a fresh one-commit git repo whose tree is the vulnerable state:
+  cve     -> tree of fix_commit~1
+  planted -> tree of base_commit with the entry's patch applied to the index
+             before extraction (git apply --cached), so the plant is written
+             like every other file
+The source history lives only in a partial-clone cache outside the snapshot;
+no object from the cache is reachable from (or stored in) the snapshot.
+Every file and dir outside .git gets the same mtime, so `ls -lt` /
+`find -newer` cannot single out the planted (or any) file.
+"""
+
+import contextlib
+import fcntl
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+# Snapshot commits are deterministic and carry nothing about the entry.
+SNAPSHOT_MESSAGE = "snapshot"
+SNAPSHOT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "bench", "GIT_AUTHOR_EMAIL": "bench@localhost",
+    "GIT_COMMITTER_NAME": "bench", "GIT_COMMITTER_EMAIL": "bench@localhost",
+    "GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z",
+}
+SNAPSHOT_MTIME = 946684800  # 2000-01-01T00:00:00Z, the snapshot commit date
+
+
+class SnapshotError(RuntimeError):
+    pass
+
+
+def _git(args, cwd=None, env=None, isolated=False, check=True, input=None):
+    full_env = dict(os.environ)
+    if isolated:
+        # Snapshot-side git must not pick up user hooks, templates, autocrlf,
+        # signing or other config that could alter the tree or the commit.
+        full_env.update({"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    if env:
+        full_env.update(env)
+    proc = subprocess.run(["git", *args], cwd=cwd, env=full_env, capture_output=True, text=True, input=input)
+    if check and proc.returncode != 0:
+        raise SnapshotError(f"git {' '.join(args)} failed ({proc.returncode}): {proc.stderr.strip()}")
+    return proc
+
+
+@contextlib.contextmanager
+def _cache_lock(cache: Path):
+    """Exclusive lock for creating or fetching into `cache` (concurrent runs share it)."""
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache.parent / f".{cache.name}.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+
+
+def ensure_cache(repo_url: str, cache: Path) -> Path:
+    """Bare blob:none clone of repo_url at `cache` (created once, reused). The
+    clone goes to a temp dir renamed into place, so `cache` is either absent
+    or complete."""
+    cache = Path(cache)
+    if (cache / "HEAD").exists():
+        return cache
+    with _cache_lock(cache):
+        if cache.exists() and not (cache / "HEAD").exists():
+            raise SnapshotError(f"{cache} exists but is not a git dir (interrupted clone?); remove it")
+        if not cache.exists():
+            tmp = Path(tempfile.mkdtemp(dir=cache.parent, prefix=f".{cache.name}.tmp-"))
+            try:
+                _git(["clone", "--quiet", "--bare", "--filter=blob:none", repo_url, str(tmp / "repo")])
+                os.replace(tmp / "repo", cache)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+    return cache
+
+
+def resolve_commit(cache: Path, rev: str) -> str:
+    """Full sha for rev in the cache; fetches once if the commit is missing."""
+    probe = ["--git-dir", str(cache), "rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"]
+    proc = _git(probe, check=False)
+    if proc.returncode != 0:
+        with _cache_lock(cache):
+            _git(["--git-dir", str(cache), "fetch", "--quiet", "--filter=blob:none", "origin",
+                  "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"])
+        proc = _git(probe, check=False)
+    if proc.returncode != 0:
+        raise SnapshotError(f"commit {rev} not found in {cache}")
+    return proc.stdout.strip()
+
+
+def vulnerable_commit(cache: Path, entry: dict) -> str:
+    if entry["kind"] == "cve":
+        fix = resolve_commit(cache, entry["fix_commit"])
+        return resolve_commit(cache, f"{fix}~1")
+    if entry["kind"] == "planted":
+        return resolve_commit(cache, entry["base_commit"])
+    raise SnapshotError(f"unknown entry kind {entry['kind']}")
+
+
+def _prefetch_blobs(cache: Path, commit: str) -> None:
+    """Fetch the tree's missing blobs in one batch. Per-blob lazy fetches from
+    checkout-index are slow and failed on the real curl cache."""
+    listing = _git(["--git-dir", str(cache), "rev-list", "--objects", "--missing=print", f"{commit}^{{tree}}"])
+    missing = [line[1:] for line in listing.stdout.splitlines() if line.startswith("?")]
+    if missing:
+        with _cache_lock(cache):
+            _git(["--git-dir", str(cache), "-c", "fetch.negotiationAlgorithm=noop", "fetch", "--quiet", "origin",
+                  "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none",
+                  "--stdin"], input="\n".join(missing) + "\n")
+
+
+def _extract_tree(cache: Path, commit: str, dest: Path, patch: Path = None) -> None:
+    """Write commit's tree (plus patch, applied to the throwaway index first)
+    into dest via a throwaway index (no git archive: export-ignore attributes
+    would silently drop files)."""
+    _prefetch_blobs(cache, commit)
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        base = ["--git-dir", str(cache), "--work-tree", str(dest)]
+        _git([*base, "read-tree", commit], env=env, isolated=True)
+        if patch is not None:
+            # the patched index is the snapshot tree; checkout-index writes it like any other
+            _git([*base, "apply", "--cached", "--whitespace=nowarn", str(patch)], env=env, isolated=True)
+        _git([*base, "checkout-index", "--all", "--force"], env=env, isolated=True)
+
+
+def _uniform_mtimes(dest: Path) -> None:
+    """One mtime for every file, symlink and dir outside .git (deepest first,
+    so setting a child does not disturb its dir afterwards)."""
+    paths = [p for p in dest.rglob("*") if ".git" not in p.relative_to(dest).parts]
+    for path in sorted(paths, key=lambda p: len(p.parts), reverse=True) + [dest]:
+        os.utime(path, (SNAPSHOT_MTIME, SNAPSHOT_MTIME), follow_symlinks=False)
+
+
+def make_snapshot(cache: Path, entry: dict, project_dir: Path, dest: Path) -> str:
+    """Create the one-commit snapshot repo at dest; returns its commit sha."""
+    dest = Path(dest)
+    if dest.exists() and any(dest.iterdir()):
+        raise SnapshotError(f"snapshot dir not empty: {dest}")
+    dest.mkdir(parents=True, exist_ok=True)
+    commit = vulnerable_commit(Path(cache), entry)
+    patch = None
+    if entry["kind"] == "planted":
+        project_dir = Path(project_dir).resolve()
+        patch = (project_dir / entry["patch"]).resolve()
+        if project_dir not in patch.parents or not patch.is_file():
+            raise SnapshotError(f"patch {entry['patch']} not found under {project_dir}")
+    _extract_tree(Path(cache), commit, dest, patch)
+
+    _git(["init", "--quiet", "--template=", "--initial-branch=main"], cwd=dest, isolated=True)
+    _uniform_mtimes(dest)  # after init (it touches dest), before add (the index records them)
+
+    missing = [f for f in entry["affected_files"] if not (dest / f).is_file()]
+    if missing:
+        raise SnapshotError(f"affected files missing from snapshot: {', '.join(missing)}")
+
+    # -f: files tracked upstream but matched by .gitignore must stay in the tree.
+    _git(["add", "--all", "--force", "."], cwd=dest, isolated=True)
+    _git(["-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", SNAPSHOT_MESSAGE],
+         cwd=dest, env=SNAPSHOT_IDENTITY, isolated=True)
+    return _git(["rev-parse", "HEAD"], cwd=dest, isolated=True).stdout.strip()

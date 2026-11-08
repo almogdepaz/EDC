@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Fake `enemy` for harness tests: logs argv, writes pass artifacts, and calls
+# the `agent` on PATH once (prompt on stdin) to exercise shim -> claude.
+set -uo pipefail
+if [ "${1:-}" = "audit" ] && [ "${2:-}" = "--help" ]; then
+  echo "      --max-passes <N>  Maximum passes [default: 3]"; exit 0
+fi
+[ -n "${FAKE_ENEMY_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_ENEMY_ARGV_LOG"
+repo=""; prev=""
+for a in "$@"; do [ "$prev" = "--repo" ] && repo="$a"; prev="$a"; done
+f="$repo/.audit/findings"; mkdir -p "$f"
+printf '# feynman pass 1\n\n## F-1 heap buffer overflow in a.c\na.c:3 hostname length check bypassed, overflow on copy\n' > "$f/feynman-pass1.md"
+echo "Enemy CLI: pass 1/3 (Feynman, full baseline): 1 new findings, 0 new coupled pairs, 0 new suspects, 0 new root causes" >&2
+if ! echo "pass 2 prompt" | agent --workspace "$repo" --trust -p --output-format text --sandbox enabled; then
+  echo "Enemy CLI: pass 2 failed (Agent exited with code 1); re-run the same command to resume from pass 2." >&2
+  exit 3
+fi
+printf '# state pass 2\n' > "$f/state-pass2.md"
+echo "Enemy CLI: pass 2/3 (State Inconsistency, full baseline): 0 new findings, 0 new coupled pairs, 0 new suspects, 0 new root causes" >&2
+printf '# feynman pass 3\n' > "$f/feynman-pass3.md"
+echo "Enemy CLI: pass 3/3 (Feynman, targeted re-pass): 0 new findings, 0 new coupled pairs, 0 new suspects, 0 new root causes" >&2
+printf '# verified\n\n## heap buffer overflow in a.c\na.c:3 hostname length check bypassed, overflow on copy into heap buffer\n' > "$f/nemesis-verified.md"
+echo "Enemy CLI: final report written to \`.audit/findings/nemesis-verified.md\`." >&2
+exit "${FAKE_ENEMY_EXIT:-4}"

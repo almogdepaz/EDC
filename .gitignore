@@ -58,3 +58,12 @@ PLAN-cleanup.md
 
 # local benchmark notes
 benchmark/PI_EDC_X_THREAD.md
+
+# private benchmark ground truth: never publish (answers for post-cutoff bugs)
+benchmark/clean/
+
+# generated edc review/build outputs
+/delivery-review-*.md
+edc-context/build/last-run.json
+edc-context/build/review-all-*.json
+edc-context/reports/review-fix-*.md

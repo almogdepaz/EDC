@@ -4,16 +4,21 @@ No real model calls: fake `claude`, `enemy` and `edc` live in
 tests/fixtures/clean-fakes and are put on PATH (or passed by env override).
 """
 
+import contextlib
 import csv
 import hashlib
 import importlib
+import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
+import types
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -755,10 +760,11 @@ class HarnessPathTests(ArmDispatchTests):
                 out = self.work / "clean" / "results" / arm / entry / "run-1"
                 row = self.record(arm, entry)
                 self.assertEqual(row["model_calls"], "1")
-                self.assertTrue(sorted((out / "calls").glob("call-*.jsonl")))
+                self.assertTrue(sorted((out / "io" / "calls").glob("call-*.jsonl")))
+                self.assertFalse((out / "calls").exists())  # 041 re-review R5: not flattened into out
                 if arm == "edc-security":
-                    self.assertTrue((out / "calls-build").is_dir())
-                    self.assertTrue((out / "edc-result.json").is_file())
+                    self.assertTrue((out / "io" / "calls-build").is_dir())
+                    self.assertTrue((out / "io" / "edc-result.json").is_file())
 
     @unittest.skipUnless(sys.platform == "darwin", "the fake reads ancestors via macOS sysctl KERN_PROCARGS2")
     def test_audited_agent_ancestors_expose_no_harness_inputs(self):
@@ -834,6 +840,101 @@ class HarnessPathTests(ArmDispatchTests):
                 self.assertEqual(self.claude_calls(), [])
 
 
+    # --- 041 re-review R1, R5, R6 ------------------------------------------------------------------------
+
+    def test_parent_of_run_dirs_is_outside_not_contaminating(self):
+        # the agent sees only opaque sibling names there (R1)
+        self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_READ="$CWD/..,$CALLS/../.."))
+        row = self.record("edc-module")
+        self.assertEqual(row["outcome"], "exact", row["outside_access"])
+        self.assertTrue(row["outside_access"].startswith("2: "), row["outside_access"])
+
+    def test_agent_file_in_io_dir_does_not_collide_with_out(self):
+        # the agent knows its io dir (env) and can write there; out/record.tsv must stay the harness's (R5)
+        self.run_arm("edc-module", env=self.env(FAKE_CLAUDE_IO_FILE="record.tsv"))
+        row = self.record("edc-module")
+        self.assertEqual(row["outcome"], "exact")
+        out = self.work / "clean" / "results" / "edc-module" / "CVE-2099-0001" / "run-1"
+        self.assertTrue((out / "io" / "record.tsv").read_text().startswith("junk"))
+
+    def test_cleanup_failure_does_not_mask_the_run_error(self):
+        work, out = self.work / "clean", self.root / "out"
+        out.mkdir(parents=True)
+
+        def broken_snapshot(*_):
+            for d in (work / "io").iterdir():
+                (d / "arm-stderr.log").write_text("x")
+            raise ValueError("snapshot broke")
+
+        args = types.SimpleNamespace(arm="edc-module", project="proj", entry="CVE-2099-0001", run=1)
+        err = io.StringIO()
+        with unittest.mock.patch.object(clean_snapshot, "ensure_cache", return_value=None), \
+                unittest.mock.patch.object(clean_snapshot, "make_snapshot", side_effect=broken_snapshot), \
+                unittest.mock.patch.object(clean_harness.shutil, "move", side_effect=OSError("move broke")), \
+                contextlib.redirect_stderr(err):
+            with self.assertRaisesRegex(ValueError, "snapshot broke"):
+                clean_harness.run_entry(args, {"id": "CVE-2099-0001"}, "m", work, out, {}, None,
+                                        self.gt_root / "proj", out / "record.tsv")
+        self.assertIn("move broke", err.getvalue())
+
+    def test_unexpected_exception_is_one_line_with_error_row(self):
+        proc = self.run_arm("edc-security", env=self.env(EDC_BENCH_EDC_BIN=str(self.root / "nonexistent")),
+                            check=False)
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
+        self.assertIn("FileNotFoundError", proc.stderr)
+        row = self.record("edc-security")
+        self.assertEqual(row["outcome"], "error")
+        self.assertIn("exception=FileNotFoundError", row["notes"])
+
+    def test_sigterm_and_sigint_write_error_row_and_clean_up(self):
+        for sig, rc, name in ((signal.SIGTERM, 143, "Terminated"), (signal.SIGINT, 130, "KeyboardInterrupt")):
+            with self.subTest(signal=name):
+                log = self.root / "claude-argv.jsonl"
+                log.unlink(missing_ok=True)
+                cmd = ["bash", str(CLEAN_SH), "--arm", "edc-module", "--gt-root", str(self.gt_root),
+                       "--project", "proj", "--entry", "CVE-2099-0001", "--skip-judge"]
+                proc = subprocess.Popen(cmd, env=self.env(FAKE_CLAUDE_SLEEP="60"), stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True)
+                deadline = time.monotonic() + 30
+                while not (log.exists() and log.read_text().strip()) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                fake = self.claude_calls()[0]["pid"]
+                proc.send_signal(sig)
+                _, stderr = proc.communicate(timeout=30)
+                self.assertEqual(proc.returncode, rc, stderr)
+                self.assertNotIn("Traceback", stderr)
+                row = self.record("edc-module")
+                self.assertEqual(row["outcome"], "error")
+                self.assertIn(f"exception={name}", row["notes"])
+                for kind in ("snap", "io"):
+                    self.assertEqual(list((self.work / "clean" / kind).iterdir()), [], kind)
+                deadline = time.monotonic() + 10  # the arm's process group is killed too
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(fake, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.1)
+                else:
+                    os.kill(fake, signal.SIGKILL)
+                    self.fail("the arm survived the harness")
+
+
+class ReexecTests(unittest.TestCase):
+    def test_args_file_is_removed_when_its_write_fails(self):
+        # 041 re-review R4: the 0600 file holds the full env; a failed write must not leave it behind
+        with tempfile.TemporaryDirectory() as tmp, \
+                unittest.mock.patch.object(tempfile, "tempdir", tmp), \
+                unittest.mock.patch.object(clean_harness.json, "dump", side_effect=OSError(28, "No space left")), \
+                unittest.mock.patch.object(clean_harness.os, "execve") as execve:
+            with self.assertRaises(OSError):
+                clean_harness.reexec(["--arm", "edc-module"])
+            execve.assert_not_called()
+            self.assertEqual(os.listdir(tmp), [])
+
+
 class AccessScanTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -850,7 +951,7 @@ class AccessScanTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def scan(self, *tool_uses, cwd=None, denied=()):
+    def scan(self, *tool_uses, cwd=None, denied=(), **scan_kw):
         self.n += 1
         log = self.root / f"call-{self.n}.jsonl"
         lines = [{"type": "system", "subtype": "init", "cwd": str(cwd or self.snap)}]
@@ -861,7 +962,7 @@ class AccessScanTests(unittest.TestCase):
             {"tool_name": tool_uses[i][0], "tool_use_id": f"t{i}", "tool_input": tool_uses[i][1]} for i in denied]})
         log.write_text("\n".join(json.dumps(line) for line in lines) + "\nnot json\n")
         return clean_access.scan_access([log], [self.snap, self.plugin, self.flat],
-                                        forbidden=[self.work / "cache"])
+                                        forbidden=[self.work / "cache"], **scan_kw)
 
     def test_inside_access_and_shell_noise_are_clean(self):
         alias = self.root / "alias"
@@ -1052,6 +1153,85 @@ class AccessScanTests(unittest.TestCase):
             self.use("t3", "Read", {"file_path": "a.c"}),
             self.result("t3", "int main(void) { return 0; }"),
             denied=["t2"])
+        self.assertEqual((outside, contaminated), ([], []))
+
+    # --- 041 re-review R1-R3 -----------------------------------------------------------------------------
+
+    def run_dirs(self):  # as the harness passes them: other runs' dirs are children of these
+        return {"forbidden_children": [self.work / "snap", self.work / "flat", self.work / "io"]}
+
+    def test_listing_the_parent_of_run_dirs_is_not_contaminating(self):
+        outside, contaminated = self.scan(
+            ("Bash", {"command": "ls -la .."}),
+            ("Bash", {"command": "cd .. && ls"}),
+            ("Glob", {"pattern": "../*"}),
+            ("Bash", {"command": f"ls {self.work}/io {self.work}/flat/"}),
+            **self.run_dirs())
+        self.assertEqual(contaminated, [])
+        self.assertIn(("Bash", str(self.work / "snap")), outside)
+
+    def test_other_runs_dirs_are_contaminating(self):
+        snap, w = self.work / "snap", self.work
+        cases = {
+            "sibling snap": (("Bash", {"command": "cat ../s2/a.c"}), snap / "s2" / "a.c"),
+            "cd into sibling": (("Bash", {"command": "cd ../s2 && ls"}), snap / "s2"),
+            "glob into siblings": (("Glob", {"pattern": "../*/edc-context/reports/*"}),
+                                   snap / "*" / "edc-context" / "reports" / "*"),
+            "other io": (("Read", {"file_path": str(w / "io" / "abc" / "calls" / "call-1.jsonl")}),
+                         w / "io" / "abc" / "calls" / "call-1.jsonl"),
+            "other flat": (("Read", {"file_path": str(w / "flat" / "f2" / "issues.md")}), w / "flat" / "f2" / "issues.md"),
+            "recursive from parent": (("Bash", {"command": "grep -r PLANT .."}), snap),
+            "recursive into siblings": (("Bash", {"command": "grep -rl PLANT ../*"}), snap / "*"),
+            "Grep tool on a parent": (("Grep", {"pattern": "x", "path": str(w / "io")}), w / "io"),
+        }
+        for label, (use, path) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(use, **self.run_dirs())
+                self.assertIn((use[0], str(path)), contaminated, outside)
+
+    def test_claude_session_tmp_of_edc_checkouts_is_contaminating(self):
+        enc = self.home.replace("/", "-")
+        task = f"/private/tmp/claude-501/{enc}-Dev-edc-enemy-port-p1/0b9c/tasks/b1.output"
+        cases = {
+            "private form": (("Bash", {"command": f"tail {task}"}), task),
+            "tmp form": (("Read", {"file_path": task[len("/private"):]}), task[len("/private"):]),
+            "main checkout": (("Read", {"file_path": f"/tmp/claude-0/{enc}-Dev-edc/s/tasks/x.output"}),
+                              f"/tmp/claude-0/{enc}-Dev-edc/s/tasks/x.output"),
+            # claude-0, not this session's claude-501: the test's work dir may itself be under $TMPDIR
+            "recursive claude tmp": (("Bash", {"command": "grep -r PLANT /private/tmp/claude-0"}),
+                                     "/private/tmp/claude-0"),
+            "recursive tmp": (("Grep", {"pattern": "PLANT", "path": "/tmp"}), "/tmp"),
+        }
+        for label, (use, path) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(use)
+                self.assertIn((use[0], path), contaminated, outside)
+
+    def test_other_claude_session_tmp_is_outside_only(self):
+        own = "/tmp/claude-501/-private-tmp-edc-bench-clean-snap-0123/s/tasks/b1.output"
+        outside, contaminated = self.scan(("Read", {"file_path": own}), ("Bash", {"command": "ls /tmp/claude-501"}))
+        self.assertEqual(contaminated, [])
+        self.assertEqual(outside, [("Read", own), ("Bash", "/tmp/claude-501")])
+
+    def test_subshell_and_shell_c_commands_are_followed(self):
+        h = self.home
+        cases = {
+            "subshell cd": ("(cd ~/Dev; cat edc/README.md)", f"{h}/Dev/edc/README.md"),
+            "spaced subshell": ("( cd ~/Dev && cat edc/x.md )", f"{h}/Dev/edc/x.md"),
+            "bash -c": ('bash -c "cd ~/Dev; cat edc/AGENTS.md"', f"{h}/Dev/edc/AGENTS.md"),
+            "sh -lc": ("sh -lc 'cd ~ && cat Dev/edc-x/a.md'", f"{h}/Dev/edc-x/a.md"),
+            "bash -c search": ("bash -c 'cd ~; grep -r PLANT .'", h),
+        }
+        for label, (command, path) in cases.items():
+            with self.subTest(label):
+                outside, contaminated = self.scan(("Bash", {"command": command}))
+                self.assertIn(("Bash", path), contaminated, outside)
+
+    def test_subshells_inside_the_snapshot_stay_clean(self):
+        outside, contaminated = self.scan(
+            ("Bash", {"command": 'bash -c "cd lib && cat c.c"; (cd lib; ls) && cat a.c'}),
+            ("Bash", {"command": "find . \\( -name '*.c' -o -name '*.h' \\) -print | head"}),
+            ("Bash", {"command": "echo 'a; cd / ; b' && cat a.c"}))
         self.assertEqual((outside, contaminated), ([], []))
 
     def test_summary(self):

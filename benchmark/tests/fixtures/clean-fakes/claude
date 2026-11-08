@@ -14,11 +14,15 @@ FAKE_CLAUDE_ARGV_LOG: append one json line per call ({argv, cwd, env, stdin,
 FAKE_CLAUDE_ANCESTORS_UNTIL: a pid; the log line also gets "ancestors": this
   process and each parent below that pid, with its exec-time argv+env strings
   (sysctl KERN_PROCARGS2, what `ps -E` shows) and its cwd/fd paths (lsof).
+FAKE_CLAUDE_SLEEP: seconds to sleep after the init event (ok flow), so a test
+  can signal the harness mid-run; the log line carries the fake's "pid".
+FAKE_CLAUDE_IO_FILE: a file name the ok flow writes (junk) next to its call-log
+  dir, i.e. into the run's io dir.
 A `--output-format json` call is answered as score.py's judge (verdict exact).
 In ok mode it writes edc-context/reports/issues.md in cwd and emits a
 stream-json result event.
 """
-import ctypes, json, os, struct, subprocess, sys
+import ctypes, json, os, struct, subprocess, sys, time
 
 
 def _sysctl(mib, size):
@@ -57,7 +61,7 @@ if log:
                     files[n] = open(n, errors="replace").read()
                 except OSError:  # unreadable files of an unrelated cwd (the judge runs from /)
                     pass
-        fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin,
+        fh.write(json.dumps({"pid": os.getpid(), "argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "stdin": stdin,
                              "commits": len(rev.stdout.split()) if rev.returncode == 0 else rev.stderr,
                              "files": files,
                              "ancestors": ancestors(int(os.environ["FAKE_CLAUDE_ANCESTORS_UNTIL"]))
@@ -83,6 +87,12 @@ if mode == "outside_read":
     gt = os.path.join(os.path.expanduser("~"), "Dev", "edc", "benchmark", "curl", "ground-truth.md")
     emit({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": gt}}]}})
+if os.environ.get("FAKE_CLAUDE_SLEEP"):
+    time.sleep(float(os.environ["FAKE_CLAUDE_SLEEP"]))
+if os.environ.get("FAKE_CLAUDE_IO_FILE"):
+    io_dir = os.path.dirname(os.environ["EDC_BENCH_CALL_LOG_DIR"])
+    with open(os.path.join(io_dir, os.environ["FAKE_CLAUDE_IO_FILE"]), "w") as fh:
+        fh.write("junk\tjunk\nnot\ta row\n")
 for i, raw in enumerate(filter(None, os.environ.get("FAKE_CLAUDE_READ", "").split(","))):
     path = raw.replace("$CALLS", os.environ.get("EDC_BENCH_CALL_LOG_DIR", "")).replace("$CWD", os.getcwd())
     emit({"type": "assistant", "message": {"content": [

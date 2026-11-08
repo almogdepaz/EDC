@@ -17,12 +17,13 @@ One run = one arm x one ground-truth entry x one repetition:
      outside the run's roots and for answer markers in tool results
      (clean_access.py; `contaminated` outcome; the
      results tree, the results-file dir and other runs' snap/flat/io dirs
-     are forbidden), then move the io dir into the out dir and delete the
+     are forbidden), then move the io dir to <out-dir>/io and delete the
      snapshot and flat copy;
   4. write one row to an isolated TSV ($EDC_RESULTS_FILE, else
      <out-dir>/record.tsv), replacing an earlier row of the same run_id; an
-     exception after the entry is resolved still writes an `error` row.
-     Legacy benchmark/results*.tsv paths are refused.
+     exception, SIGTERM or Ctrl-C after the entry is resolved still writes an
+     `error` row and cleans up (exit 1, 143, 130; one stderr line, no
+     traceback). Legacy benchmark/results*.tsv paths are refused.
 
 Usage: benchmark/clean.sh --arm <arm> --project <p> --entry <id> [options]
 """
@@ -223,13 +224,21 @@ def run_logged(cmd, cwd, env, timeout, stdout_path, stderr_path) -> tuple[int, f
             rc = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                rc = proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                rc = proc.wait()
+            rc = stop_group(proc)
+        except BaseException:  # SIGTERM/Ctrl-C of the harness: its own session does not get them
+            stop_group(proc)
+            raise
     return rc, time.monotonic() - start, timed_out
+
+
+def stop_group(proc) -> int:
+    """SIGTERM proc's process group, SIGKILL it 5s later; returns proc's exit."""
+    os.killpg(proc.pid, signal.SIGTERM)
+    try:
+        return proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        return proc.wait()
 
 
 def call_logs(log_dir: Path) -> list[Path]:
@@ -603,7 +612,7 @@ def run(args) -> dict:
     }
     try:
         row.update(run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_path))
-    except Exception as exc:
+    except BaseException as exc:  # Terminated / KeyboardInterrupt too: the run is still accounted for
         row["notes"] = f"exception={type(exc).__name__}: {exc}"
         write_record(results_path, row)
         raise
@@ -613,8 +622,9 @@ def run(args) -> dict:
 
 def run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_path) -> dict:
     """Snapshot, arm, detection and scoring for one run; returns its record
-    fields. The snapshot and flat copy are deleted and the io dir moved into
-    out afterwards, also when the run fails."""
+    fields. The snapshot and flat copy are deleted and the io dir moved to
+    out/io afterwards, also when the run fails (then a cleanup error is
+    reported on stderr and the run's own error propagates)."""
     snap = work / "snap" / opaque_id(args.arm, args.project, args.entry, args.run)
     io = work / "io" / opaque_id("io", args.arm, args.project, args.entry, args.run)
     r = None
@@ -628,14 +638,25 @@ def run_entry(args, entry, model, work, out, env, bin_dir, project_dir, results_
         snapshot_commit = clean_snapshot.make_snapshot(cache, entry, project_dir, snap)
         r = Run(args, entry, model, snap, out, work, env, bin_dir, io)
         getattr(r, args.arm.replace("-", "_"))()
-        return score_run(args, entry, r, results_path, snapshot_commit)
-    finally:
-        for d in [snap, *(r.scratch if r else [])]:
-            shutil.rmtree(d, ignore_errors=True)
-        if io.is_dir():
-            for child in io.iterdir():
-                shutil.move(str(child), str(out / child.name))
-            io.rmdir()
+        fields = score_run(args, entry, r, results_path, snapshot_commit)
+    except BaseException:
+        try:
+            release_run_dirs([snap, *(r.scratch if r else [])], io, out)
+        except Exception as exc:  # reported, but the run's own error is the one that propagates
+            print(f"clean.sh: cleanup after the failed run also failed: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+        raise
+    release_run_dirs([snap, *r.scratch], io, out)
+    return fields
+
+
+def release_run_dirs(deleted, io, out) -> None:
+    """Delete the snapshot/flat copy; move the io dir to out/io as a whole (what
+    the agent wrote there cannot collide with out's own files)."""
+    for d in deleted:
+        shutil.rmtree(d, ignore_errors=True)
+    if io.is_dir():
+        shutil.move(str(io), str(out / "io"))
 
 
 def answer_markers(project: str, entry: dict) -> tuple:
@@ -648,10 +669,11 @@ def score_run(args, entry, r, results_path, snapshot_commit) -> dict:
     res, work = r.result, r.work
     logs = [p for d in res["call_dirs"] for p in call_logs(d)]
     blocked, signal_ = detect_blocked(logs, res["text_logs"])
-    # other runs' dirs (and earlier results) can hold this entry's findings; the current run's are allowed
-    forbidden = [work / "cache", work / "results", work / "snap", work / "flat", work / "io", r.out,
-                 results_path.parent]
+    # other runs' dirs (and earlier results) can hold this entry's findings; the current run's are allowed.
+    # snap/flat/io themselves only list opaque sibling names (`ls ..` from the snapshot): their children count
+    forbidden = [work / "cache", work / "results", r.out, results_path.parent]
     outside, contaminated = scan_access(logs, [r.snap, r.plugin, *r.scratch, r.io], forbidden=forbidden,
+                                        forbidden_children=[work / "snap", work / "flat", work / "io"],
                                         markers=answer_markers(args.project, entry))
     verdict, confidence, notes = judge_report(res["report_text"], entry, args.skip_judge)
     if contaminated:  # the agent may have seen the answer; p3 excludes these from recall
@@ -684,15 +706,35 @@ def main(argv=None) -> int:
     return run_cli(parse_args(sys.argv[1:] if argv is None else argv))
 
 
+class Terminated(BaseException):
+    """SIGTERM, raised like KeyboardInterrupt so the run writes its row and cleans up."""
+
+
+def _raise_terminated(signum, frame):
+    raise Terminated("SIGTERM")
+
+
 def run_cli(args) -> int:
     if args.arm == "edc-deep":
         print("edc-deep: not implemented until p4", file=sys.stderr)
         return 2
+    previous = signal.signal(signal.SIGTERM, _raise_terminated)
     try:
         row = run(args)
     except (HarnessError, clean_snapshot.SnapshotError, KeyError) as exc:
         print(f"clean.sh: {exc}", file=sys.stderr)
         return 1
+    except Terminated:
+        print("clean.sh: terminated (SIGTERM)", file=sys.stderr)
+        return 128 + signal.SIGTERM
+    except KeyboardInterrupt:
+        print("clean.sh: interrupted", file=sys.stderr)
+        return 128 + signal.SIGINT
+    except Exception as exc:  # the error row is written (run); one line instead of a traceback
+        print(f"clean.sh: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     print(f"{row['arm']} {row['entry']} run={row['run']}: outcome={row['outcome']} verdict={row['verdict']} "
           f"calls={row['model_calls']} duration={row['duration_s']}s -> {row['out_dir']}")
     return 0
@@ -710,12 +752,12 @@ PATH_ENV_KEYS = ("EDC_RESULTS_FILE", "EDC_BENCH_WORKDIR", "ENEMY_BIN", "EDC_BENC
 
 def reexec(argv) -> None:
     fd, path = tempfile.mkstemp(prefix=".clean-args-", suffix=".json")
-    with os.fdopen(fd, "w") as fh:
-        json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "dir": str(BENCHMARK_DIR)}, fh)
-    try:
+    try:  # the file holds the full env: it must not outlive a failed write or exec
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"argv": argv, "cwd": os.getcwd(), "env": dict(os.environ), "dir": str(BENCHMARK_DIR)}, fh)
         os.execve(sys.executable, [sys.executable, "-I", "-c", BOOT, path],
                   {k: os.environ[k] for k in EXEC_ENV_KEYS if k in os.environ})
-    except OSError:
+    except BaseException:
         os.unlink(path)
         raise
 

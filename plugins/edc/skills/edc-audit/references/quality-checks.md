@@ -147,6 +147,14 @@ Promote these to `issues.md` when they can cause real wrong behavior, data loss,
 
 For bug-fix shaped changes, prefer the root-cause fix over symptom patches: grep every caller of the function or boundary being changed. One guard or contract fix in the shared owner is usually simpler and safer than per-caller guards.
 
+## State and transition complexity
+
+For important stateful flows in the assigned scope, reconstruct actual states, events, transition guards, mutation ownership, and source-backed invariants, including implicit state encoded by flags or callbacks. Distinguish source behavior from intended contracts and unknown assumptions. Do not infer atomicity; trace intermediate writes and failure exits.
+
+Inspect applicable retry, cancellation, late/duplicate/out-of-order responses, partial failure, cleanup, and re-entry. These are investigation leads, not a mandatory checklist for unrelated code; do not inventory trivial code.
+
+Require concrete evidence of contradictory reachable states, duplicated transition rules, unclear mutation ownership, or inconsistent failure/retry cleanup before reporting state complexity. Cite the relevant paths, guards, and mutations and explain the correctness or maintenance cost. Counts of states/booleans alone are not findings; intentional independent flags and legitimate complex workflows are counterexamples. Prefer the smallest ownership/guard/cleanup correction consistent with the simplification ladder, not a new state-machine framework.
+
 ## Error handling
 
 Flag error handling problems:
@@ -197,6 +205,12 @@ Assess test value, not just test existence:
 - public APIs and cross-module contracts have integration-level coverage where unit tests cannot prove delivery
 
 For non-trivial scoped logic, prefer the smallest runnable check that would fail if the behavior broke: one behavior test, integration assertion, command smoke, or self-contained reproduction. Do not demand fixture-heavy test suites when a smaller check proves the risk.
+
+For material state/transition risks, compare the source-backed flow with tests inside the assigned evidence scope. Compare relevant existing tests before claiming a missing case; suppress already-covered sequences. If tests are unavailable or partial, state what was inspected and what remains unknown rather than claiming absence or expanding scope.
+
+Each actionable state-derived test suggestion needs a bounded event sequence, expected externally observable result (the test oracle), source/invariant, coverage evidence or explicit uncertainty, and an existing test file/harness when known. Name a focused test target when no harness is known; do not prescribe new infrastructure. For example: start A, cancel A, start B, deliver A late; B's visible state must remain unchanged if the source contract isolates cancelled requests. Check whether existing tests already assert that sequence and result, not just cancellation alone.
+
+Suggestions are not executed tests or verified bugs. Do not imply that a proposed sequence ran or failed; support any separate correctness finding with its own source evidence.
 
 Promote missing or low-value tests to `issues.md` only when the untested path creates concrete correctness risk. Otherwise keep it in `complexity.md` as maintainability risk.
 

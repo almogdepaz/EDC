@@ -118,8 +118,10 @@ For each function:
    uncertainty about a block's contract or ordering. Do not apply all three
    ceremonially to every block.
 
-5. **State Machine Analysis** (when function is part of a state machine or non-blocking protocol)
-   - Map every state and transition. What causes each transition?
+5. **State Machine Analysis** (for important stateful flows in the assigned scope)
+   - Reconstruct actual states, events, transition guards, mutation ownership, and source-backed invariants, including implicit state encoded by flags or callbacks. Cite the source that establishes each material contract; distinguish observed behavior from intended invariants and unresolved assumptions.
+   - Inspect applicable retry, cancellation, late/duplicate/out-of-order responses, partial failure, cleanup, and re-entry; this is not a mandatory checklist for unrelated code. Do not inventory trivial code or infer transitions from names alone.
+   - Do not infer atomicity from a multi-step operation, sequential-looking code, or a successful path. Trace actual intermediate writes and failure exits.
    - For non-blocking re-entry: when the function returns early (EAGAIN, WOULDBLOCK, partial completion) and is called again later, are all decisions from the previous call still valid?
    - What variables are set in one state but consumed in a different state? Can anything between those states invalidate the assumption?
    - What happens when a multi-step operation takes many calls to complete — do intermediate failures corrupt later logic?
@@ -224,6 +226,8 @@ The final persisted doc MUST be distilled high-signal module context. Keep:
 - rationale not obvious from reading source
 
 Use explicit headings such as `## When To Read This` or `## Source Pointers` for ambiguous or high-blast-radius modules when they help scanning. Equivalent concise prose is acceptable for tiny/obvious modules. Do not add empty template sections just to satisfy a shape.
+
+Keep exhaustive transition/test inventories in private analysis, not ordinary module docs. Persist only non-obvious state invariants, ownership, ordering hazards, and source/test pointers that pass the signal filter. Inspect tests only within the assigned evidence scope; record unavailable coverage as unknown rather than widening source access.
 
 Avoid exact reference material. Do not copy numeric constants, enum values, schema fields, service lists, file modes, timeout/count tables, generated artifact lists, command inventories, or protocol message maps unless the exact literal is necessary to explain a non-obvious invariant. Prefer category-level prose plus a source pointer. If keeping a literal, mark it as a snapshot and name the authoritative source file.
 

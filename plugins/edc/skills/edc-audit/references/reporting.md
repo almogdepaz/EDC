@@ -88,6 +88,16 @@ Each finding in either report should include:
 - simplification tag where applicable: `delete:`, `stdlib:`, `native:`, `yagni:`, or `shrink:`
 - estimated removal only when obvious: `estimated removal: ~N lines / M deps`
 
+Place state-complexity findings in the existing relevant complexity section (for example, Correctness and Error-Handling Risks or Duplication); use `issues.md` only for concrete correctness risk. Keep state-derived test suggestions under Test Mirroring / Test Value or with the related finding, not in a new report taxonomy. Do not reproduce exhaustive transition inventories.
+
+For each state-derived test suggestion, include:
+- bounded event sequence and expected externally observable result (test oracle)
+- source/invariant anchor
+- inspected tests and coverage evidence or explicit uncertainty
+- existing test file/harness when known, otherwise a focused test target and the unknown harness
+
+Label these as suggestions, not executed tests or verified bugs. Synthesis must retain the source/invariant, sequence, oracle, coverage evidence/uncertainty, and harness/target when merging or deduplicating worker findings; do not reduce them to generic "add tests" advice. Preserve limitations and already-covered counterevidence; do not invent missing coverage or promote a suggestion into a verified failure.
+
 For pure simplification/bloat findings, prefer the compact form:
 
 ```md

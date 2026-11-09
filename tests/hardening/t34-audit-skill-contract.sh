@@ -14,6 +14,8 @@ SKILL_DIR="$ROOT/plugins/edc/skills/edc-audit"
 SKILL="$SKILL_DIR/SKILL.md"
 SCOPE_STANDARDS="$SKILL_DIR/references/scope-and-standards.md"
 RUNTIME_LIB="$ROOT/plugins/edc/scripts/edc-lib.sh"
+QUALITY_CHECKS="$SKILL_DIR/references/quality-checks.md"
+REPORTING="$SKILL_DIR/references/reporting.md"
 
 echo "=== T34: audit skill contract ==="
 
@@ -71,6 +73,12 @@ check "audit checks interface stability and caller vocabulary" "$(has "Interface
 check "audit keeps structural heuristics evidence-based" "$(has "not a requirement that every change touch one file" && has "not an absolute import rule" && echo 1 || echo 0)"
 check "audit includes root-cause fix heuristic" "$(has "root-cause fix" && has "grep every caller" && echo 1 || echo 0)"
 check "audit includes smallest runnable check heuristic" "$(has "smallest runnable check" && echo 1 || echo 0)"
+check "audit derives state complexity from source-backed transitions" "$(file_has "$QUALITY_CHECKS" "states, events, transition guards, mutation ownership" && file_has "$QUALITY_CHECKS" "source-backed invariants" && file_has "$QUALITY_CHECKS" "implicit state encoded by flags or callbacks" && file_has "$QUALITY_CHECKS" "Do not infer atomicity" && echo 1 || echo 0)"
+check "audit requires concrete state complexity evidence and counterexamples" "$(file_has "$QUALITY_CHECKS" "contradictory reachable states" && file_has "$QUALITY_CHECKS" "duplicated transition rules" && file_has "$QUALITY_CHECKS" "unclear mutation ownership" && file_has "$QUALITY_CHECKS" "inconsistent failure/retry cleanup" && file_has "$QUALITY_CHECKS" "Counts of states/booleans alone" && file_has "$QUALITY_CHECKS" "intentional independent flags and legitimate complex workflows" && echo 1 || echo 0)"
+check "audit compares existing tests before claiming missing sequences" "$(file_has "$QUALITY_CHECKS" "Compare relevant existing tests before claiming a missing case" && file_has "$QUALITY_CHECKS" "bounded event sequence" && file_has "$QUALITY_CHECKS" "externally observable result" && file_has "$QUALITY_CHECKS" "coverage evidence or explicit uncertainty" && file_has "$QUALITY_CHECKS" "existing test file/harness" && echo 1 || echo 0)"
+check "audit considers applicable async edges without mandatory expansion" "$(file_has "$QUALITY_CHECKS" "retry, cancellation, late/duplicate/out-of-order responses, partial failure, cleanup, and re-entry" && file_has "$QUALITY_CHECKS" "not a mandatory checklist for unrelated code" && echo 1 || echo 0)"
+check "audit distinguishes test suggestions from executions and bugs" "$(file_has "$QUALITY_CHECKS" "Suggestions are not executed tests or verified bugs" && file_has "$QUALITY_CHECKS" "already-covered sequences" && echo 1 || echo 0)"
+check "audit reporting retains actionable state-test evidence through synthesis" "$(file_has "$REPORTING" "bounded event sequence" && file_has "$REPORTING" "externally observable result" && file_has "$REPORTING" "source/invariant" && file_has "$REPORTING" "coverage evidence or explicit uncertainty" && file_has "$REPORTING" "existing test file/harness" && file_has "$REPORTING" "Synthesis must retain" && file_has "$REPORTING" "not executed tests or verified bugs" && echo 1 || echo 0)"
 check "audit includes accepted debt marker" "$(has "edc-debt:" && has "upgrade when" && echo 1 || echo 0)"
 check "audit includes antipattern catalog overlap" "$(has "Antipattern catalog overlap" && has "boat anchor" && has "cargo cult" && has "action at a distance" && has "magic pushbutton" && has "soft code" && has "shooting the messenger" && echo 1 || echo 0)"
 

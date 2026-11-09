@@ -122,6 +122,12 @@ check "generated module task prompt forbids sibling source bodies" \
   "$(contains "$JSON_CLI" "do not read sibling source bodies" && not_contains "$JSON_CLI" "You may read sibling-module source" && echo 1 || echo 0)"
 check "module output requirements preserve staged authority without scratch quotas" \
   "$(contains "$MODULE_OUTPUT_REQUIREMENTS" "coordinator-declared staged path" && contains "$MODULE_OUTPUT_REQUIREMENTS" "worker never writes canonical context directly" && contains "$MODULE_OUTPUT_REQUIREMENTS" "omit copied constants, inventories, obvious function narration, and private scratch structure" && contains "$MODULE_OUTPUT_REQUIREMENTS" "edc-context/modules/<name>.md" && not_contains "$MODULE_OUTPUT_REQUIREMENTS" "Minimum 3" && not_contains "$MODULE_OUTPUT_REQUIREMENTS" "Minimum 5" && echo 1 || echo 0)"
+check "module prompt reconstructs source-backed stateful flows without assuming atomicity" \
+  "$(contains "$MODULE_PROMPT" "important stateful flows" && contains "$MODULE_PROMPT" "states, events, transition guards, mutation ownership" && contains "$MODULE_PROMPT" "implicit state encoded by flags or callbacks" && contains "$MODULE_PROMPT" "Do not infer atomicity" && echo 1 || echo 0)"
+check "module prompt checks applicable event ordering without trivial inventories" \
+  "$(contains "$MODULE_PROMPT" "retry, cancellation, late/duplicate/out-of-order responses, partial failure, cleanup, and re-entry" && contains "$MODULE_PROMPT" "not a mandatory checklist for unrelated code" && contains "$MODULE_PROMPT" "Do not inventory trivial code" && echo 1 || echo 0)"
+check "module docs retain contracts rather than exhaustive state/test inventories" \
+  "$(contains "$MODULE_PROMPT" "Keep exhaustive transition/test inventories in private analysis" && contains "$MODULE_PROMPT" "non-obvious state invariants, ownership, ordering hazards, and source/test pointers" && echo 1 || echo 0)"
 check "module prompt derives coverage rather than reasoning quotas" \
   "$(contains "$MODULE_PROMPT" "Coverage is evidence-based, not a quota" && contains "$MODULE_PROMPT" "only when one resolves a concrete uncertainty" && not_contains "$MODULE_PROMPT" "Apply **First Principles**, **5 Whys**, and **5 Hows**" && not_contains "$MODULE_PROMPT" "Apply micro-level First Principles, 5 Whys, and 5 Hows" && not_contains "$MODULE_PROMPT" "Minimum 3 invariants" && not_contains "$MODULE_PROMPT" "Minimum 5 assumptions" && echo 1 || echo 0)"
 check "module scratch example pins retained-directory failure state" \

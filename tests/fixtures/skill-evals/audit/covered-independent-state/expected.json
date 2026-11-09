@@ -1,0 +1,41 @@
+{
+  "skill": "edc-audit",
+  "fixture": "covered-independent-state",
+  "requiredFindings": [],
+  "forbiddenFindings": [
+    {
+      "category": "missing late-response cancellation/re-entry test",
+      "evidence": "test/loader.test.mjs already asserts pending B loading and unchanged data/error after late resolve and reject from cancelled A"
+    },
+    {
+      "category": "stale request cleanup clears current loading",
+      "evidence": "finally is guarded by request === current"
+    },
+    {
+      "category": "boolean count alone is complexity"
+    },
+    {
+      "category": "panelOpen and loading must be a single enum",
+      "evidence": "independent view and request state intentionally allow every combination"
+    },
+    {
+      "category": "mandatory retry/cancellation checklist expansion despite covered behavior"
+    },
+    {
+      "category": "security"
+    },
+    {
+      "category": "spec delivery"
+    }
+  ],
+  "requiredFiles": [
+    "src/loader.mjs",
+    "test/loader.test.mjs"
+  ],
+  "requiredEvidence": [
+    "if (request === current) state.loading = false",
+    "late ${event} from cancelled A cannot clear pending B loading",
+    "loading: true, panelOpen: false",
+    "panelOpen and loading vary independently without changing request ownership"
+  ]
+}

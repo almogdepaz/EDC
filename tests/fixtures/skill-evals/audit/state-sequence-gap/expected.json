@@ -1,0 +1,46 @@
+{
+  "skill": "edc-audit",
+  "fixture": "state-sequence-gap",
+  "requiredFindings": [
+    {
+      "category": "state cleanup ownership",
+      "evidence": "src/loader.mjs: finally unconditionally clears loading after a cancelled request settles, despite current-request guards on data/error"
+    },
+    {
+      "category": "test value",
+      "evidence": "suggest start A, cancel A, start B, resolve A while B is pending; snapshot().loading must stay true, data/error must stay unchanged; after B resolves, data is B and loading is false"
+    },
+    {
+      "category": "coverage evidence",
+      "evidence": "test/loader.test.mjs covers current success, cancellation before response, and retry after current failure, but not late settlement after re-entry; extend the existing node:test harness and cite the current-request contract"
+    }
+  ],
+  "forbiddenFindings": [
+    {
+      "category": "security"
+    },
+    {
+      "category": "spec delivery"
+    },
+    {
+      "category": "boolean count alone is complexity"
+    },
+    {
+      "category": "panelOpen and loading must be a single enum"
+    },
+    {
+      "category": "suggested sequence was executed or verified failing without execution evidence"
+    }
+  ],
+  "requiredFiles": [
+    "src/loader.mjs",
+    "test/loader.test.mjs"
+  ],
+  "requiredEvidence": [
+    "only the current request may publish data, error, or loading state",
+    "if (request === current) state.data = value",
+    "state.loading = false;",
+    "cancellation clears loading before the response arrives",
+    "retry after current failure clears the error and publishes new data"
+  ]
+}

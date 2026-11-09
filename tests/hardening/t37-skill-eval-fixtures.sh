@@ -19,6 +19,10 @@ done
 
 check "audit fixtures cover simplification tags and antipattern overlap" "$(grep -E -r -q 'stdlib|native|yagni|cargo cult|shooting the messenger|boat anchor' "$FIXTURES/audit" && echo 1 || echo 0)"
 
+for fixture in state-sequence-gap covered-independent-state; do
+  check "audit includes state-derived fixture: $fixture" "$([ -f "$FIXTURES/audit/$fixture/expected.json" ] && [ -f "$FIXTURES/audit/$fixture/test/loader.test.mjs" ] && echo 1 || echo 0)"
+done
+
 node_ok=0
 if node --input-type=module - "$FIXTURES" <<'NODE'
 import assert from "node:assert/strict";

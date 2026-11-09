@@ -302,6 +302,50 @@ edc_filter_ignored_files() {
   printf '%s' "$filtered"
 }
 
+# Explicit no-build policy is shared by all review lenses. It overrides only
+# generated-context loading, never the embedded review methodology or evidence rules.
+edc_review_context_guidance() {
+  local policy="$1"
+  [ "$policy" != context ] || return 0
+  printf 'CONTEXT_POLICY: %s\n' "$policy"
+  echo 'DO NOT build or update EDC context. Do not repair or regenerate it.'
+  if [ "$policy" = ignored ]; then
+    echo 'DO NOT use prebuilt EDC context, even if it exists in this repository.'
+    echo 'Do not read generated index, manifest, module docs, or prior generated reports for analysis or routing.'
+  else
+    echo 'Existing EDC context is optional navigation guidance only, never scope authority or source evidence.'
+    echo 'Read it only when usable and contained in regular files under edc-context; do not follow escaping or symlinked context paths.'
+    echo 'Missing, incomplete, malformed, or stale context must not block review or exclude new/unmapped source.'
+  fi
+  echo 'This policy overrides generated-context loading steps in the embedded skill. Ordinary repository instructions/specs/docs remain available.'
+  echo 'Gather only relevant source, callers, dependencies, ownership, invariants, and tests needed for the assigned files. Verify candidates and record evidence gaps.'
+  echo 'Report this context policy and coverage limitations; do not imply verified complete understanding or weaker review checks.'
+}
+
+edc_review_context_notice() {
+  local policy="$1"
+  [ "$policy" != context ] || return 0
+  printf '\n## Context policy\n\nContext: %s (explicit no-build review).\n' "$policy"
+  echo 'Scope uses an explicit source-file inventory, not generated modules. Existing context is unverified optional guidance in no-refresh mode and excluded in ignored mode.'
+  echo 'Coverage is limited to assigned files and necessary supporting evidence; this does not establish complete architectural understanding.'
+  if [ -n "${2:-}" ] && [ -s "$2" ]; then
+    node "$EDC_JSON_CLI" review-excluded-files "$2"
+  fi
+}
+
+edc_review_direct_files() {
+  local policy="$1" files="$2" promotion_files="$3" exclusions_file="$4"
+  shift 4
+  [ -z "$exclusions_file" ] || printf '[]\n' > "$exclusions_file"
+  files=$(printf '%s\n' "$files" | grep -Ev "^(${EDC_CONTEXT_DIR}/|review-[^/]+\\.md$|delivery-review-[^/]+\\.md$)" || true)
+  files=$(edc_filter_ignored_files "$files" "$@")
+  if [ "$policy" = no-refresh ]; then
+    printf '%s\n' "$files" | node "$EDC_JSON_CLI" review-optional-policy-files "$promotion_files" "$exclusions_file"
+  else
+    printf '%s\n' "$files"
+  fi
+}
+
 edc_result_on_exit() {
   local rc=$?
   if [ "${EDC_RESULT_ACTIVE:-0}" = "1" ] && [ "${EDC_RESULT_WRITTEN:-0}" != "1" ] && [ "$rc" -ne 0 ]; then

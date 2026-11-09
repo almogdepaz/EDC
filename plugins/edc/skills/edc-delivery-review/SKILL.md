@@ -37,6 +37,10 @@ Read these bundled references before producing findings:
 
 This skill is read-only. Do not mutate source, tests, git state, context files, or plans. Write only the requested report artifact, or answer in chat if no artifact path was requested.
 
+An orchestrator's explicit `CONTEXT_POLICY` overrides generated-context loading here and in references. `ignored` forbids generated-context reads/routing; `no-refresh` permits existing context only as optional navigation. Neither mode may build, update, or repair context. Use the assigned files, ordinary specs/architecture docs, source ownership, callers, contracts, and tests to verify candidates; state missing evidence without weakening either review axis.
+
+When the orchestrator supplies immutable base/candidate commits, those commits override the standalone `HEAD` examples below for all source and supporting reads. Never substitute mutable working-tree evidence.
+
 When reviewing a diff, pin the base once and use it consistently:
 
 ```bash

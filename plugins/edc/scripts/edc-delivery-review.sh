@@ -31,8 +31,8 @@ edc_load_delivery_dependencies() {
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh [target] --base <ref> [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh --full [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh [target] --base <ref> [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-delivery-review.sh --full [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 
 Examples:
   edc-delivery-review.sh HEAD --base main
@@ -116,14 +116,20 @@ Required shell context:
 - Diff summary: git diff $base_sha...$target_sha --stat
 - Changed files: git diff $base_sha...$target_sha --name-only
 - Commit log: git log $base_sha..$target_sha --oneline
+- Candidate evidence: the immutable candidate commit is $target_sha. Read changed and adjacent source with \`git show $target_sha:<path>\`, never from the mutable working tree. Read deleted paths from their baseline blobs.
 - Changed gitlinks: resolve baseline/candidate gitlink SHAs from the parent commits, then inspect byte-level evidence with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`. Repeat for nested gitlinks. If the baseline has no gitlink, enumerate \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence.
 
 Rules:
 1. Use the embedded edc-delivery-review skill bundle below.
 2. Discover spec/plan sources as described by the skill.
-3. Use edc-context/index.md and edc-context/manifest.json when present and fresh.
+3. ${context_instruction:-Use edc-context/index.md and edc-context/manifest.json when present and fresh.}
 4. Write exactly one markdown report to $report_path.
 5. Do not mutate source, tests, git state, plans, or edc-context.
+
+$(edc_review_context_guidance "${context_policy:-context}")
+
+Assigned source files (direct mode):
+${direct_files:-}
 
 $(emit_delivery_skill_bundle)
 EOF
@@ -147,14 +153,19 @@ Required shell context:
 - Current commit: $head_sha
 - Working tree status: git status --short
 - Spec candidates: find repo-local specs/plans/docs under docs/, specs/, .plans/, plans/, tasks/, README*, or issue/PR references in git history.
-- Architecture context: edc-context/index.md plus relevant edc-context/modules/*.md.
+- Architecture context: ${context_instruction:-edc-context/index.md plus relevant edc-context/modules/*.md.}
 
 Rules:
 1. Use the embedded edc-delivery-review skill bundle below.
 2. Discover spec/plan sources as described by the skill. If none exists, report No spec available; do not invent requirements.
-3. Use edc-context/index.md and edc-context/manifest.json when present and fresh.
+3. ${context_instruction:-Use edc-context/index.md and edc-context/manifest.json when present and fresh.}
 4. Write exactly one markdown report to $report_path.
 5. Do not mutate source, tests, git state, plans, or edc-context.
+
+$(edc_review_context_guidance "${context_policy:-context}")
+
+Assigned source files (direct mode):
+${direct_files:-}
 
 $(emit_delivery_skill_bundle)
 EOF
@@ -184,7 +195,8 @@ delivery_main() {
   edc_runtime_preflight_or_exit
   edc_load_delivery_dependencies
   local target="" base="" context_mode="" policy="" full_mode=0
-  local -a ignore_args=()
+  local context_policy=context direct_files="" context_instruction="" exclusions_file=""
+  local -a ignore_args=() ignore_patterns=()
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -210,7 +222,16 @@ delivery_main() {
       --ignore)
         [ "$#" -ge 2 ] || { echo "ERROR: --ignore requires a glob pattern" >&2; usage; }
         ignore_args+=("$1" "$2")
+        ignore_patterns+=("$2")
         shift 2
+        ;;
+      --no-context-refresh)
+        [ "$context_policy" = ignored ] || context_policy=no-refresh
+        shift
+        ;;
+      --ignore-context)
+        context_policy=ignored
+        shift
         ;;
       --context-mode)
         [ "$#" -ge 2 ] || { echo "ERROR: --context-mode requires a value" >&2; usage; }
@@ -263,7 +284,19 @@ delivery_main() {
   edc_require_agent_cli
   edc_octocode_capability_init
 
-  if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
+  if [ "$context_policy" != context ]; then
+    context_instruction="Use the explicit source scope and ordinary architecture/spec docs; generated context is not required."
+    if [ "$full_mode" -eq 1 ]; then
+      direct_files=$(git ls-files -z | tr '\0' '\n')
+    else
+      direct_files=$(git diff -z --name-only "$base_sha...$target_sha" | tr '\0' '\n')
+    fi
+    local run_dir run_id
+    edc_create_worker_run delivery run_dir run_id || exit $?
+    exclusions_file="$run_dir/direct-exclusions.json"
+    direct_files=$(edc_review_direct_files "$context_policy" "$direct_files" "" "$exclusions_file" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
+    [ -n "$direct_files" ] || { edc_result_failure 1 no-reviewable-files "no reviewable source files" "inspect ignore rules and explicit exclusions"; exit 1; }
+  elif [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
     recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
       || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
   else
@@ -317,6 +350,7 @@ delivery_main() {
     coverage_gap=1
   fi
   assert_delivery_report_valid "$report_path" || { edc_result_failure 1 "delivery-report-validation" "delivery review report validation failed" "inspect the delivery review output in the log" "" "$public_report_path"; exit 1; }
+  edc_review_context_notice "$context_policy" "$exclusions_file" >> "$report_path"
   if [ "$spawn_rc" -ne 0 ] || [ "$coverage_gap" -ne 0 ]; then
     if [ "$spawn_rc" -ne 0 ] && [ "$coverage_gap" -eq 0 ]; then
       echo "EDC delivery review succeeded with warning: delivery-review subprocess reported failure, but its substantive report was preserved." >&2

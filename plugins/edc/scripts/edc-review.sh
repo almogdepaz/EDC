@@ -262,6 +262,7 @@ consolidate_mode() {
     echo "**Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "**HEAD:** $(git rev-parse HEAD 2>/dev/null || echo unknown)"
     echo "**Modules reviewed:** $(echo "$modules" | tr '\n' ' ')"
+    edc_review_context_notice "$(manifest_context_mode)" "$EDC_REVIEW_TASKS_MANIFEST"
     echo ""
     echo "---"
     echo ""
@@ -456,6 +457,11 @@ auto_mode() {
     fi
     edc_write_review_result 1 "review-task-build-failed" "$failure_reason" "$failure_hint" "" ""
     exit 1
+  fi
+
+  if [ "$no_context_refresh" -eq 1 ] || [ "$ignore_context" -eq 1 ]; then
+    # Keep direct-scope/exclusion diagnostics visible despite planner capture.
+    printf '%s\n' "$out" >&2
   fi
 
   # allowed-unmapped/account-only paths are satisfied by deterministic

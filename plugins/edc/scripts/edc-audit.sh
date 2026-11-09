@@ -84,11 +84,20 @@ assert_audit_report_pair_valid() {
   return $rc
 }
 
-build_audit_worker_prompt() {
-  local module="$1" module_doc="$2" report_path="$3"
+emit_audit_candidate_evidence_contract() {
+  local target="${1:-}" base="${2:-}"
   local candidate_contract="Full audit: inspect the repository source directly."
   if [ -n "${target:-}" ]; then
     candidate_contract="The immutable candidate commit is \`$target\`. Treat \`git diff ${base}...${target}\` and blobs read with \`git show ${target}:<path>\` as the sole source evidence. Do not read changed or adjacent source from the mutable working tree. For a deleted path, inspect its baseline blob. For a changed gitlink, resolve the baseline and candidate gitlink SHAs from the parent commits, inspect bytes with \`git -C <submodule-path> diff <baseline-submodule>...<candidate-submodule>\` and \`git -C <submodule-path> show <candidate-submodule>:<path>\`, and repeat for nested gitlinks; when the baseline has no gitlink, enumerate the candidate with \`git -C <submodule-path> ls-tree -r <candidate-submodule>\`. Never use mutable submodule working-tree source as evidence."
+  fi
+  printf '%s\n' "$candidate_contract"
+}
+
+build_audit_worker_prompt() {
+  local module="$1" module_doc="$2" report_path="$3"
+  local scope_instruction="Read $EDC_INDEX, $MANIFEST, and $module_doc for this module's documented ownership, invariants, and file scope."
+  if [ "${context_policy:-context}" != context ]; then
+    scope_instruction="Review the explicit assigned source files below, not a generated module."
   fi
   cat <<EOF
 AUDIT WORKER TASK
@@ -96,14 +105,19 @@ AUDIT_MODULE: $module
 AUDIT_MODULE_DOC: $module_doc
 AUDIT_REPORT_PATH: $report_path
 
-Run a scoped code quality audit for this one module only.
+Run a scoped code quality audit for this assigned scope only.
 
 Candidate evidence contract:
-$candidate_contract
+$(emit_audit_candidate_evidence_contract "${target:-}" "${base:-}")
+
+$(edc_review_context_guidance "${context_policy:-context}")
+
+Assigned source files (direct mode):
+${direct_files:-}
 
 Rules:
-1. Read $EDC_INDEX, $MANIFEST, and $module_doc for this module's documented ownership, invariants, and file scope.
-2. Inspect only this module plus the smallest supporting references needed to verify a local code-quality finding.
+1. $scope_instruction
+2. Inspect only this assigned scope plus the smallest supporting references needed to verify a local code-quality finding.
 3. Write exactly one markdown report to $report_path.
 4. Do not write $EDC_COMPLEXITY or $EDC_ISSUES; synthesis owns canonical reports.
 5. Use the embedded edc-audit skill bundle below.
@@ -113,7 +127,15 @@ EOF
 }
 
 build_audit_synthesis_prompt() {
-  local complexity_output="$1" issues_output="$2"
+  local complexity_output="$1" issues_output="$2" prior_report_rule=""
+  case "${context_policy:-context}" in
+    ignored)
+      prior_report_rule="This overrides the reporting contract's prior generated-report merge instruction: do not read or merge pre-existing generated reports, including $EDC_ISSUES and $EDC_COMPLEXITY. Synthesize only this run's staged worker reports."
+      ;;
+    no-refresh)
+      prior_report_rule="Prior generated reports are optional unverified guidance, not required synthesis inputs. Do not let stale prior findings override current source evidence."
+      ;;
+  esac
   cat <<EOF
 AUDIT SYNTHESIS TASK
 AUDIT_WORKER_REPORTS_DIR: $AUDIT_TASKS_DIR
@@ -121,6 +143,14 @@ CANONICAL_COMPLEXITY_REPORT: $complexity_output
 CANONICAL_ISSUES_REPORT: $issues_output
 
 Synthesize the scoped module audit reports into the canonical EDC audit reports.
+
+Candidate evidence contract (for permitted source verification reads only):
+$(emit_audit_candidate_evidence_contract "${target:-}" "${base:-}")
+
+$(edc_review_context_guidance "${context_policy:-context}")
+
+This run's staged worker reports under $AUDIT_TASKS_DIR remain permitted synthesis inputs under every context policy.
+$prior_report_rule
 
 Rules:
 1. Read every markdown report under $AUDIT_TASKS_DIR.
@@ -139,7 +169,7 @@ EOF
 usage() {
   cat <<'EOF' >&2
 Usage:
-  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
+  EDC_AGENT_CLI=<claude|cursor|codex|pi> edc-audit.sh [target --base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 EOF
   exit 2
 }
@@ -149,7 +179,7 @@ audit_main() {
   trap edc_result_on_exit EXIT
   edc_runtime_preflight_or_exit
   edc_load_audit_dependencies
-  local target="" base="" policy=""
+  local target="" base="" policy="" context_policy=context direct_files=""
   local complexity_output="${EDC_AUDIT_COMPLEXITY_OUTPUT:-$EDC_COMPLEXITY}"
   local issues_output="${EDC_AUDIT_ISSUES_OUTPUT:-$EDC_ISSUES}"
   local -a ignore_args=() ignore_patterns=()
@@ -175,6 +205,14 @@ audit_main() {
         ignore_args+=("$1" "$2")
         ignore_patterns+=("$2")
         shift 2
+        ;;
+      --no-context-refresh)
+        [ "$context_policy" = ignored ] || context_policy=no-refresh
+        shift
+        ;;
+      --ignore-context)
+        context_policy=ignored
+        shift
         ;;
       --context-mode)
         [ "$#" -ge 2 ] || { echo "ERROR: --context-mode requires a value" >&2; usage; }
@@ -219,7 +257,9 @@ audit_main() {
 
   # Gate on freshness once for standalone review. review-all prepares it before
   # launching all lenses so parallel children must not race recovery.
-  if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
+  if [ "$context_policy" != context ]; then
+    : # Explicit no-build mode never recovers or asserts generated context.
+  elif [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
     recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
       || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
   else
@@ -239,7 +279,11 @@ audit_main() {
 
   local changed_files=""
   if [ -n "$target" ]; then
-    changed_files=$(changed_files_for_audit_scope "$target" "$base")
+    if [ "$context_policy" = context ]; then
+      changed_files=$(changed_files_for_audit_scope "$target" "$base")
+    else
+      changed_files=$(git diff -z --name-only --diff-filter=ACDMRTUXB "$base...$target" | tr '\0' '\n')
+    fi
     changed_files=$(edc_filter_ignored_files "$changed_files" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
     if [ -z "$changed_files" ]; then
       echo "ERROR: no changed files found for quality review target: $target" >&2
@@ -248,12 +292,24 @@ audit_main() {
     fi
   fi
 
+  local selected_modules exclusions_file="$run_dir/direct-exclusions.json"
+  if [ "$context_policy" != context ]; then
+    if [ -n "$target" ]; then direct_files="$changed_files"; else direct_files=$(git ls-files -z | tr '\0' '\n'); fi
+    direct_files=$(edc_review_direct_files "$context_policy" "$direct_files" "" "$exclusions_file" ${ignore_patterns[@]+"${ignore_patterns[@]}"})
+    [ -n "$direct_files" ] || { edc_result_failure 1 no-reviewable-files "no reviewable source files" "inspect ignore rules and explicit exclusions"; exit 1; }
+    selected_modules=direct-source
+  elif [ -n "$target" ]; then
+    selected_modules=$(printf '%s\n' "$changed_files" | manifest_audit_modules_for_files) || exit 1
+  else
+    selected_modules=$(manifest_audit_modules) || exit 1
+  fi
+
   local module module_doc safe report_path prompt_path task_id module_count=0 had_warning=0
   local -a audit_modules=() audit_reports=() audit_task_ids=()
   while IFS=$'\t' read -r module module_doc; do
     [ -n "${module:-}" ] || continue
     module_count=$((module_count + 1))
-    if [ -z "${module_doc:-}" ] || [ ! -f "$module_doc" ]; then
+    if [ "$context_policy" = context ] && { [ -z "${module_doc:-}" ] || [ ! -f "$module_doc" ]; }; then
       echo "ERROR: manifest module '$module' has missing doc: ${module_doc:-<empty>}" >&2
       exit 1
     fi
@@ -268,7 +324,7 @@ audit_main() {
     audit_modules+=("$module")
     audit_reports+=("$report_path")
     audit_task_ids+=("$task_id")
-  done < <(if [ -n "$target" ]; then printf '%s\n' "$changed_files" | manifest_audit_modules_for_files; else manifest_audit_modules; fi)
+  done <<< "$selected_modules"
 
   if [ "$module_count" -eq 0 ]; then
     if [ -n "$target" ]; then
@@ -369,6 +425,8 @@ audit_main() {
     echo "HINT: inspect $run_dir for transport/provider diagnostics." >&2
   fi
 
+  edc_review_context_notice "$context_policy" "$exclusions_file" >> "$staged_complexity"
+  edc_review_context_notice "$context_policy" "$exclusions_file" >> "$staged_issues"
   edc_promote_file "$staged_complexity" "$complexity_output" || exit 1
   edc_promote_file "$staged_issues" "$issues_output" || exit 1
   assert_audit_report_pair_valid "$complexity_output" "$issues_output" || { edc_result_failure 1 "audit-report-validation" "promoted audit report validation failed" "inspect canonical report promotion"; exit 1; }

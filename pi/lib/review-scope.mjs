@@ -149,8 +149,9 @@ export function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cw
   }
 }
 
-export async function shouldProceedWithReview(args, ctx, freshness = getContextFreshness(ctx.cwd)) {
+export async function shouldProceedWithReview(args, ctx, freshness) {
   if (reviewSkipsContextPrompt(args)) return true;
+  freshness ??= getContextFreshness(ctx.cwd);
   if (freshness.state !== "missing" && freshness.state !== "stale") return true;
   if (!ctx.ui?.confirm || ctx.hasUI === false) return true;
 
@@ -171,14 +172,14 @@ function canonicalReviewCli(commandName, args, scope = "") {
 
 export function reviewDeclinedMessage(args, commandName = "review", scope = "") {
   const canonical = canonicalReviewCli(commandName, args, scope);
-  const directBase = canonicalReviewCli("security", args, scope);
+  const directBase = canonical;
   return [
     "Review cancelled; EDC context was not refreshed.",
     "",
     "Refresh context, then rerun:",
     `\`${canonical}\``,
     "",
-    "Security-only direct review can skip context refresh:",
+    "The same review can skip context refresh:",
     `\`${directBase} --no-context-refresh\``,
     "",
     "Or ignore existing context entirely:",

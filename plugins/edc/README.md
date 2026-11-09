@@ -115,7 +115,7 @@ Pi worker discovery is always disabled with `--no-extensions`. Operators may loa
 - **build**: full context build; writes `AGENTS.md` plus the v2 `edc-context/` tree
 - **update**: incremental refresh when HEAD advances
 - **stale** when `edc-context/manifest.json.sourceCommit != HEAD`
-- review / audit / update require fresh context — orchestrators auto-recover
+- review / audit / update use fresh context by default — orchestrators auto-recover
   via `edc-recover-context.sh`, and `edc-doctor.sh` validates the result
 - `edc-context/` is generated and disposable; recovery may wipe and rebuild it
 - Pi background review operational state is deliberately outside `edc-context/`: current status lives at `.git/edc/status`, current raw log at `.git/edc/review.log` (resolved via `git rev-parse --git-path`)
@@ -141,6 +141,4 @@ edc-review.sh path/to/diff.patch       # lower-level security diff file
 Dirty differential review requires `--include-working-tree` or `--committed-only`; clean trees need neither. Include mode creates one immutable synthetic commit shared by the security, delivery, and quality lenses. It includes staged, unstaged, deleted, and non-ignored untracked files, recursively snapshots dirty initialized submodules, and does not change HEAD, refs, or any real index. Combined review prepares context once, runs the lenses serially in that order by default, continues after a failed lens, then promotes validated reports. Exact `EDC_PARALLEL=1` retains the concurrent launch/wait behavior.
 
 For PR targets, the orchestrator shells out to `gh pr diff <number-or-url> --name-only`.
-Use `--ignore-context` for a pure direct review with no context build/update and
-no reads from existing `edc-context/`; use `--no-context-refresh` to skip
-creation/update while still allowing existing context.
+Every review lens and CLI alias supports `--no-context-refresh` and `--ignore-context` for full/diff scope; Pi accepts them as `/edc` arguments. No-refresh never creates, updates, or repairs context: existing context is optional guidance, and explicit source inventory includes new/unmapped files. Ignore-context also excludes generated-context analysis reads/routing and takes precedence. Valid account-only exclusions remain accounted in no-refresh reports; security retains bounded promotion checks. Workers gather necessary source/supporting evidence directly, report gaps, and keep the full review methodology and existing output paths. See the [root CLI guide](../../README.md#terminal-cli) for examples.

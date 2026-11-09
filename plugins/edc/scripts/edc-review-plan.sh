@@ -2,12 +2,46 @@
 # Security-review task planning and changed-file classification.
 # Sourced by edc-review.sh after shared review helpers are defined.
 
+write_promotion_check_task() {
+  local module="$1" target="$2" baseline_line="$3" file_list="$4" candidate_evidence_contract="$5" context_policy="${6:-context}"
+  cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
+# Review Task: \`${module}\`
+
+## Target
+${target}${baseline_line}
+
+## Files to review
+${file_list}
+
+## Candidate evidence contract
+${candidate_evidence_contract}
+
+## Instructions
+
+1. This is a promotion check only, not a full module review.
+2. Do not read generated module docs; these paths are intentionally contextless.
+3. Inspect only the listed diff and the smallest adjacent source needed to decide whether durable agent context now exists.
+4. Write a human-readable promotion check report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`.
+5. Write the machine-readable result to \`$EDC_REVIEW_TASKS_DIR/result-${module}.json\` with these fields:
+   - \`schemaVersion\`: \`1\`
+   - \`kind\`: \`"contextless-promotion-check"\`
+   - \`status\`: \`"success"\`
+   - \`promotionDecision\`: either \`"promote"\` or \`"keep-contextless"\`
+   - \`targetModule\`: non-empty module name when \`promotionDecision\` is \`"promote"\`
+   - \`reportPath\`: \`"$EDC_REVIEW_TASKS_DIR/report-${module}.md"\`
+
+$(edc_review_context_guidance "$context_policy")
+
+DO NOT edit \`edc-context/manifest.json\`, \`edc-context/index.md\`, or \`edc-context/modules/*.md\`.
+DO NOT perform a full module review.
+TASK
+}
+
 build_mode_impl() {
   local candidate_pre_resolved="$1" target="$2"; shift 2
   local baseline=""
   local no_context_refresh=0
   local ignore_context=0
-  local context_available=1
   local full_scope=0 policy=""
   local candidate_evidence_contract="Full review: inspect the repository source directly."
   local -a ignore_patterns=()
@@ -71,43 +105,26 @@ build_mode_impl() {
     candidate_evidence_contract="The external target/diff named above is the sole differential authority. Do not incorporate local working-tree changes into the review."
   fi
 
-  if [ "$ignore_context" -ne 1 ]; then
+  if [ "$ignore_context" -ne 1 ] && [ "$no_context_refresh" -ne 1 ]; then
     if [ ! -f "$MANIFEST" ]; then
-      if [ "$no_context_refresh" -eq 1 ]; then
-        context_available=0
-      else
-        echo "CONTEXT_MISSING"
-        echo "No $MANIFEST found. Run edc-build before reviewing."
-        exit 1
-      fi
+      echo "CONTEXT_MISSING"
+      echo "No $MANIFEST found. Run edc-build before reviewing."
+      exit 1
     fi
 
-    # Structural check: index.md must exist and contain ## headings. Absent or
-    # stubbed index.md means edc-build never finished (or wrote junk). In
-    # --no-context-refresh mode, do not recover; fall back to a direct review
-    # task instead.
     local ctx="$EDC_INDEX"
-    if [ "$context_available" -eq 1 ] && { [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; }; then
-      if [ "$no_context_refresh" -eq 1 ]; then
-        context_available=0
-      else
-        echo "CONTEXT_MISSING"
-        echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
-        exit 1
-      fi
+    if [ ! -f "$ctx" ] || ! grep -q '^##' "$ctx"; then
+      echo "CONTEXT_MISSING"
+      echo "$ctx is missing or has no '## ' headings (stub). Run edc-build before reviewing."
+      exit 1
     fi
 
-    local source_commit=""
-    if [ "$context_available" -eq 1 ]; then
-      source_commit=$(read_manifest_source_commit)
-      if [ "$source_commit" != "$head" ] && [ "$no_context_refresh" -ne 1 ]; then
-        echo "CONTEXT_STALE"
-        echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
-        exit 1
-      fi
-      if [ "$source_commit" != "$head" ] && [ "$no_context_refresh" -eq 1 ]; then
-        echo "WARNING: context is stale (built at: $source_commit, HEAD: $head); using it because --no-context-refresh was requested" >&2
-      fi
+    local source_commit
+    source_commit=$(read_manifest_source_commit)
+    if [ "$source_commit" != "$head" ]; then
+      echo "CONTEXT_STALE"
+      echo "Context is stale (built at: $source_commit, HEAD: $head). Run edc-update before reviewing."
+      exit 1
     fi
   fi
 
@@ -180,12 +197,25 @@ build_mode_impl() {
     exit 2
   fi
 
-  if [ "$ignore_context" -eq 1 ] || [ "$context_available" -eq 0 ]; then
+  if [ "$ignore_context" -eq 1 ] || [ "$no_context_refresh" -eq 1 ]; then
+    local direct_policy=no-refresh
+    [ "$ignore_context" -ne 1 ] || direct_policy=ignored
+    local promotion_file promotion_files exclusions_file accounted_paths
+    promotion_file=$(mktemp "${TMPDIR:-/tmp}/edc-review-promotions-$$.XXXXXX") || exit 1
+    exclusions_file=$(mktemp "${TMPDIR:-/tmp}/edc-review-exclusions-$$.XXXXXX") || { rm -f "$promotion_file"; exit 1; }
+    files=$(edc_review_direct_files "$direct_policy" "$files" "$promotion_file" "$exclusions_file" ${ignore_patterns[@]+"${ignore_patterns[@]}"}) || { rm -f "$promotion_file" "$exclusions_file"; exit 1; }
+    promotion_files=$(cat "$promotion_file")
+    accounted_paths=$(node "$EDC_JSON_CLI" review-excluded-files "$exclusions_file")
+    if [ -z "$files" ] && [ -z "$promotion_files" ] && [ -z "$accounted_paths" ]; then
+      rm -f "$promotion_file" "$exclusions_file"
+      echo "ERROR: no reviewable files after filtering tool output and ignore rules" >&2
+      exit 2
+    fi
     rm -rf "$EDC_REVIEW_TASKS_DIR"
     mkdir -p "$EDC_REVIEW_TASKS_DIR"
 
     local file_list context_mode direct_module instruction_1 extra_instruction
-    file_list=$(echo "$files" | grep -v '^$' | sed 's/^/- /')
+    file_list=$(printf '%s\n' "$files" | sed '/^$/d; s/^/- /')
 
     if [ "$ignore_context" -eq 1 ]; then
       context_mode="ignored"
@@ -195,13 +225,22 @@ build_mode_impl() {
     else
       context_mode="no-refresh"
       direct_module="no-context-refresh"
-      instruction_1="No usable EDC context was available without building/updating. Review the changed files directly."
+      instruction_1="Review the assigned files directly; existing context is optional navigation guidance, not scope authority."
       extra_instruction=""
     fi
 
-    printf '%s\n' "$files" | grep -v '^$' | node "$EDC_JSON_CLI" review-direct-manifest "$target" "$baseline" "$head" "$context_mode" "$direct_module" \
+    printf '%s\n' "$files" | node "$EDC_JSON_CLI" review-direct-manifest "$target" "$baseline" "$head" "$context_mode" "$direct_module" "$promotion_file" "$exclusions_file" \
       > "$EDC_REVIEW_TASKS_MANIFEST"
+    rm -f "$promotion_file" "$exclusions_file"
 
+    if [ -n "$accounted_paths" ]; then
+      {
+        printf '# Contextless path accounting\n\n%s\n\n' "$accounted_paths"
+        echo 'No source-review worker was spawned for these explicit account-only paths.'
+      } > "$EDC_REVIEW_TASKS_DIR/report-contextless-account-only.md"
+    fi
+
+    if [ -n "$files" ]; then
     cat > "$EDC_REVIEW_TASKS_DIR/${direct_module}.md" <<TASK
 # Review Task: \`${direct_module}\`
 
@@ -217,19 +256,27 @@ ${candidate_evidence_contract}
 ## Instructions
 
 1. ${instruction_1}
-2. Review only the changed files listed above and whatever adjacent source files are necessary to understand the diff.
+2. Review all assigned files listed above (full tracked inventory for full scope, actual changed files for diff scope) and necessary supporting source.
 3. Use the embedded edc-review methodology to perform the full review on the files listed above.
 4. Write your report to \`$EDC_REVIEW_TASKS_DIR/report-${direct_module}.md\`
 
-DO NOT build or update EDC context.
+$(edc_review_context_guidance "$context_mode")
 ${extra_instruction}
 TASK
+    fi
 
-    echo "routing summary: context=$context_mode files=$(echo "$files" | grep -cve '^$') modules=1" >&2
+    if [ -n "$promotion_files" ]; then
+      local baseline_line=""
+      [ -z "$baseline" ] || baseline_line=$'\n'"## Baseline"$'\n'"$baseline"
+      write_promotion_check_task contextless-promotion-check "$target" "$baseline_line" "$(printf '%s\n' "$promotion_files" | sed 's/^/- /')" "$candidate_evidence_contract" "$context_mode"
+    fi
+
+    echo "routing summary: context=$context_mode direct-files=$(printf '%s\n' "$files" | sed '/^$/d' | wc -l | tr -d ' ')" >&2
     echo ""
     echo "Review tasks ready."
     echo ""
-    echo "TASK $EDC_REVIEW_TASKS_DIR/${direct_module}.md"
+    [ -z "$files" ] || echo "TASK $EDC_REVIEW_TASKS_DIR/${direct_module}.md"
+    [ -z "$promotion_files" ] || echo "TASK $EDC_REVIEW_TASKS_DIR/contextless-promotion-check.md"
     return 0
   fi
 
@@ -417,12 +464,7 @@ TASK
   sorted_modules=$(printf '%s\n' ${module_names[@]+"${module_names[@]}"} | sort)
 
   # manifest.json (script-internal source of truth for consolidate/verify)
-  local context_mode
-  if [ "$no_context_refresh" -eq 1 ]; then
-    context_mode="no-refresh"
-  else
-    context_mode="context"
-  fi
+  local context_mode=context
 
   local manifest_meta_dir manifest_meta
   manifest_meta_dir="$EDC_REVIEW_TASKS_DIR/.manifest-files"
@@ -475,35 +517,7 @@ TASK
     [ -n "$baseline" ] && baseline_line=$'\n'"## Baseline"$'\n'"${baseline}"
 
     if [ "$module_type" = "contextless" ] && [ "$module_policy" = "promotion-check" ]; then
-      cat > "$EDC_REVIEW_TASKS_DIR/${module}.md" <<TASK
-# Review Task: \`${module}\`
-
-## Target
-${target}${baseline_line}
-
-## Files to review
-${file_list}
-
-## Candidate evidence contract
-${candidate_evidence_contract}
-
-## Instructions
-
-1. This is a promotion check only, not a full module review.
-2. Do not read generated module docs; these paths are intentionally contextless.
-3. Inspect only the listed diff and the smallest adjacent source needed to decide whether durable agent context now exists.
-4. Write a human-readable promotion check report to \`$EDC_REVIEW_TASKS_DIR/report-${module}.md\`.
-5. Write the machine-readable result to \`$EDC_REVIEW_TASKS_DIR/result-${module}.json\` with these fields:
-   - \`schemaVersion\`: \`1\`
-   - \`kind\`: \`"contextless-promotion-check"\`
-   - \`status\`: \`"success"\`
-   - \`promotionDecision\`: either \`"promote"\` or \`"keep-contextless"\`
-   - \`targetModule\`: non-empty module name when \`promotionDecision\` is \`"promote"\`
-   - \`reportPath\`: \`"$EDC_REVIEW_TASKS_DIR/report-${module}.md"\`
-
-DO NOT edit \`edc-context/manifest.json\`, \`edc-context/index.md\`, or \`edc-context/modules/*.md\`.
-DO NOT perform a full module review.
-TASK
+      write_promotion_check_task "$module" "$target" "$baseline_line" "$file_list" "$candidate_evidence_contract"
       continue
     fi
 

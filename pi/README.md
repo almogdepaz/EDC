@@ -51,7 +51,7 @@ Pi exposes one interactive command:
 
 | Command | Purpose |
 |---|---|
-| `/edc` | Open the EDC menu |
+| `/edc [--no-context-refresh\|--ignore-context]` | Open the EDC menu; optional flags apply to every review scope/lens |
 
 Menu actions:
 
@@ -80,7 +80,11 @@ edc update --agent pi
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, then quality against one candidate by default; exact `EDC_PARALLEL=1` enables concurrent lenses and module workers. Quality diff audits only modules owning changed files; quality full audits all modules. Review prompts before refreshing stale/missing context. Declining cancels and prints CLI examples for `--no-context-refresh` / `--ignore-context`.
+Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, then quality against one candidate by default; exact `EDC_PARALLEL=1` enables concurrent lenses and module workers. Quality diff audits only modules owning changed files; quality full audits all modules. Default reviews prompt before refreshing stale/missing context. Declining cancels and prints no-build CLI examples for the selected lens.
+
+Run `/edc --no-context-refresh` or `/edc --ignore-context` before selecting any full/diff scope and lens to opt out of context generation. No-refresh permits existing context as optional navigation, but falls back to explicit source files when context is absent, stale, incomplete, or malformed; new/unmapped files remain in scope. Ignore-context also forbids generated-context analysis reads/routing and takes precedence when both flags are present. Neither option builds, updates, or repairs context.
+
+Workers gather only necessary source/supporting evidence and ordinary specs/docs, then report policy and coverage limitations. Existing report paths, candidate/dirty policies, and review checks remain unchanged; direct reviews do not need module fanout or a generated manifest.
 
 ## Background job state
 

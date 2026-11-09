@@ -26,6 +26,8 @@ This skill usually runs inside an audit subprocess spawned by `plugins/edc/scrip
 
 When invoked for the current whole-repo audit command, assume `edc-context/modules/` and `edc-context/manifest.json` exist and reflect HEAD. During build-time module audit, a task may provide module files directly before the final manifest exists; in that case, use the task-provided module doc and file list rather than requiring `manifest.json`.
 
+An orchestrator's explicit `CONTEXT_POLICY` overrides generated-context prerequisites and loading in this skill and its references. In `ignored` mode, do not read or route through generated context. In `no-refresh` mode, existing context is optional navigation only. Neither mode may build, update, or repair context. The assigned source-file inventory replaces module scope; verify findings against source, callers, tests, and ordinary standards/docs, and report evidence gaps. Keep all quality checks and reporting requirements unchanged.
+
 If required scope inputs are missing, fail loudly. Do not repair the context layout from inside the skill.
 
 ## Workflow

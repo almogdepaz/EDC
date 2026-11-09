@@ -31,7 +31,7 @@ import {
 } from "./paths.mjs";
 // --- manifest ---
 
-function loadManifest(projectRoot) {
+export function loadManifest(projectRoot) {
   const manifestContent = readContainedRegularFile(projectRoot, EDC_CONTEXT_DIR, EDC_MANIFEST_REL);
   if (manifestContent === null) return null;
   try {

@@ -42,7 +42,7 @@ fi
 exports_check=$(node --input-type=module -e '
   import("./plugins/edc/hooks/lib/route.mjs").then(m => {
     // Public API — see plugins/edc/hooks/lib/route.mjs. Internal helpers
-    // (loadManifest, routeFile, dedupPath, etc.) are intentionally unexported.
+    // (routeFile, dedupPath, etc.) are intentionally unexported.
     const required = [
       "buildSessionStartContent",
       "buildToolCallInjection",
@@ -938,7 +938,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     process.exit(1);
   }
   const declineMessage = calls.messages.at(-1)?.content || "";
-  if (!declineMessage.includes("edc review diff master --agent pi") || !declineMessage.includes("edc security diff master --agent pi --ignore-context")) {
+  if (!declineMessage.includes("edc review diff master --agent pi") || !declineMessage.includes("edc review diff master --agent pi --ignore-context")) {
     console.log("DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
   }
@@ -956,6 +956,33 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   if (!qualityDeclineMessage.includes("edc quality full --agent pi")) {
     console.log("QUALITY_FULL_DECLINE_GUIDANCE_FAIL:" + JSON.stringify(calls.messages.at(-1)));
     process.exit(1);
+  }
+
+  // Explicit no-build arguments reach the actual detached job for every lens/scope.
+  for (const scope of ["full repo review", "changes vs default branch"]) {
+    for (const lens of ["combined review", "security review", "delivery review", "quality review"]) {
+      for (const flag of ["--no-context-refresh", "--ignore-context"]) {
+        const selections = [scope, lens];
+        await edcCmd.opts.handler(flag, {
+          cwd: staleDir,
+          hasUI: true,
+          ui: {
+            select: async () => selections.shift(),
+            confirm: async () => { throw new Error("no-build review must not request context recovery"); },
+          },
+        });
+        const path = `${staleDir}/.git/edc/status`;
+        for (let i = 0; i < 100; i++) {
+          if (fs.existsSync(path) && fs.readFileSync(path, "utf8").includes("status=success")) break;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        const status = fs.readFileSync(path, "utf8");
+        if (!status.includes("status=success") || !status.includes(flag)) {
+          console.log("NO_BUILD_JOB_ARGS_FAIL:" + JSON.stringify({ scope, lens, flag, status }));
+          process.exit(1);
+        }
+      }
+    }
   }
 
   // 4. resources_discover returns only human-facing review/audit/delivery skills

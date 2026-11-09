@@ -15,8 +15,8 @@ find_phase_script() {
 
 usage() {
   cat <<'EOF'
-Usage: edc-review-all.sh [target] [--base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject]
-       edc-review-all.sh --full [--ignore <glob>]... [--context-mode advisory|inject]
+Usage: edc-review-all.sh [target] [--base <ref>] [--include-working-tree|--committed-only] [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
+       edc-review-all.sh --full [--ignore <glob>]... [--context-mode advisory|inject] [--no-context-refresh|--ignore-context]
 
 Runs security, delivery/architecture, and quality review serially by default.
 Set EDC_PARALLEL=1 to run the three lenses concurrently.
@@ -31,6 +31,7 @@ FULL_SCOPE=0
 REVIEW_TARGET=""
 REVIEW_BASE=""
 REVIEW_POLICY=""
+CONTEXT_POLICY=context
 COMMON_ARGS=()
 IGNORE_ARGS=()
 
@@ -61,6 +62,16 @@ parse_args() {
         COMMON_ARGS+=("$1" "$2")
         IGNORE_ARGS+=("$1" "$2")
         shift 2
+        ;;
+      --no-context-refresh)
+        [ "$CONTEXT_POLICY" = ignored ] || CONTEXT_POLICY=no-refresh
+        COMMON_ARGS+=("$1")
+        shift
+        ;;
+      --ignore-context)
+        CONTEXT_POLICY=ignored
+        COMMON_ARGS+=("$1")
+        shift
         ;;
       --context-mode)
         [ "$#" -ge 2 ] || { echo "ERROR: $1 requires a value" >&2; return 2; }
@@ -230,7 +241,9 @@ main() {
 
   # Candidate resolution happens before recovery so generated context cannot
   # silently enter the candidate. Recovery completes once before any lens starts.
-  prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit 1
+  if [ "$CONTEXT_POLICY" = context ]; then
+    prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit 1
+  fi
 
   # Child lens coordinators reuse this run's normalized state, then consume the
   # marker so their workers cannot mistake it for a new top-level run.
@@ -241,7 +254,7 @@ main() {
   audit_script=$(find_phase_script edc-audit.sh) || { echo "ERROR: edc-audit.sh not found" >&2; exit 2; }
 
   edc_create_worker_run review-all parallel_run_dir parallel_run_id || exit $?
-  mkdir -p "$parallel_run_dir/staged" "$parallel_run_dir/results" "$EDC_BUILD_DIR"
+  mkdir -p "$parallel_run_dir/staged" "$parallel_run_dir/results"
   security_result="$parallel_run_dir/results/security.json"
   delivery_result="$parallel_run_dir/results/delivery.json"
   quality_result="$parallel_run_dir/results/quality.json"

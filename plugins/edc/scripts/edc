@@ -42,6 +42,10 @@ Notes:
   Dirty differential reviews require --include-working-tree or --committed-only.
   EDC runs orchestration serially by default. Set EDC_PARALLEL=1 to run combined
   review lenses and module workers concurrently; EDC_MAX_CONCURRENCY applies only then.
+  All review lenses/aliases accept --no-context-refresh and --ignore-context.
+  --no-context-refresh never builds/repairs context; existing context is optional guidance.
+  --ignore-context also excludes generated-context reads/routing and takes precedence.
+  Direct full/diff review uses explicit source files and reports coverage limitations.
   All commands delegate to shared deterministic orchestrators.
 EOF
 }
@@ -326,12 +330,15 @@ parse_agent_context_args() {
 }
 
 finalize_agent_context() {
-  local use_context_mode="$1"
+  local use_context_mode="$1" arg direct_review=0
+  for arg in ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}; do
+    case "$arg" in --no-context-refresh|--ignore-context) direct_review=1 ;; esac
+  done
 
   [ -n "$PARSED_AGENT" ] || die "--agent is required"
   if [ "$use_context_mode" -eq 1 ]; then
     validate_context_mode "$PARSED_CONTEXT_MODE"
-    if [ -z "$PARSED_CONTEXT_MODE" ]; then
+    if [ -z "$PARSED_CONTEXT_MODE" ] && [ "$direct_review" -eq 0 ]; then
       PARSED_CONTEXT_MODE="$(read_manifest_default_mode)"
       validate_context_mode "$PARSED_CONTEXT_MODE"
     fi
@@ -361,7 +368,7 @@ security_review_cmd() {
 }
 
 review_all_cmd() {
-  parse_agent_context_args review 1 passthrough passthrough "--full" "--base --diff" "$@"
+  parse_agent_context_args review 1 passthrough passthrough "--no-context-refresh --ignore-context --full" "--base --diff" "$@"
   finalize_agent_context 1
   normalize_scope_args review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
@@ -369,7 +376,7 @@ review_all_cmd() {
 }
 
 delivery_review_cmd() {
-  parse_agent_context_args delivery-review 1 passthrough passthrough "--full" "--base --diff" "$@"
+  parse_agent_context_args delivery-review 1 passthrough passthrough "--no-context-refresh --ignore-context --full" "--base --diff" "$@"
   finalize_agent_context 1
   normalize_scope_args delivery-review 1 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 
@@ -377,7 +384,7 @@ delivery_review_cmd() {
 }
 
 quality_review_cmd() {
-  parse_agent_context_args quality-review 1 passthrough passthrough "" "--base --diff" "$@"
+  parse_agent_context_args quality-review 1 passthrough passthrough "--no-context-refresh --ignore-context" "--base --diff" "$@"
   finalize_agent_context 1
   normalize_scope_args quality-review 0 ${PARSED_PASSTHROUGH[@]+"${PARSED_PASSTHROUGH[@]}"}
 

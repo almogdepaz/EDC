@@ -22,7 +22,6 @@ import { fileURLToPath } from "node:url";
 import {
   buildSessionStartContent,
   buildToolCallInjection,
-  getContextFreshness,
 } from "../plugins/edc/hooks/lib/route.mjs";
 import { BACKGROUND_JOB_TERMINATION_GRACE_MS } from "../plugins/edc/hooks/lib/termination-policy.mjs";
 import { argTokens, renderArgs, renderShellArgs, shellQuote, tokenizeArgs } from "./lib/args.mjs";
@@ -100,7 +99,8 @@ function isKillJobRequest(args) {
 
 function renderEdcHelp() {
   return [
-    "Usage: /edc",
+    "Usage: /edc [--no-context-refresh|--ignore-context]",
+    "Review flags apply to every lens and full/diff scope; default reviews refresh context.",
     "",
     "Opens the interactive EDC menu.",
     "",
@@ -925,8 +925,7 @@ async function killRunningJobAction(pi, ctx) {
 
 async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review", scope = "") {
   const renderedArgs = args || [];
-  const freshness = getContextFreshness(ctx.cwd);
-  const proceed = await shouldProceedWithReview(renderedArgs, ctx, freshness);
+  const proceed = await shouldProceedWithReview(renderedArgs, ctx);
   if (!proceed) {
     sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, commandName, scope));
     return;
@@ -993,7 +992,7 @@ async function argsForReviewScope(ctx, scopeChoice) {
   }
 }
 
-async function runReviewFromMenuScope(pi, ctx, scopeChoice) {
+async function runReviewFromMenuScope(pi, ctx, scopeChoice, contextArgs = []) {
   const scope = await argsForReviewScope(ctx, scopeChoice);
   if (scope.cancelled) return;
   if (scope.error) {
@@ -1012,7 +1011,7 @@ async function runReviewFromMenuScope(pi, ctx, scopeChoice) {
     sendInfo(pi, "edc-menu", "EDC menu cancelled.");
     return;
   }
-  await startReviewJob(pi, ctx, config.kind, config.scriptName, config.args ?? scope.args, config.commandName, scope.isFullScope ? "full" : "diff");
+  await startReviewJob(pi, ctx, config.kind, config.scriptName, [...(config.args ?? scope.args), ...contextArgs], config.commandName, scope.isFullScope ? "full" : "diff");
 }
 
 function runBackgroundAction(pi, ctx, kind, scriptName, args = "") {
@@ -1067,7 +1066,7 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.FULL_REVIEW:
     case EDC_MENU.DIFF_DEFAULT:
     case EDC_MENU.DIFF_CUSTOM:
-      await runReviewFromMenuScope(pi, ctx, choice);
+      await runReviewFromMenuScope(pi, ctx, choice, tokenizeArgs(args).filter(arg => arg === "--no-context-refresh" || arg === "--ignore-context"));
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);

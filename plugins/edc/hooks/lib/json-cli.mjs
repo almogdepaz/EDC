@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
-import { routeFileSync } from "./route.mjs";
+import { routeFileSync, loadManifest, classifyPathSync, validateClassifierGlobs } from "./route.mjs";
 import { dispatchResultCommand } from "./json-result-commands.mjs";
 
 function die(message, code = 1) {
@@ -286,9 +286,59 @@ function command() {
       process.stdout.write(json.policy?.unmatchedPathPolicy || "warn-allow");
       return;
     }
+    case "review-optional-policy-files": {
+      // Context is optional. Only an unambiguous, valid explicit exclusion may
+      // remove a file; stale module coverage and unmatched policy cannot do so.
+      const files = lines(readStdin());
+      const manifest = loadManifest(process.cwd());
+      let states;
+      try {
+        if (!manifest || !Array.isArray(manifest.modules)) throw new Error("no usable manifest");
+        const entries = manifest.contextless?.entries ?? [];
+        if (!Array.isArray(entries) || entries.some(entry =>
+          !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(entry?.id || "") ||
+          typeof entry.reason !== "string" || !entry.reason.trim() ||
+          !Array.isArray(entry.globs) || !entry.globs.length ||
+          entry.globs.some(glob => typeof glob !== "string" || !glob) ||
+          !["account-only", "promotion-check", "no-context-review"].includes(entry.reviewPolicy)
+        )) throw new Error("invalid explicit context policy");
+        validateClassifierGlobs(manifest);
+        states = files.map(file => classifyPathSync(manifest, file));
+      } catch {
+        console.error("EDC no-refresh: context policy unavailable/unusable; reviewing source directly without context exclusions.");
+      }
+      const promotionFiles = [], excludedFiles = [];
+      files.forEach((file, i) => {
+        const state = states?.[i] || "";
+        if (/^contextless:[a-z0-9-]+:account-only$/.test(state)) {
+          excludedFiles.push(file);
+          console.error(`EDC no-refresh: account-only excluded: ${file}`);
+        } else if (args[0] && /^contextless:[a-z0-9-]+:promotion-check$/.test(state)) {
+          promotionFiles.push(file);
+        } else console.log(file);
+      });
+      if (args[0]) writeFileSync(args[0], promotionFiles.join("\n"));
+      if (args[1]) writeFileSync(args[1], JSON.stringify(excludedFiles));
+      return;
+    }
+    case "review-excluded-files": {
+      const json = readJson(args[0]);
+      const files = Array.isArray(json) ? json : array(json.excludedFiles);
+      if (files.length) {
+        console.log("\nExplicit account-only exclusions (accounted, not reviewed):");
+        for (const file of files) console.log(`- ${JSON.stringify(file)}`);
+      }
+      return;
+    }
     case "review-direct-manifest": {
-      const [target, baseline, head, contextMode, module] = args;
-      writeJson({ target, baseline, head, contextMode, modules: [{ name: module, doc: "", files: lines(readStdin()) }] });
+      const [target, baseline, head, contextMode, module, promotionPath, exclusionsPath] = args;
+      const files = lines(readStdin());
+      const modules = files.length ? [{ name: module, doc: "", files }] : [];
+      const promotionFiles = promotionPath ? lines(readFileSync(promotionPath, "utf8")) : [];
+      if (promotionFiles.length) modules.push({ name: "contextless-promotion-check", doc: "", files: promotionFiles, type: "contextless", contextlessId: "promotion-check", reviewPolicy: "promotion-check" });
+      const excludedFiles = exclusionsPath ? readJson(exclusionsPath) : [];
+      if (excludedFiles.length) modules.push({ name: "contextless-account-only", doc: "", files: excludedFiles, type: "contextless", reviewPolicy: "account-only" });
+      writeJson({ target, baseline, head, contextMode, modules, ...(excludedFiles.length ? { excludedFiles } : {}) });
       return;
     }
     case "review-routed-manifest": {

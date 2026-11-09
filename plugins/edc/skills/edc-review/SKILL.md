@@ -22,7 +22,7 @@ Use edc-audit for code quality, maintainability, bloat, duplication, and test-va
 
 ## Invocation modes
 
-Check arguments first.
+Check arguments first. An orchestrator's explicit `CONTEXT_POLICY` overrides generated-context loading below and in references: `ignored` forbids generated-context reads/routing; `no-refresh` permits existing context only as optional navigation. Neither mode may build, update, or repair context. Follow the assigned file scope and immutable candidate evidence contract; gather necessary source/supporting docs directly and report gaps. Keep the full security methodology unchanged.
 
 ### Mode A — scoped (`--task-file <path>`)
 

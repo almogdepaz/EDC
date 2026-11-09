@@ -438,7 +438,7 @@ TMPDIR_T15I=$(mktemp -d)
   rm -rf "$TMPDIR_T15I"
 )
 
-# ── 15.10: --no-context-refresh uses existing stale context if present ────
+# ── 15.10: stale context is optional guidance, not direct scope authority ─
 TMPDIR_T15J=$(mktemp -d)
 (
   setup_repo "$TMPDIR_T15J"
@@ -457,17 +457,19 @@ TMPDIR_T15J=$(mktemp -d)
 
   out=$("$BASH_BIN" "$SCRIPT" --build HEAD --base HEAD~1 --no-context-refresh 2>&1)
   rc=$?
-  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/core.md ]; then
-    check "15.10a: --no-context-refresh uses existing context/routing" 1
+  if [ "$rc" -eq 0 ] && [ -f edc-context/review-tasks/no-context-refresh.md ] \
+    && grep -q 'src/a.ts' edc-context/review-tasks/no-context-refresh.md; then
+    check "15.10a: --no-context-refresh assigns explicit source scope" 1
   else
-    check "15.10a: --no-context-refresh uses existing context/routing" 0
+    check "15.10a: --no-context-refresh assigns explicit source scope" 0
     echo "$out"
     ls edc-context/review-tasks 2>/dev/null || true
   fi
-  if echo "$out" | grep -q "context is stale"; then
-    check "15.10b: --no-context-refresh warns but does not update stale context" 1
+  if grep -q 'optional navigation guidance' edc-context/review-tasks/no-context-refresh.md \
+    && [ "$(jq -r '.sourceCommit' edc-context/manifest.json)" = "$old_head" ]; then
+    check "15.10b: --no-context-refresh permits guidance without refreshing it" 1
   else
-    check "15.10b: --no-context-refresh warns but does not update stale context" 0
+    check "15.10b: --no-context-refresh permits guidance without refreshing it" 0
     echo "$out"
   fi
   if [ "$(jq -r '.contextMode' edc-context/review-tasks/manifest.json 2>/dev/null)" = "no-refresh" ]; then

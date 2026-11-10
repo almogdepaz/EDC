@@ -34,7 +34,7 @@ else
   exit 1
 fi
 
-TMPDIR_T7=$(mktemp -d)
+TMPDIR_T7=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T7"' EXIT
 
 FAKE_BIN="$TMPDIR_T7/bin"

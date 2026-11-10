@@ -72,7 +72,7 @@ write_minimal_context() {
 # ── 15.1: prefix routing wins over naive top-level-dir grouping ─────────────
 # wolfpack-style: src/broker/* and src/server/* should route to different
 # modules, NOT both lumped under "src".
-TMPDIR_T15A=$(mktemp -d)
+TMPDIR_T15A=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15A"
   write_minimal_context
@@ -105,7 +105,7 @@ TMPDIR_T15A=$(mktemp -d)
 )
 
 # ── 15.2: exactFiles routing ────────────────────────────────────────────────
-TMPDIR_T15B=$(mktemp -d)
+TMPDIR_T15B=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15B"
   write_minimal_context
@@ -128,7 +128,7 @@ TMPDIR_T15B=$(mktemp -d)
 )
 
 # ── 15.3: warn-allow policy — unexpected unmapped file ──────────────────────
-TMPDIR_T15C=$(mktemp -d)
+TMPDIR_T15C=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15C"
   write_minimal_context
@@ -158,7 +158,7 @@ TMPDIR_T15C=$(mktemp -d)
 )
 
 # ── 15.4: warn-allow policy — expected unmapped file (allowedGlobs) ─────────
-TMPDIR_T15D=$(mktemp -d)
+TMPDIR_T15D=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15D"
   write_minimal_context
@@ -202,7 +202,7 @@ TMPDIR_T15D=$(mktemp -d)
 )
 
 # ── 15.4e: mixed expected + unexpected unmapped paths keep both accounted ───
-TMPDIR_T15D2=$(mktemp -d)
+TMPDIR_T15D2=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15D2"
   write_minimal_context
@@ -254,7 +254,7 @@ TMPDIR_T15D2=$(mktemp -d)
 )
 
 # ── 15.5: fail policy — unexpected unmapped file → exit 2 ───────────────────
-TMPDIR_T15E=$(mktemp -d)
+TMPDIR_T15E=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15E"
   write_minimal_context
@@ -287,7 +287,7 @@ TMPDIR_T15E=$(mktemp -d)
 )
 
 # ── 15.6: ambiguous routing → hard exit 2 ───────────────────────────────────
-TMPDIR_T15F=$(mktemp -d)
+TMPDIR_T15F=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15F"
   write_minimal_context
@@ -324,7 +324,7 @@ TMPDIR_T15F=$(mktemp -d)
 # ── 15.7: regression guard — edc-context/review-tasks/manifest.json names are real ──
 # Already implicitly verified by 15.1 (no synthetic 'src' bucket), but pin it
 # explicitly: the only synthetic names allowed are "unmapped" and "allowed-unmapped".
-TMPDIR_T15G=$(mktemp -d)
+TMPDIR_T15G=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15G"
   write_minimal_context
@@ -365,7 +365,7 @@ TMPDIR_T15G=$(mktemp -d)
 )
 
 # ── 15.8: --ignore-context requires no manifest and writes pure baseline task ──
-TMPDIR_T15H=$(mktemp -d)
+TMPDIR_T15H=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15H"
   mkdir -p src
@@ -407,7 +407,7 @@ TMPDIR_T15H=$(mktemp -d)
 )
 
 # ── 15.9: --no-context-refresh does not force-ignore context ───────────────
-TMPDIR_T15I=$(mktemp -d)
+TMPDIR_T15I=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15I"
   mkdir -p src
@@ -439,7 +439,7 @@ TMPDIR_T15I=$(mktemp -d)
 )
 
 # ── 15.10: stale context is optional guidance, not direct scope authority ─
-TMPDIR_T15J=$(mktemp -d)
+TMPDIR_T15J=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15J"
   write_minimal_context
@@ -482,7 +482,7 @@ TMPDIR_T15J=$(mktemp -d)
 )
 
 # ── 15.11: --verify skips freshness gate for non-context manifests ─────────
-TMPDIR_T15J=$(mktemp -d)
+TMPDIR_T15J=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15J"
   mkdir -p edc-context/review-tasks
@@ -508,7 +508,7 @@ EOF
 )
 
 # ── 15.12: ambiguous legacy --no-context flag is rejected ──────────────────
-TMPDIR_T15K=$(mktemp -d)
+TMPDIR_T15K=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15K"
   set +e
@@ -525,7 +525,7 @@ TMPDIR_T15K=$(mktemp -d)
 )
 
 # ── 15.13: PR shorthand target uses gh PR diff path ────────────────────────
-TMPDIR_T15L=$(mktemp -d)
+TMPDIR_T15L=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15L"
   mkdir -p fake-bin src
@@ -557,7 +557,7 @@ EOF
 )
 
 # ── 15.14: --pr flag accepts a PR number without URL ───────────────────────
-TMPDIR_T15M=$(mktemp -d)
+TMPDIR_T15M=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15M"
   mkdir -p fake-bin src
@@ -590,7 +590,7 @@ EOF
 )
 
 # ── 15.15: branch reviews use merge-base diff, not snapshot diff ───────────
-TMPDIR_T15N=$(mktemp -d)
+TMPDIR_T15N=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15N"
   git checkout -q -b feature
@@ -617,7 +617,7 @@ TMPDIR_T15N=$(mktemp -d)
 )
 
 # ── 15.16: changed paths are JSON escaped in review-task manifests ─────────
-TMPDIR_T15O=$(mktemp -d)
+TMPDIR_T15O=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15O"
   printf 'weird\n' > 'weird"name.txt'
@@ -639,7 +639,7 @@ TMPDIR_T15O=$(mktemp -d)
 )
 
 # ── 15.17: explicit include policy snapshots dirty tracked files ──────────
-TMPDIR_T15Q=$(mktemp -d)
+TMPDIR_T15Q=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15Q"
   write_minimal_context
@@ -668,7 +668,7 @@ TMPDIR_T15Q=$(mktemp -d)
 )
 
 # ── 15.18: no committed or dirty tracked changes gives actionable error ───
-TMPDIR_T15R=$(mktemp -d)
+TMPDIR_T15R=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15R"
   set +e
@@ -696,7 +696,7 @@ else
 fi
 
 # ── 15.20: gh PR diff failures surface stderr ──────────────────────────────
-TMPDIR_T15P=$(mktemp -d)
+TMPDIR_T15P=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 (
   setup_repo "$TMPDIR_T15P"
   mkdir -p fake-bin

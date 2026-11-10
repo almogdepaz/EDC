@@ -9,8 +9,8 @@ BASH_BIN="${BASH_BIN:-bash}"
 
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
-TMP="$(mktemp -d)"
-LOG_DIR="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 PI_CALLS_LOG="$LOG_DIR/pi-calls.log"
 export PI_CALLS_LOG
 export EDC_CONFIG_FILE="$TMP/missing-config"

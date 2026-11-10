@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/plugins/edc/scripts/edc-delivery-review.sh"
-TMPDIR_T38=$(mktemp -d)
+TMPDIR_T38=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 MOCK_BIN="$TMPDIR_T38/bin"
 trap 'rm -rf "$TMPDIR_T38"' EXIT
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT=$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 ROOT="$ROOT" TMP="$TMP" node --input-type=module <<'NODE'

@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT_BUILD="$ROOT/plugins/edc/scripts/edc-build.sh"
 SCRIPT_UPDATE="$ROOT/plugins/edc/scripts/edc-update.sh"
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 MOCK_BIN="$TMP/bin"
 trap 'rm -rf "$TMP"' EXIT
 

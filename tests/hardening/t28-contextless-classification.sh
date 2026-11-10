@@ -19,7 +19,7 @@ trap 'check_cleanup' EXIT
 CLASSIFY_CLI="$ROOT/plugins/edc/hooks/lib/classify-cli.mjs"
 DOCTOR="$ROOT/plugins/edc/scripts/edc-doctor.sh"
 
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
 MANIFEST="$TMP/manifest.json"
 

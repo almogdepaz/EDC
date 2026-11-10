@@ -4,7 +4,7 @@ set -euo pipefail
 printf '=== T42: phase result contract ===\n'
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 setup_repo() {

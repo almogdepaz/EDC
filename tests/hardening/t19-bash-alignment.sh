@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/plugins/edc/scripts/edc-review.sh"
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
 
 setup_repo() {

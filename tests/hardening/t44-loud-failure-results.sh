@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 MOCK_BIN="$TMP/bin"
 trap 'rm -rf "$TMP"' EXIT
 

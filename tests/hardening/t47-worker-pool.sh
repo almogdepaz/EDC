@@ -7,7 +7,7 @@ POOL="$ROOT/plugins/edc/hooks/lib/worker-pool.mjs"
 
 . "$(dirname "$0")/lib/check.sh"
 check_init --file
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
 
 RUNNER="$TMP/fake-worker.sh"

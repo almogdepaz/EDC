@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 export EDC_CONFIG_FILE="$TMP/missing-config"
 unset EDC_PARALLEL
 trap 'rm -rf "$TMP"' EXIT

@@ -15,7 +15,7 @@ check_init --file
 trap 'check_cleanup' EXIT
 
 SCRIPT="$ROOT/plugins/edc/scripts/edc-manifest.sh"
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
 
 setup_repo() {

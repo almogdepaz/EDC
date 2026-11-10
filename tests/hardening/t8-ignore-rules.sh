@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
-TMPDIR_T8=$(mktemp -d)
+TMPDIR_T8=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T8"' EXIT
 T8_BUILD_OUT="$TMPDIR_T8/build-out.txt"
 

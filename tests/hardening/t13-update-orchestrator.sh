@@ -16,7 +16,7 @@ set -euo pipefail
 
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-update.sh"
-TMPDIR_T13=$(mktemp -d)
+TMPDIR_T13=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 MOCK_BIN="$TMPDIR_T13/bin"
 trap 'rm -rf "$TMPDIR_T13"' EXIT
 

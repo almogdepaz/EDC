@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 BASH_BIN="${BASH_BIN:-bash}"
 
-TEST_HOME=$(mktemp -d)
+TEST_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TEST_HOME"' EXIT
 
 mkdir -p "$TEST_HOME/.edc/skills"

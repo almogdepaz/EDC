@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_REL="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/$SCRIPT_REL"
-TMPDIR_T6=$(mktemp -d)
+TMPDIR_T6=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 MOCK_BIN="$TMPDIR_T6/bin"
 export EDC_CONFIG_FILE="$TMPDIR_T6/missing-config"
 trap 'rm -rf "$TMPDIR_T6"' EXIT

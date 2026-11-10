@@ -23,8 +23,8 @@ FAIL=0
 check_init() {
   if [ "${1:-}" = "--file" ]; then
     __edc_check_backing="file"
-    __edc_check_pass_file=$(mktemp)
-    __edc_check_fail_file=$(mktemp)
+    __edc_check_pass_file=$(mktemp "${TMPDIR:-/tmp}/edc-test.XXXXXX")
+    __edc_check_fail_file=$(mktemp "${TMPDIR:-/tmp}/edc-test.XXXXXX")
     echo 0 > "$__edc_check_pass_file"
     echo 0 > "$__edc_check_fail_file"
     # Caller adds these to its trap; we do not install our own to avoid

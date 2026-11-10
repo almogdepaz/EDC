@@ -6,7 +6,7 @@ set -uo pipefail
 SCRIPT="plugins/edc/hooks/lib/classify-cli.mjs"
 [ -f "$SCRIPT" ] || { echo "FAIL: $SCRIPT not found"; exit 1; }
 
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 MANIFEST="$TMP/manifest.json"
 

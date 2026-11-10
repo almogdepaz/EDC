@@ -4,8 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT="$ROOT/plugins/edc/scripts/edc-review.sh"
-TMP="$(mktemp -d)"
-LOG_DIR="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP" "$LOG_DIR"' EXIT
 
 setup_repo() {

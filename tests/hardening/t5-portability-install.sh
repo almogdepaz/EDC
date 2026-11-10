@@ -10,7 +10,7 @@ PLUGIN_SCRIPT="plugins/edc/scripts/edc-review.sh"
 
 echo "=== T5: Portability + plugin install ==="
 
-TMPDIR_T5=$(mktemp -d)
+TMPDIR_T5=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T5"' EXIT
 
 # ── 5a: bash 3.2-compatible scripts do not require bash >=4 ────────────────
@@ -197,7 +197,7 @@ else
   exit 1
 fi
 
-REMOTE_TMP=$(mktemp -d)
+REMOTE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 REPO_ROOT_T5="$PWD"
 REMOTE_HOME="$REMOTE_TMP/home"
 REMOTE_BIN="$REMOTE_TMP/bin"
@@ -522,7 +522,7 @@ else
 fi
 
 # ── 5j: installer adds ~/.edc/scripts to shell rc idempotently ───────────────
-PATH_HOME=$(mktemp -d)
+PATH_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 PATH_RC="$PATH_HOME/.zshrc"
 HOME="$PATH_HOME" SHELL=/bin/zsh CI=0 EDC_INSTALL_SHELL_RC="$PATH_RC" bash install.sh --agent claude >"$PATH_HOME/install-1.out" 2>&1
 if [ -f "$PATH_RC" ] && grep -q 'export PATH="\$HOME/.edc/scripts:\$PATH"' "$PATH_RC"; then
@@ -544,7 +544,7 @@ else
   exit 1
 fi
 
-NO_PATH_HOME=$(mktemp -d)
+NO_PATH_HOME=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 NO_PATH_RC="$NO_PATH_HOME/.zshrc"
 HOME="$NO_PATH_HOME" SHELL=/bin/zsh CI=0 EDC_INSTALL_SHELL_RC="$NO_PATH_RC" bash install.sh --agent claude --no-path >"$NO_PATH_HOME/install.out" 2>&1
 if [ ! -f "$NO_PATH_RC" ] || ! grep -q '.edc/scripts' "$NO_PATH_RC"; then

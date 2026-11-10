@@ -86,7 +86,7 @@ fi
 ROOT=$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 STREAM_FILTER="$ROOT/plugins/edc/hooks/lib/stream-filter.mjs"
 PI_SUPERVISOR="$ROOT/plugins/edc/hooks/lib/pi-supervisor.mjs"
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 failures=0

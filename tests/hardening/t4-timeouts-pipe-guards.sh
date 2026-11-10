@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
 ROOT="$(pwd)"
-TMPDIR_T4=$(mktemp -d)
+TMPDIR_T4=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T4"' EXIT
 T4_TIMEOUT_ERR="$TMPDIR_T4/timeout-err.txt"
 T4_FALLBACK_TIMEOUT_ERR="$TMPDIR_T4/fallback-timeout-err.txt"

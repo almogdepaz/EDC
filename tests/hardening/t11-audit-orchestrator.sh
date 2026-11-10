@@ -16,7 +16,7 @@ set -euo pipefail
 
 ORIG_DIR="$(pwd)"
 SCRIPT="$ORIG_DIR/plugins/edc/scripts/edc-audit.sh"
-TMPDIR_T11=$(mktemp -d)
+TMPDIR_T11=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 MOCK_BIN="$TMPDIR_T11/bin"
 export EDC_CONFIG_FILE="$TMPDIR_T11/missing-config"
 unset EDC_PARALLEL

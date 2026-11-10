@@ -65,7 +65,7 @@ else
 fi
 
 # --- 4. extension factory wiring (fake ExtensionAPI) ------------------------
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 source_preflight=$(node "$ROOT/plugins/edc/hooks/lib/runtime-manifest.mjs" source-preflight "$ROOT/plugins/edc" 2>&1)
@@ -183,7 +183,7 @@ EOF
   git -c commit.gpgsign=false commit -q -m init
   git branch -M master
   head_commit=$(git rev-parse HEAD)
-  tmp_manifest=$(mktemp)
+  tmp_manifest=$(mktemp "${TMPDIR:-/tmp}/edc-test.XXXXXX")
   jq --arg head "$head_commit" '.sourceCommit = $head' edc-context/manifest.json > "$tmp_manifest"
   mv "$tmp_manifest" edc-context/manifest.json
 )

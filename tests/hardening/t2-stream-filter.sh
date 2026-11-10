@@ -7,7 +7,7 @@ SCRIPT="plugins/edc/scripts/edc-review.sh"
 # Stream filtering lives in edc-lib; backend argv construction is extracted.
 RUNTIME="plugins/edc/scripts/edc-lib.sh"
 SPAWN="plugins/edc/scripts/edc-agent-backends.sh"
-TMPDIR_T2=$(mktemp -d)
+TMPDIR_T2=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T2"' EXIT
 T2_FILTER_ERR="$TMPDIR_T2/filter-err.txt"
 

@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT="plugins/edc/scripts/edc-review.sh"
 ORIG_DIR="$(pwd)"
-TMPDIR_T3=$(mktemp -d)
+TMPDIR_T3=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMPDIR_T3"' EXIT
 
 echo "=== T3: Content validation (stub-fraud defense) ==="

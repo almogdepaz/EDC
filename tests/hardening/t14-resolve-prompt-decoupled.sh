@@ -23,7 +23,7 @@ echo "=== T14: resolve_prompt CLI/plugin decoupling ==="
 
 # Set up a hermetic trusted package layout so prompt resolution cannot depend
 # on the user's global install or a repo-local legacy cache.
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 TRUSTED_PACKAGE="$TMP/trusted-package"

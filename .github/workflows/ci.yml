@@ -23,12 +23,16 @@ jobs:
         run: npm test
       - name: Check npm package contents
         run: npm run pack:check
-      - name: Verify release tag and tagged installer archive
+      - name: Verify release tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           package_version=$(node -p 'require("./package.json").version')
           test "$GITHUB_REF_NAME" = "v$package_version"
+      - name: Smoke-test the remote installer
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        shell: bash
+        run: |
           work=$(mktemp -d)
           home=$(mktemp -d)
           cp install.sh "$work/install.sh"

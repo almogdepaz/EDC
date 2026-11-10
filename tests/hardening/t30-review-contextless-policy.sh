@@ -133,6 +133,7 @@ mkdir -p fake-bin
 cat > fake-bin/claude <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ -n "${T30_CALL_LOG:-}" ]; then printf 'call\n' >> "$T30_CALL_LOG"; fi
 prompt=$(cat)
 previous=""
 for arg in "$@"; do
@@ -179,6 +180,62 @@ else
   cat "$tasks_dir/report-contextless-promotion-check.md" 2>/dev/null || true
   cat "$tasks_dir/result-contextless-promotion-check.json" 2>/dev/null || true
 fi
+
+# ── 30.6: a nonempty scope must not succeed with zero reviews ──
+MOCK_BIN="$AUTO/fake-bin"
+for policy_case in legacy legacy-full missing-match explicit owned; do
+  setup_repo "$TMP/$policy_case"
+  mkdir -p lib
+  printf 'int demo(void) { return 0; }\n' > lib/multi.c
+  git add lib/multi.c
+  git commit -q -m 'add synthetic review target'
+  write_context
+  case "$policy_case" in
+    legacy|legacy-full)
+      filter='.modules = [] | .unmapped.allowedGlobs = ["lib/**", "*"]'
+      ;;
+    missing-match)
+      filter='.modules = [{"name":"core","doc":"edc-context/modules/core.md","paths":["lib/multi.c"]}] | .unmapped.allowedGlobs = ["lib/**", "*"]'
+      ;;
+    explicit)
+      filter='.contextless.entries = [{"id":"accounted","globs":["lib/**"],"reason":"test accounting","reviewPolicy":"account-only"}]'
+      ;;
+    owned)
+      filter='.modules[0].match = {"exactFiles":["lib/multi.c"]} | .unmapped.allowedGlobs = ["lib/**", "*"]'
+      ;;
+  esac
+  jq "$filter" edc-context/manifest.json > edc-context/manifest.tmp
+  mv edc-context/manifest.tmp edc-context/manifest.json
+  call_log="$PWD/.git/calls.log"
+  result_file="$PWD/.git/result.json"
+  scope_args=(HEAD --base HEAD~1 --committed-only)
+  if [ "$policy_case" = legacy-full ]; then scope_args=(--full --ignore seed.txt); fi
+  set +e
+  PATH="$MOCK_BIN:$PATH" T30_CALL_LOG="$call_log" EDC_RESULT_FILE="$result_file" \
+    EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" "${scope_args[@]}" \
+    --no-context-refresh >.git/review.out 2>.git/review.err
+  review_rc=$?
+  set -e
+  if [ "$policy_case" = owned ]; then
+    if [ "$review_rc" -eq 0 ] && [ "$(wc -l < "$call_log" | tr -d ' ')" = 1 ] \
+      && jq -e '.status == "success"' "$result_file" >/dev/null \
+      && grep -q 'Mock review for no-context-refresh' review-HEAD.md \
+      && printf 'lib/multi.c\n' | node "$ROOT/plugins/edc/hooks/lib/classify-cli.mjs" edc-context/manifest.json | grep -q 'context-module:core'; then
+      check "30.6: module owner wins over legacy catch-all globs" 1
+    else
+      check "30.6: module owner wins over legacy catch-all globs" 0
+      cat .git/review.out .git/review.err
+    fi
+  elif [ "$review_rc" -ne 0 ] && [ ! -e "$call_log" ] \
+    && jq -e '.status == "failed" and .exitCode != 0 and .reasonCode == "review-not-reviewed" and (.message | contains("not reviewed")) and .outputs == []' "$result_file" >/dev/null \
+    && grep -q 'not reviewed' .git/review.err \
+    && [ ! -e review-HEAD.md ]; then
+    check "30.6: $policy_case zero-review scope fails with explicit status" 1
+  else
+    check "30.6: $policy_case zero-review scope fails with explicit status" 0
+    cat .git/review.out .git/review.err "$result_file"
+  fi
+done
 
 cd "$ROOT"
 check_summary "T30"

@@ -464,10 +464,17 @@ auto_mode() {
     printf '%s\n' "$out" >&2
   fi
 
-  # allowed-unmapped/account-only paths are satisfied by deterministic
-  # prewritten reports and intentionally have no subprocess task file.
+  # Account-only reports preserve path accounting, but are not reviews.
+  # Task generation has already rejected an empty or fully ignored scope.
   local tasks
   tasks=$(find "$EDC_REVIEW_TASKS_DIR" -maxdepth 1 -type f -name '*.md' ! -name 'report-*.md' -print | sort)
+  if [ -z "$tasks" ]; then
+    echo "ERROR: not reviewed: all in-scope files were skipped; no module reviews were scheduled" >&2
+    edc_write_review_result 1 "review-not-reviewed" \
+      "not reviewed: all in-scope files were skipped; no module reviews were scheduled" \
+      "inspect account-only policies and module match rules in the manifest, or use --ignore-context for a direct review" "" ""
+    exit 1
+  fi
   local had_warning=0
 
   if [ -n "$tasks" ]; then

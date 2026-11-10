@@ -42,20 +42,12 @@ export ROOT_UNDER_TEST
 . "$ROOT_UNDER_TEST/plugins/edc/scripts/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 
-if [ "$CLEAN_SLATE_MODE" = "override" ]; then
-  export CLEAN_SLATE_SH="$TMP_REPO/clean-slate.sh"
-  cat > "$CLEAN_SLATE_SH" <<'CLEAN'
-#!/usr/bin/env bash
-exit 0
-CLEAN
-  chmod +x "$CLEAN_SLATE_SH"
-fi
 
 resolve_prompt() {
   printf 'prompt:%s\n' "$1"
 }
 
-edc_spawn() {
+_t42_fake_coordinator_build() {
   [ -z "$SPAWN_MARKER" ] || touch "$SPAWN_MARKER"
   if [ "$SPAWN_MODE" != "no-context" ]; then
     mkdir -p edc-context
@@ -91,6 +83,13 @@ EOF_AGENTS
 . "$ROOT_UNDER_TEST/plugins/edc/scripts/edc-assert-fresh.sh"
 # shellcheck source=plugins/edc/scripts/edc-recover-context.sh
 . "$ROOT_UNDER_TEST/plugins/edc/scripts/edc-recover-context.sh"
+edc_spawn() {
+  echo "T42: unexpected edc_spawn call: $1" >&2
+  return 97
+}
+_edc_recovery_run_coordinator_build() {
+  _t42_fake_coordinator_build
+}
 recover_context_if_needed
 EOS
   chmod +x "$script"
@@ -103,13 +102,13 @@ run_stale_recovery() {
   local spawn_mode="$3"
   local spawn_log="$4"
   local recovery_args_mode="${5:-review-base}"
+  local manifest_schema_version="${6:-2}"
   local script="$TMP/stale-recovery-$spawn_mode.sh"
   cat > "$script" <<'EOS'
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$TMP_REPO"
 
-export CLEAN_SLATE_SH="$TMP_REPO/clean-slate.sh"
 export EDC_AGENT_CLI="pi"
 export EDC_BUILD_TIMEOUT=1
 export EDC_UPDATE_TIMEOUT=1
@@ -119,11 +118,6 @@ export ROOT_UNDER_TEST
 . "$ROOT_UNDER_TEST/plugins/edc/scripts/edc-lib.sh"
 MANIFEST="$EDC_MANIFEST"
 
-cat > "$CLEAN_SLATE_SH" <<'CLEAN'
-#!/usr/bin/env bash
-exit 0
-CLEAN
-chmod +x "$CLEAN_SLATE_SH"
 
 write_context() {
   mkdir -p "$EDC_MODULES_DIR" "$EDC_REPORTS_DIR" "$EDC_BUILD_DIR"
@@ -133,7 +127,7 @@ write_context() {
 - root
 EOF_INDEX
   cat > "$MANIFEST" <<EOF_MANIFEST
-{"schemaVersion":2,"sourceCommit":"$SOURCE_COMMIT","repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"root","doc":"edc-context/modules/root.md","priority":10,"match":{"exactFiles":["tracked.txt"]}}],"contextless":{"entries":[]},"unmapped":{"allowedGlobs":[]}}
+{"schemaVersion":$MANIFEST_SCHEMA_VERSION,"sourceCommit":"$SOURCE_COMMIT","repoContextFile":"edc-context/index.md","reports":{"issues":"edc-context/reports/issues.md","complexity":"edc-context/reports/complexity.md"},"build":{"buildInfoFile":"edc-context/build/build.json"},"policy":{"defaultMode":"advisory","unmatchedPathPolicy":"warn-allow"},"modules":[{"name":"root","doc":"edc-context/modules/root.md","priority":10,"match":{"exactFiles":["tracked.txt"]}}],"contextless":{"entries":[]},"unmapped":{"allowedGlobs":[]}}
 EOF_MANIFEST
   printf '# Root\n\n## Scope\n' > "$EDC_MODULES_DIR/root.md"
   printf '## Issues\n' > "$EDC_ISSUES"
@@ -171,6 +165,7 @@ assert_context_fresh() {
 
 write_fresh_context() {
   SOURCE_COMMIT="$(git rev-parse HEAD)"
+  MANIFEST_SCHEMA_VERSION=2
   write_context
 }
 
@@ -178,7 +173,7 @@ edc_spawn() {
   local phase="$1" prompt="$3"
   printf '%s\t%s\n' "$phase" "$prompt" >> "$SPAWN_LOG"
   case "$SPAWN_MODE:$phase" in
-    update-succeeds:edc-update|update-fails-build-succeeds:edc-build-retry|build-only-succeeds:edc-build-retry)
+    update-succeeds:edc-update)
       write_fresh_context
       return 0
       ;;
@@ -197,6 +192,19 @@ edc_spawn() {
 
 # shellcheck source=plugins/edc/scripts/edc-recover-context.sh
 . "$ROOT_UNDER_TEST/plugins/edc/scripts/edc-recover-context.sh"
+_edc_recovery_run_coordinator_build() {
+  local phase="$1"
+  printf '%s\t%s\n' "$phase" "coordinator-build" >> "$SPAWN_LOG"
+  case "$SPAWN_MODE" in
+    update-fails-build-succeeds|build-only-succeeds)
+      write_fresh_context
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 case "$RECOVERY_ARGS_MODE" in
   review-base) recover_context_if_needed -- --base HEAD ;;
   option-like-ignore) recover_context_if_needed -- --ignore --base --base HEAD ;;
@@ -204,7 +212,7 @@ case "$RECOVERY_ARGS_MODE" in
 esac
 EOS
   chmod +x "$script"
-  TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
+  TMP_REPO="$repo" SOURCE_COMMIT="$source_commit" MANIFEST_SCHEMA_VERSION="$manifest_schema_version" SPAWN_MODE="$spawn_mode" SPAWN_LOG="$spawn_log" RECOVERY_ARGS_MODE="$recovery_args_mode" ROOT_UNDER_TEST="$ROOT" "$script" 2>&1
 }
 
 default_repo="$TMP/default-repo"
@@ -214,11 +222,11 @@ default_output=$(run_recovery_after_failed_spawn "$default_repo" no-context defa
 default_rc=$?
 set -e
 if [ "$default_rc" -eq 0 ] || [ ! -f "$default_repo/spawn-reached" ]; then
-  echo "FAIL: recovery did not reach the spawn boundary without a CLEAN_SLATE_SH override"
+  echo "FAIL: recovery did not reach the build boundary"
   printf '%s\n' "$default_output"
   exit 1
 fi
-echo "PASS: recovery resolves its default clean-slate dependency"
+echo "PASS: recovery reaches the coordinator build boundary"
 
 stale_repo="$TMP/stale-repo"
 setup_repo "$stale_repo"
@@ -264,7 +272,7 @@ if ! fresh_failure_output=$(run_stale_recovery "$stale_repo" "$stale_source" upd
 fi
 if grep -q 'EDC context recovery succeeded with warning' <<< "$fresh_failure_output" \
   && grep -Fq 'edc-update' "$fresh_failure_spawn_log" \
-  && ! grep -Fq 'edc-build-retry' "$fresh_failure_spawn_log"; then
+  && ! grep -Fq 'coordinator-build' "$fresh_failure_spawn_log"; then
   echo "PASS: fresh durable context after nonzero update skips force build"
 else
   echo "FAIL: fresh durable context after nonzero update used the wrong fallback"
@@ -279,12 +287,28 @@ if ! fallback_output=$(run_stale_recovery "$stale_repo" "$stale_source" update-f
   exit 1
 fi
 if grep -Fq "edc-update"$'\t'"prompt:update --context-source $stale_source" "$fallback_spawn_log" \
-  && grep -Fq "edc-build-retry"$'\t'"prompt:build --force" "$fallback_spawn_log" \
+  && grep -Fq "edc-build retry"$'\t'"coordinator-build" "$fallback_spawn_log" \
   && [ "$(wc -l < "$fallback_spawn_log" | tr -d ' ')" -eq 2 ]; then
   echo "PASS: failed incremental recovery gets exactly one force-build fallback"
 else
   echo "FAIL: failed incremental recovery did not use the expected fallback sequence"
   cat "$fallback_spawn_log"
+  exit 1
+fi
+
+malformed_spawn_log="$TMP/malformed-manifest-spawns.log"
+if ! malformed_output=$(run_stale_recovery "$stale_repo" "$stale_source" build-only-succeeds "$malformed_spawn_log" review-base 1); then
+  echo "FAIL: stale context with a malformed manifest was not rebuilt"
+  printf '%s\n' "$malformed_output"
+  exit 1
+fi
+if grep -Fq "edc-build"$'\t'"coordinator-build" "$malformed_spawn_log" \
+  && ! grep -Fq 'edc-update' "$malformed_spawn_log" \
+  && [ "$(wc -l < "$malformed_spawn_log" | tr -d ' ')" -eq 1 ]; then
+  echo "PASS: stale context with a malformed manifest is rebuilt, not updated"
+else
+  echo "FAIL: stale context with a malformed manifest used the wrong recovery path"
+  cat "$malformed_spawn_log"
   exit 1
 fi
 
@@ -316,7 +340,7 @@ done
 divergent_spawn_log="$TMP/nonancestor-spawns.log"
 if divergent_output=$(run_stale_recovery "$stale_repo" "$unrelated_source" update-succeeds "$divergent_spawn_log"); then
   if grep -Fq "edc-update"$'\t'"prompt:update --context-source $unrelated_source" "$divergent_spawn_log" \
-    && ! grep -Fq 'edc-build-retry' "$divergent_spawn_log" \
+    && ! grep -Fq 'coordinator-build' "$divergent_spawn_log" \
     && [ "$(wc -l < "$divergent_spawn_log" | tr -d ' ')" -eq 1 ]; then
     echo "PASS: divergent context updates from its recorded source commit"
   else

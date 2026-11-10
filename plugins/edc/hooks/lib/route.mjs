@@ -13,6 +13,8 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
+  lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -400,11 +402,34 @@ function hashId(id) {
   return createHash("sha256").update(id).digest("hex").slice(0, 16);
 }
 
+/**
+ * Returns a per-user directory for dedup state, or null when no safe
+ * directory is available. os.tmpdir() can be shared between users (/tmp on
+ * Linux), so the directory must be a real directory that the current user
+ * owns and that no other user can enter.
+ */
+function dedupDir() {
+  // Platforms without getuid (Windows): os.tmpdir() is already per-user.
+  if (typeof process.getuid !== "function") return tmpdir();
+  const uid = process.getuid();
+  const dir = join(tmpdir(), `edc-${uid}`);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const st = lstatSync(dir);
+    if (!st.isDirectory() || st.uid !== uid || (st.mode & 0o077) !== 0) return null;
+  } catch {
+    return null;
+  }
+  return dir;
+}
+
 function dedupPath(sessionId) {
+  const dir = dedupDir();
+  if (!dir) return null;
   const safe = /^[a-zA-Z0-9_-]+$/.test(sessionId)
     ? sessionId
     : hashId(sessionId);
-  return join(tmpdir(), `edc-injected-modules-${safe}.json`);
+  return join(dir, `edc-injected-modules-${safe}.json`);
 }
 
 /**
@@ -414,6 +439,8 @@ function dedupPath(sessionId) {
 function isDuplicate(sessionId, moduleName) {
   if (!sessionId) return false;
   const path = dedupPath(sessionId);
+  // No safe directory: do not dedup. The module doc is injected again.
+  if (!path) return false;
   let injected = {};
   try {
     injected = JSON.parse(readFileSync(path, "utf-8"));

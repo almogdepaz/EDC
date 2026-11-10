@@ -188,7 +188,7 @@ EOF
   mv "$tmp_manifest" edc-context/manifest.json
 )
 
-# Unique session id per test run so the file-based dedup (rooted in os.tmpdir())
+# Unique session id per test run so the file-based dedup (in a private directory under os.tmpdir())
 # doesn't poison a re-run.
 SESSION_ID="t10-$$-$(date +%s%N 2>/dev/null || date +%s)"
 
@@ -1223,10 +1223,23 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   console.log("OK");
 ' 2>&1)
 
-# clean up the per-session dedup files the test created (live under os.tmpdir())
+# the dedup state must be in a private per-user directory (IMP-05)
+DEDUP_DIR=$(node -e "console.log(require('path').join(require('os').tmpdir(),'edc-'+process.getuid()))")
+if echo "$wiring" | tail -1 | grep -qx 'OK'; then
+  if [ -f "$DEDUP_DIR/edc-injected-modules-$SESSION_ID.json" ] \
+    && node -e '
+      const st = require("fs").lstatSync(process.argv[1]);
+      process.exit(st.isDirectory() && st.uid === process.getuid() && (st.mode & 0o077) === 0 ? 0 : 1);
+    ' "$DEDUP_DIR"; then
+    say_pass "dedup state is in a private per-user directory"
+  else
+    say_fail "dedup state is not in a private per-user directory" "expected $DEDUP_DIR/edc-injected-modules-$SESSION_ID.json in a directory with mode 0700"
+  fi
+fi
+
+# clean up the per-session dedup files the test created (in the private dedup directory)
 for dedup_session_id in "$SESSION_ID" "$SESSION_ID-multi" "$SESSION_ID-hint"; do
-  DEDUP_FILE=$(node -e "console.log(require('path').join(require('os').tmpdir(),'edc-injected-modules-'+process.argv[1]+'.json'))" "$dedup_session_id")
-  rm -f "$DEDUP_FILE"
+  rm -f "$DEDUP_DIR/edc-injected-modules-$dedup_session_id.json"
 done
 
 if echo "$wiring" | tail -1 | grep -qx 'OK'; then

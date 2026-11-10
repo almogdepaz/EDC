@@ -252,6 +252,37 @@ else
   cat "$TMPDIR_T5/remote-install.out"
   exit 1
 fi
+# ── 5e2: a failed runtime install prints its reason (IMP-07) ───────────────
+T5_REAL_NODE=$(command -v node)
+mkdir -p "$REMOTE_TMP/failbin" "$REMOTE_TMP/fail-home"
+cat >"$REMOTE_TMP/failbin/node" <<'EOF'
+#!/usr/bin/env bash
+if [ "${2:-}" = "install" ]; then
+  echo "t5 injected failure"
+  exit 1
+fi
+exec "${EDC_T5_REAL_NODE:?}" "$@"
+EOF
+chmod +x "$REMOTE_TMP/failbin/node"
+set +e
+EDC_T5_REAL_NODE="$T5_REAL_NODE" \
+HOME="$REMOTE_TMP/fail-home" \
+SHELL=/bin/zsh \
+CI=0 \
+PATH="$REMOTE_TMP/failbin:$PATH" \
+bash install.sh --agent claude --no-path >"$TMPDIR_T5/install-fail.out" 2>&1
+install_fail_rc=$?
+set -e
+if [ "$install_fail_rc" -ne 0 ] \
+  && grep -q 'edc: runtime install failed' "$TMPDIR_T5/install-fail.out" \
+  && grep -q 't5 injected failure' "$TMPDIR_T5/install-fail.out"; then
+  echo "PASS: failed runtime install prints its reason"
+else
+  echo "FAIL: failed runtime install did not print its reason (exit=$install_fail_rc)"
+  cat "$TMPDIR_T5/install-fail.out"
+  exit 1
+fi
+
 rm -rf "$REMOTE_TMP"
 
 # ── 5f: passive/help Pi paths are inert; execution uses trusted bootstrap ──

@@ -140,7 +140,11 @@ install_terminal_cli() {
   local runtime_manifest="$SCRIPT_DIR/plugins/edc/hooks/lib/runtime-manifest.mjs"
   [ -f "$runtime_manifest" ] || die "installer source missing: plugins/edc/hooks/lib/runtime-manifest.mjs"
   command -v node >/dev/null 2>&1 || die "node is required for EDC runtime installation"
-  node "$runtime_manifest" install "$HOME" "$SCRIPT_DIR/plugins/edc" >/dev/null
+  local install_result
+  if ! install_result=$(node "$runtime_manifest" install "$HOME" "$SCRIPT_DIR/plugins/edc"); then
+    printf '%s\n' "$install_result" >&2
+    die "runtime install failed"
+  fi
   rm -rf \
     "$HOME/.edc/skills/edc-review-impl" \
     "$HOME/.edc/skills/edc-audit-impl" \

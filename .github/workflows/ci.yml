@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, refactor]
+    branches: [main, master]
     tags: ["v*"]
   pull_request:
     branches: [main, master]
@@ -10,11 +10,15 @@ on:
 jobs:
   hardening:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y jq shellcheck
       - name: Run shellcheck
@@ -52,6 +56,8 @@ jobs:
           node-version: 20
       - name: Install system dependencies
         run: brew install jq shellcheck
+      - name: Run shellcheck
+        run: npm run lint:shell
       - name: Run hardening suite with Apple Bash
         shell: /bin/bash {0}
         run: npm test

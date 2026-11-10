@@ -868,7 +868,7 @@ edc_promote_file() {
 # 5. COST LOG — per-spawn telemetry (model_observed, tokens, cost).
 # ════════════════════════════════════════════════════════════════════════════
 # Appends one JSON line per spawn to $EDC_SPAWN_LOG (default:
-# edc-context/build/spawn-log.jsonl, fallback /tmp/edc-spawn-log.jsonl).
+# edc-context/build/spawn-log.jsonl; no log when that directory is unavailable).
 #
 # Reads from the captured stream-json output the child wrote; we save the
 # whole stream to $EDC_SPAWN_CAPTURE then tail the result line.
@@ -879,7 +879,8 @@ _edc_spawn_log_path() {
     if [ -d "$EDC_BUILD_DIR" ] || mkdir -p "$EDC_BUILD_DIR" 2>/dev/null; then
       path="$EDC_BUILD_DIR/spawn-log.jsonl"
     else
-      path="/tmp/edc-spawn-log.jsonl"
+      # No shared-/tmp fallback: the helper still prints its model warning.
+      path="/dev/null"
     fi
   fi
   printf '%s' "$path"
@@ -894,11 +895,7 @@ _edc_log_spawn_metrics() {
   [ -s "$capture" ] || return 0
   [ -f "$EDC_JSON_CLI" ] || return 0
   local log_path; log_path=$(_edc_spawn_log_path)
-  node "$EDC_JSON_CLI" spawn-metrics "$phase" "$EDC_AGENT_CLI" "$model_req" "$duration" "$capture" "$log_path" 2>/tmp/edc-spawn-metrics-warn.$$ || true
-  if [ -s /tmp/edc-spawn-metrics-warn.$$ ]; then
-    cat /tmp/edc-spawn-metrics-warn.$$ >&2
-  fi
-  rm -f /tmp/edc-spawn-metrics-warn.$$ 2>/dev/null || true
+  node "$EDC_JSON_CLI" spawn-metrics "$phase" "$EDC_AGENT_CLI" "$model_req" "$duration" "$capture" "$log_path" || true
 }
 
 edc_stream_pipeline_rc() {
@@ -1012,7 +1009,8 @@ _edc_preserve_transcript() {
     if [ -d "$EDC_BUILD_DIR" ] || mkdir -p "$EDC_BUILD_DIR" 2>/dev/null; then
       dest_dir="$EDC_BUILD_DIR/transcripts"
     else
-      dest_dir="/tmp/edc-transcripts"
+      echo "WARNING: transcript not preserved: cannot create $EDC_BUILD_DIR (set EDC_TRANSCRIPT_DIR to choose a directory)" >&2
+      return 0
     fi
   else
     return 0

@@ -63,31 +63,31 @@ source_and_test
 FILTER_CLI="plugins/edc/hooks/lib/stream-filter.mjs"
 run_filter() {
   rc=0
-  STREAM_FILTER_MODEL="" STREAM_FILTER_CAPTURE="" node "$FILTER_CLI" >/dev/null 2>"$T2_FILTER_ERR" || rc=$?
+  printf "%s\n" "$@" | STREAM_FILTER_MODEL="" STREAM_FILTER_CAPTURE="" node "$FILTER_CLI" >/dev/null 2>"$T2_FILTER_ERR" || rc=$?
 }
 
-printf '%s\n' '{"type":"tool_execution_end","isError":true,"result":{"error":"path src/models/x.ts not found"}}' | run_filter
+run_filter '{"type":"tool_execution_end","isError":true,"result":{"error":"path src/models/x.ts not found"}}'
 if [ "$rc" -eq 0 ] && grep -q 'ERROR (subprocess): path src/models/x.ts not found' "$T2_FILTER_ERR"; then
   echo "PASS: tool error with a models path is not a model rejection"
 else
   echo "FAIL: tool error was classified as a model rejection (exit=$rc)"; cat "$T2_FILTER_ERR"; exit 1
 fi
 
-printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' 'warning: model cache not found' | run_filter
+run_filter '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' 'warning: model cache not found'
 if [ "$rc" -eq 0 ]; then
   echo "PASS: plain line after a structured event is not a model rejection"
 else
   echo "FAIL: plain line after a structured event stopped the run (exit=$rc)"; cat "$T2_FILTER_ERR"; exit 1
 fi
 
-printf '%s\n' 'Error: Model "bad-model" not found.' | run_filter
+run_filter 'Error: Model "bad-model" not found.'
 if [ "$rc" -eq 87 ]; then
   echo "PASS: plain startup model rejection still exits 87"
 else
   echo "FAIL: plain startup model rejection must exit 87 (exit=$rc)"; exit 1
 fi
 
-printf '%s\n' '{"type":"result","is_error":true,"result":"model_not_found: bad-model"}' | run_filter
+run_filter '{"type":"result","is_error":true,"result":"model_not_found: bad-model"}'
 if [ "$rc" -eq 87 ]; then
   echo "PASS: structured provider model rejection still exits 87"
 else

@@ -46,6 +46,10 @@ DOCTOR_SH="$SCRIPT_DIR/edc-doctor.sh"
 EDC_AGENT_CLI="${EDC_AGENT_CLI:-claude}"
 CODEX_EXEC_HOME=""
 CODEX_EXEC_HOME_OWNED=0
+# Set to 1 when the route is wipe-and-build. run_full_build_dag then removes the
+# previous context only after the new context is staged, so a failed build keeps
+# the previous context.
+EDC_BUILD_WIPE_BEFORE_PROMOTE=0
 
 # ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -439,6 +443,10 @@ run_full_build_dag() {
     echo "ERROR: build dag did not declare staged promotion paths" >&2
     return 1
   fi
+  if [ "$EDC_BUILD_WIPE_BEFORE_PROMOTE" -eq 1 ]; then
+    bash "$CLEAN_SLATE_SH" --force >&2 \
+      || { echo "ERROR: clean-slate --force failed" >&2; return 1; }
+  fi
   [ ! -e "$EDC_CONTEXT_DIR" ] || { echo "ERROR: refusing to promote over existing $EDC_CONTEXT_DIR" >&2; return 1; }
   mv "$EDC_BUILD_STAGED_CONTEXT" "$EDC_CONTEXT_DIR" || return 1
   edc_promote_file "$EDC_BUILD_STAGED_AGENTS" "${EDC_AGENTS_TARGET:-$EDC_ROOT_AGENTS}" || return 1
@@ -498,10 +506,10 @@ build_main() {
   fi
   echo "→ build route: $route"
 
-  # Wipe if route demands it.
+  # Defer the wipe. run_full_build_dag removes the previous context after the
+  # new context is staged.
   if [ "$route" = "wipe-and-build" ]; then
-    bash "$CLEAN_SLATE_SH" --force >&2 \
-      || { echo "ERROR: clean-slate --force failed" >&2; exit 1; }
+    EDC_BUILD_WIPE_BEFORE_PROMOTE=1
   fi
 
   # Spawn the right subprocess.

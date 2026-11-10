@@ -163,6 +163,10 @@ if [[ "$prompt" == *"name: edc-update-impl"* ]] || [[ "$prompt" == *"# Update Co
 fi
 
 if [[ "$prompt" == *"name: edc-build-impl"* ]] || [[ "$prompt" == *"# Build Context"* ]]; then
+  if [ "${EDC_T12_FORBID_LEGACY_BUILD:-0}" = 1 ]; then
+    echo "MOCK ERROR: legacy single-agent build prompt" >&2
+    exit 1
+  fi
   echo "build" >> "$LOG"
   agents_target="AGENTS.md"
   if grep -qx 'EDC_AGENTS_TARGET: EDC_AGENTS.md' <<< "$prompt"; then
@@ -614,6 +618,33 @@ if [ "$result" -ne 0 ] \
   echo "PASS: failed forced rebuild keeps the previous context"
 else
   echo "FAIL (12s): failed forced rebuild must keep the previous context. exit=$result"
+  echo "$out"
+  exit 1
+fi
+
+# ── 12t: context recovery runs the coordinator build, not a legacy agent ────
+setup_repo
+cat > "$TMPDIR_T12/recover-driver.sh" <<'DRIVER'
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=plugins/edc/scripts/edc-lib.sh
+. "$EDC_T12_SCRIPTS_DIR/edc-lib.sh"
+MANIFEST="$EDC_MANIFEST"
+# shellcheck source=plugins/edc/scripts/edc-assert-fresh.sh
+. "$EDC_T12_SCRIPTS_DIR/edc-assert-fresh.sh"
+# shellcheck source=plugins/edc/scripts/edc-recover-context.sh
+. "$EDC_T12_SCRIPTS_DIR/edc-recover-context.sh"
+recover_context_if_needed
+DRIVER
+result=0
+out=$(EDC_T12_FORBID_LEGACY_BUILD=1 EDC_T12_SCRIPTS_DIR="$ORIG_DIR/plugins/edc/scripts" bash "$TMPDIR_T12/recover-driver.sh" 2>&1) || result=$?
+if [ "$result" -eq 0 ] \
+  && [ -f edc-context/manifest.json ] \
+  && grep -Fq 'Runtime mode: **advisory**' AGENTS.md \
+  && ! echo "$out" | grep -q 'MOCK ERROR'; then
+  echo "PASS: context recovery runs the coordinator build"
+else
+  echo "FAIL (12t): context recovery must run the coordinator build. exit=$result"
   echo "$out"
   exit 1
 fi

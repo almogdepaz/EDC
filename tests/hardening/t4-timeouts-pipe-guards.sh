@@ -10,8 +10,9 @@ trap 'rm -rf "$TMPDIR_T4"' EXIT
 T4_TIMEOUT_ERR="$TMPDIR_T4/timeout-err.txt"
 T4_FALLBACK_TIMEOUT_ERR="$TMPDIR_T4/fallback-timeout-err.txt"
 T4_PIPE_ERR="$TMPDIR_T4/pipe-err.txt"
-# Per-phase run_with_timeout wraps now live in edc-lib.sh (SPAWN section); the build/update
-# spawn calls (with their EDC_*_TIMEOUT defaults) live in the recover helper.
+# Per-phase run_with_timeout wraps live in edc-lib.sh (SPAWN section).
+# EDC_BUILD_TIMEOUT defaults live in the build orchestrator; EDC_UPDATE_TIMEOUT
+# defaults live in the recover helper.
 SPAWN="plugins/edc/scripts/edc-lib.sh"
 RECOVER="plugins/edc/scripts/edc-recover-context.sh"
 
@@ -49,15 +50,16 @@ else
 fi
 
 # ── 4c: per-phase timeouts configurable via env vars with defaults ────────────
-# Callers pass EDC_*_TIMEOUT defaults to edc_spawn. EDC_BUILD/UPDATE_TIMEOUT
-# live in the recover helper (used by every orchestrator); EDC_REVIEW_TIMEOUT
-# stays in the review orchestrator (review-specific phase).
+# EDC_BUILD_TIMEOUT defaults live in the build orchestrator; EDC_UPDATE_TIMEOUT
+# defaults live in the recover helper. EDC_REVIEW_TIMEOUT stays in the review
+# orchestrator (review-specific phase).
 missing=""
-for var in EDC_BUILD_TIMEOUT EDC_UPDATE_TIMEOUT; do
-  if ! grep -qE "\\\$\\{$var:-[0-9]+\\}" "$RECOVER"; then
-    missing="$missing $var"
-  fi
-done
+if ! grep -qE "\\\$\\{EDC_BUILD_TIMEOUT:-[0-9]+\\}" "plugins/edc/scripts/edc-build.sh"; then
+  missing="$missing EDC_BUILD_TIMEOUT"
+fi
+if ! grep -qE "\\\$\\{EDC_UPDATE_TIMEOUT:-[0-9]+\\}" "$RECOVER"; then
+  missing="$missing EDC_UPDATE_TIMEOUT"
+fi
 if ! grep -qE "\\\$\\{EDC_REVIEW_TIMEOUT:-[0-9]+\\}" "$SCRIPT"; then
   missing="$missing EDC_REVIEW_TIMEOUT"
 fi

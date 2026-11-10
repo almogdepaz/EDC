@@ -9,15 +9,16 @@
 #      vs STALE (manifest sourceCommit != HEAD).
 #   3. Update from a valid manifest sourceCommit to HEAD, even if histories diverge.
 #      Missing or invalid provenance refuses with an explicit force-rebuild hint.
-#   4. Clean-slate any v1 / partial-v2 leftovers.
-#   5. Spawn build (for MISSING) or update (for STALE) via edc_spawn.
-#   6. Re-check freshness. If still not fresh, wipe + force-rebuild once.
+#   4. For MISSING, or STALE with a malformed manifest: run the coordinator
+#      build (edc-build.sh --force) as a child process.
+#   5. For STALE: spawn the update agent via edc_spawn.
+#   6. Re-check freshness. If still not fresh, run the coordinator build once.
+#      The build keeps the previous context until the new context is staged.
 #   7. Re-check. Return 0 on success, 1 with a copy-pasteable hint on failure.
 #
 # Caller contract:
 #   - EDC_AGENT_CLI, edc_spawn, assert_context_fresh, run_with_timeout,
 #     stream_filter must be defined/sourced first.
-#   - CLEAN_SLATE_SH may override the sibling edc-clean-slate.sh path.
 #
 # resolve_prompt is auto-sourced from this directory if not already defined.
 #   - Pass build/update args (e.g. --ignore) as positional arguments.
@@ -43,7 +44,6 @@ if ! command -v read_canonical_context_source_commit >/dev/null 2>&1; then
   # shellcheck source=edc-assert-fresh.sh
   . "$_edc_recover_dir/edc-assert-fresh.sh"
 fi
-CLEAN_SLATE_SH="${CLEAN_SLATE_SH:-$_edc_recover_dir/edc-clean-slate.sh}"
 
 # Internal: classify why context is not fresh.
 # Echoes "MISSING" or "STALE". Returns 0 on success.
@@ -159,6 +159,23 @@ _edc_recovery_handle_failed_spawn() {
     || { _edc_recovery_failed_after_spawn "$phase"; return 1; }
 }
 
+# Internal: run the coordinator-owned full build as a child process.
+# The child owns routing, the worker dag, staging, promotion, doctor, and the
+# curator passes. --force makes the child rebuild even when it classifies the
+# layout as healthy. The child removes the previous context only after the new
+# context is staged. The private result file keeps the child from overwriting
+# the result file of the calling orchestrator.
+_edc_recovery_run_coordinator_build() {
+  local phase="$1"; shift
+  local result_file rc=0
+  result_file=$(mktemp "${TMPDIR:-/tmp}/edc-recovery-build-result-$$.XXXXXX") || return 1
+  echo "→ running the coordinator build for context recovery ($phase)..." >&2
+  EDC_AGENT_CLI="$EDC_AGENT_CLI" EDC_RESULT_FILE="$result_file" \
+    bash "$_edc_recover_dir/edc-build.sh" --force "$@" < /dev/null || rc=$?
+  rm -f "$result_file"
+  return "$rc"
+}
+
 recover_context_if_needed() {
   if assert_context_fresh 2>/dev/null; then
     return 0
@@ -175,18 +192,17 @@ recover_context_if_needed() {
     return 1
   fi
 
-  # Pre-clean v1/partial-v2 leftovers so the build skill doesn't see ambiguous
-  # state and route to update by mistake.
-  if [ -x "$CLEAN_SLATE_SH" ]; then
-    bash "$CLEAN_SLATE_SH" >&2 || true
+  # A stale context with a malformed manifest is never updated in place.
+  # Rebuild it through the coordinator instead.
+  if [ "$state" = "STALE" ] && ! node "$EDC_JSON_CLI" schema-version-is-2 "$MANIFEST" >/dev/null 2>&1; then
+    echo "→ stale context has a malformed manifest; rebuilding instead of updating..." >&2
+    state="MISSING"
   fi
 
   case "$state" in
     MISSING)
-      echo "→ context missing, spawning $EDC_AGENT_CLI for edc-build..." >&2
-      local build_prompt
-      build_prompt=$(resolve_prompt build ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
-      edc_spawn "edc-build" "${EDC_BUILD_TIMEOUT:-3600}" "$build_prompt" || spawn_rc=$?
+      echo "→ context missing, running the coordinator build via $EDC_AGENT_CLI..." >&2
+      _edc_recovery_run_coordinator_build "edc-build" ${_edc_build_args[@]+"${_edc_build_args[@]}"} || spawn_rc=$?
       if [ "$spawn_rc" -ne 0 ]; then
         _edc_recovery_handle_failed_spawn "edc-build" "$spawn_rc" || return 1
       fi
@@ -216,15 +232,11 @@ recover_context_if_needed() {
   fi
 
   # Incremental recovery did not produce fresh, valid context or could not run
-  # safely. Wipe partial output when possible and force-build exactly once.
-  echo "→ context still not ready — wiping partial output and retrying with --force..." >&2
-  if [ -x "$CLEAN_SLATE_SH" ]; then
-    bash "$CLEAN_SLATE_SH" --force >&2 || true
-  fi
-  local force_build_prompt
-  force_build_prompt=$(resolve_prompt build --force ${_edc_build_args[@]+"${_edc_build_args[@]}"}) || return 1
+  # safely. Run the coordinator build exactly once. The build child keeps the
+  # previous context until the new context is staged.
+  echo "→ context still not ready — retrying with a coordinator build..." >&2
   spawn_rc=0
-  edc_spawn "edc-build-retry" "${EDC_BUILD_TIMEOUT:-3600}" "$force_build_prompt" || spawn_rc=$?
+  _edc_recovery_run_coordinator_build "edc-build retry" ${_edc_build_args[@]+"${_edc_build_args[@]}"} || spawn_rc=$?
   if [ "$spawn_rc" -ne 0 ]; then
     _edc_recovery_handle_failed_spawn "edc-build retry" "$spawn_rc" || return 1
   fi

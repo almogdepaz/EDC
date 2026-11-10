@@ -39,8 +39,11 @@ if [ ! -f "$installed_pkg/pi/index.mjs" ]; then
   exit 1
 fi
 
+# An empty agent directory still loads Pi built-ins. Disable them without
+# disabling package discovery, which this installed-tarball test must exercise.
 cat > "$AGENT_DIR/settings.json" <<EOF
 {
+  "extensions": ["-builtin:mcp", "-builtin:llama.cpp", "-builtin:codemode", "-builtin:tool-search"],
   "packages": ["$installed_pkg"]
 }
 EOF

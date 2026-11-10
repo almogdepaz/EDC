@@ -6,7 +6,8 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 . "$ROOT/tests/hardening/lib/check.sh"
 check_init
 
-TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
+tmp_root=${TMPDIR:-/tmp}
+TMP=$(mktemp -d "${tmp_root%/}/edc-test.XXXXXX")
 trap 'rm -rf "$TMP"; check_cleanup' EXIT
 
 PLUGIN_ROOT="$ROOT/plugins/edc"

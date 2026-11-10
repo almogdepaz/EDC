@@ -5,7 +5,7 @@
 #   ./install.sh                   # global install via git url
 #   ./install.sh --from-source     # global install from this checkout
 #   ./install.sh --context-mode advisory|inject
-#                                  # toggle edc-context/manifest.json default mode
+#                                  # toggle edc-context/manifest.json in the current directory
 #
 # Requires: pi (https://pi.dev) on PATH.
 
@@ -32,16 +32,19 @@ while [ "$#" -gt 0 ]; do
       mode="${2:-}"
       case "$mode" in
         advisory|inject)
-          manifest="$REPO_ROOT/edc-context/manifest.json"
+          manifest="$PWD/edc-context/manifest.json"
           if [ ! -f "$manifest" ]; then
-            echo "edc: no edc-context/manifest.json in $REPO_ROOT — build first" >&2
+            echo "edc: no edc-context/manifest.json in $PWD — build first" >&2
             exit 2
           fi
           json_cli="$REPO_ROOT/plugins/edc/hooks/lib/json-cli.mjs"
           command -v node >/dev/null 2>&1 || { echo "edc: node required to update $manifest" >&2; exit 2; }
           [ -f "$json_cli" ] || { echo "edc: json-cli.mjs not found at $json_cli" >&2; exit 2; }
-          tmp="$(mktemp)"
-          node "$json_cli" mode-set "$manifest" "$mode" > "$tmp"
+          tmp="$(mktemp "${manifest}.tmp.XXXXXX")"
+          if ! cp -p "$manifest" "$tmp" || ! node "$json_cli" mode-set "$manifest" "$mode" > "$tmp"; then
+            rm -f "$tmp"
+            exit 1
+          fi
           mv "$tmp" "$manifest"
           echo "edc: set policy.defaultMode = $mode"
           exit 0
@@ -88,7 +91,7 @@ Visible skills:
   edc-delivery-review
                    goal/spec delivery + architecture-fit review methodology
 
-Mode toggle (per-project, after context has been built):
+Mode toggle (run from the root of the repository whose context you want to change):
   bash pi/install.sh --context-mode advisory   # docs only (default)
   bash pi/install.sh --context-mode inject     # auto-inject context
 EOF

@@ -142,7 +142,7 @@ EDC has two runtime modes, controlled by `edc-context/manifest.json` `policy.def
 - **`advisory`** (default) — pure docs. Hooks no-op. Zero per-tool token overhead.
 - **`inject`** — when `edc-context/manifest.json` exists and opts into inject mode, `session_start` surfaces `edc-context/index.md`; `tool_call` (bash/edit/write) auto-injects the relevant `edc-context/modules/<name>.md` once per session. Missing EDC context is silent; use `/edc` explicitly to build or manage context.
 
-Toggle:
+Toggle (run from the root of the repository whose context you want to change; the path of install.sh is the path of your EDC checkout or package):
 
 ```bash
 bash pi/install.sh --context-mode advisory

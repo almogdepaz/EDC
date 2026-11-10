@@ -416,6 +416,48 @@ else
   exit 1
 fi
 
+# ── 5g2: mode toggles edit the manifest of the current repository (IMP-08) ──
+CTX_PKG="$TMPDIR_T5/ctx-pkg"
+CTX_REPO="$TMPDIR_T5/ctx-repo"
+mkdir -p "$CTX_PKG/pi" "$CTX_PKG/plugins/edc/hooks" "$CTX_REPO/edc-context"
+cp pi/install.sh "$CTX_PKG/pi/install.sh"
+cp -R plugins/edc/hooks/lib "$CTX_PKG/plugins/edc/hooks/lib"
+printf '{"policy":{"defaultMode":"advisory"}}\n' >"$CTX_REPO/edc-context/manifest.json"
+chmod 644 "$CTX_REPO/edc-context/manifest.json"
+ctx_manifest_state() {
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    const mode = (fs.statSync(file).mode & 0o777).toString(8);
+    console.log(`${JSON.parse(fs.readFileSync(file, "utf8")).policy.defaultMode} ${mode}`);
+  ' "$CTX_REPO/edc-context/manifest.json"
+}
+set +e
+(cd "$CTX_REPO" && bash "$CTX_PKG/pi/install.sh" --context-mode inject) >"$TMPDIR_T5/ctx-mode.out" 2>&1
+ctx_mode_rc=$?
+set -e
+if [ "$ctx_mode_rc" -eq 0 ] \
+  && [ "$(ctx_manifest_state)" = "inject 644" ] \
+  && [ -z "$(find "$CTX_REPO/edc-context" -name 'manifest.json.tmp.*')" ]; then
+  echo "PASS: pi --context-mode edits the current repository manifest and keeps its file mode"
+else
+  echo "FAIL: pi --context-mode did not edit the current repository manifest (exit=$ctx_mode_rc)"
+  cat "$TMPDIR_T5/ctx-mode.out"
+  exit 1
+fi
+
+set +e
+(cd "$CTX_REPO" && bash "$REPO_ROOT_T5/plugins/edc/scripts/edc" mode advisory) >"$TMPDIR_T5/edc-mode.out" 2>&1
+edc_mode_rc=$?
+set -e
+if [ "$edc_mode_rc" -eq 0 ] && [ "$(ctx_manifest_state)" = "advisory 644" ]; then
+  echo "PASS: edc mode keeps the manifest file mode"
+else
+  echo "FAIL: edc mode failed or changed the manifest file mode (exit=$edc_mode_rc, state=$(ctx_manifest_state))"
+  cat "$TMPDIR_T5/edc-mode.out"
+  exit 1
+fi
+
 if grep -q 'restart pi or run /reload' install.sh \
   && grep -q 'installed extension/source path' install.sh; then
   echo "PASS: pi installer reminds users to reload existing sessions"

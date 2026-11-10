@@ -426,7 +426,7 @@ mode_cmd() {
 
   local tmp
   tmp="$(mktemp "${manifest}.tmp.XXXXXX")"
-  if ! node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"; then
+  if ! cp -p "$manifest" "$tmp" || ! node "$JSON_CLI" mode-set "$manifest" "$mode" > "$tmp"; then
     rm -f "$tmp"
     return 1
   fi

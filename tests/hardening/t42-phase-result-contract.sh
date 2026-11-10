@@ -25,8 +25,7 @@ setup_repo() {
 run_recovery_after_failed_spawn() {
   local repo="$1"
   local mode="${2:-writes-complete-context}"
-  local clean_slate_mode="${3:-override}"
-  local spawn_marker="${4:-}"
+  local spawn_marker="${3:-}"
   local script="$TMP/recovery-$mode.sh"
   cat > "$script" <<'EOS'
 #!/usr/bin/env bash
@@ -93,7 +92,7 @@ _edc_recovery_run_coordinator_build() {
 recover_context_if_needed
 EOS
   chmod +x "$script"
-  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" SPAWN_MODE="$mode" CLEAN_SLATE_MODE="$clean_slate_mode" SPAWN_MARKER="$spawn_marker" "$script" 2>&1
+  TMP_REPO="$repo" ROOT_UNDER_TEST="$ROOT" SPAWN_MODE="$mode" SPAWN_MARKER="$spawn_marker" "$script" 2>&1
 }
 
 run_stale_recovery() {
@@ -218,7 +217,7 @@ EOS
 default_repo="$TMP/default-repo"
 setup_repo "$default_repo"
 set +e
-default_output=$(run_recovery_after_failed_spawn "$default_repo" no-context default "$default_repo/spawn-reached")
+default_output=$(run_recovery_after_failed_spawn "$default_repo" no-context "$default_repo/spawn-reached")
 default_rc=$?
 set -e
 if [ "$default_rc" -eq 0 ] || [ ! -f "$default_repo/spawn-reached" ]; then

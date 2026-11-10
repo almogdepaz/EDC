@@ -244,7 +244,7 @@ Cursor and Codex are docs-only regardless of the mode flag. Claude Code and pi s
 
 EDC writes generated context and operational state in a few places:
 
-- `edc-context/` — generated per-module deep context written by build/update; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may wipe and rebuild it.
+- `edc-context/` — generated per-module deep context written by build/update; review task IPC lives under `edc-context/review-tasks/`. This directory is disposable: recovery may rebuild it. EDC replaces the previous context only after a new build is staged.
 - `AGENTS.md` / `EDC_AGENTS.md` — short generated orientation pointing agents at `edc-context/`. If a repo already has a non-EDC `AGENTS.md`, non-pi builds preserve it, write `EDC_AGENTS.md`, and explain how to replace, append, or reference it. Set `EDC_AGENTS_MODE=overwrite` to replace `AGENTS.md`.
 - `review-*.md` — consolidated review output.
 - `~/.edc/` — managed global terminal runtime and private prompt bundles. Package integrations may execute their own installed package source directly. Repo-local `.edc/` is never read, repaired, created, or executed; remove legacy caches manually if desired.

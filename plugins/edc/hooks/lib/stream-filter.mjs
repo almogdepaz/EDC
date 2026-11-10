@@ -77,6 +77,10 @@ function isCodexAuthFailure(text) {
   return /401 Unauthorized|Missing bearer|authentication token has been invalidated|token_invalidated|session has ended|app_session_terminated|Failed to refresh token/.test(text);
 }
 
+// Set when the first structured (JSON) event arrives. Plain lines after that
+// point are agent or tool output, not CLI startup errors.
+let sawStructuredEvent = false;
+
 function isModelRejection(text) {
   const lower = String(text).toLowerCase();
   return /model.*not found|model.*not supported|unsupported model|unknown model|invalid model|model_not_found/.test(lower);
@@ -148,7 +152,7 @@ function handlePlain(line) {
     printCodexAuthFailure();
     finish(86);
   }
-  if (isModelRejection(line)) {
+  if (!sawStructuredEvent && isModelRejection(line)) {
     printModelRejection(line);
     finish(87);
   }
@@ -197,10 +201,6 @@ function handleEvent(event) {
   if (event.type === "tool_execution_end" && event.isError === true) {
     const result = event.result?.content ?? event.result?.error ?? event.result ?? "tool execution failed";
     const message = `ERROR (subprocess): ${String(result)}`;
-    if (isModelRejection(message)) {
-      printModelRejection(message);
-      finish(87);
-    }
     emitLine(message, true);
     return;
   }
@@ -255,6 +255,7 @@ function processLine(line) {
     handlePlain(line);
     return;
   }
+  sawStructuredEvent = true;
   handleEvent(event);
 }
 

@@ -7,7 +7,7 @@
 #   3. recover stale context via edc-update from manifest.sourceCommit
 #   4. produce the final consolidated review file
 #
-# Run from repo root: bash tests/hardening/t7-codex-auto-mode.sh
+# Run from repo root: bash tests/hardening/t59-codex-auto-mode.sh
 set -euo pipefail
 
 
@@ -18,7 +18,7 @@ TMPDIR_T7=$(mktemp -d)
 MOCK_BIN="$TMPDIR_T7/bin"
 trap 'rm -rf "$TMPDIR_T7"' EXIT
 
-echo "=== T7: end-to-end auto_mode pipeline (mocked codex) ==="
+echo "=== T59: end-to-end auto_mode pipeline (mocked codex) ==="
 
 mkdir -p "$MOCK_BIN"
 cat > "$MOCK_BIN/codex" <<'MOCK'
@@ -171,4 +171,4 @@ fi
 echo "PASS: review-tasks scaffold cleaned up on success"
 
 echo ""
-echo "All T7 checks passed."
+echo "All T59 checks passed."

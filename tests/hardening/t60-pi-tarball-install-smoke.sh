@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t25-pi-tarball-install-smoke: install the packed npm tarball into an isolated pi config and load it through pi.
+# t60-pi-tarball-install-smoke: install the packed npm tarball into an isolated pi config and load it through pi.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -14,7 +14,7 @@ if ! command -v pi >/dev/null 2>&1; then
   export PATH="$PI_CLI_ROOT/node_modules/.bin:$PATH"
 fi
 if ! command -v pi >/dev/null 2>&1; then
-  echo "FAIL: pi CLI is required for t25-pi-tarball-install-smoke; install @earendil-works/pi-coding-agent"
+  echo "FAIL: pi CLI is required for t60-pi-tarball-install-smoke; install @earendil-works/pi-coding-agent"
   exit 1
 fi
 

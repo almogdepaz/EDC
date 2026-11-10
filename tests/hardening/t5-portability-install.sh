@@ -283,6 +283,33 @@ else
   exit 1
 fi
 
+# ── 5e3: a piped installer never installs from the current directory (IMP-06) ──
+mkdir -p "$REMOTE_TMP/decoy/plugins/edc/scripts" "$REMOTE_TMP/stdin-home"
+printf 'decoy\n' >"$REMOTE_TMP/decoy/plugins/edc/scripts/edc"
+set +e
+(
+  cd "$REMOTE_TMP/decoy" || exit 1
+  EDC_REPO_ROOT="$REPO_ROOT_T5" \
+  EDC_REMOTE_URL_LOG="$REMOTE_TMP/stdin-url.log" \
+  HOME="$REMOTE_TMP/stdin-home" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_BIN:$PATH" \
+  bash -s -- --agent claude --no-path <"$REPO_ROOT_T5/install.sh" >"$TMPDIR_T5/stdin-install.out" 2>&1
+)
+stdin_install_rc=$?
+set -e
+if [ "$stdin_install_rc" -eq 0 ] \
+  && grep -q 'archive/refs/tags/v' "$REMOTE_TMP/stdin-url.log" 2>/dev/null \
+  && [ -x "$REMOTE_TMP/stdin-home/.edc/scripts/edc" ] \
+  && ! grep -qx 'decoy' "$REMOTE_TMP/stdin-home/.edc/scripts/edc"; then
+  echo "PASS: piped installer downloads the release and ignores the current directory"
+else
+  echo "FAIL: piped installer used the current directory as its source (exit=$stdin_install_rc)"
+  cat "$TMPDIR_T5/stdin-install.out"
+  exit 1
+fi
+
 rm -rf "$REMOTE_TMP"
 
 # ── 5f: passive/help Pi paths are inert; execution uses trusted bootstrap ──

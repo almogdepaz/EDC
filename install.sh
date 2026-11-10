@@ -15,7 +15,14 @@ REPO="almogdepaz/EDC"
 EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# When the script is piped into bash, BASH_SOURCE[0] is empty. Never use the
+# current directory as the install source in that case.
+EDC_INSTALL_SELF="${BASH_SOURCE[0]:-}"
+if [ -n "$EDC_INSTALL_SELF" ] && [ -f "$EDC_INSTALL_SELF" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$EDC_INSTALL_SELF")" && pwd)"
+else
+  SCRIPT_DIR=""
+fi
 EDC_INSTALL_TMP=""
 
 AGENT=""
@@ -101,7 +108,7 @@ cleanup_install_tmp() {
 trap cleanup_install_tmp EXIT
 
 prepare_source_tree() {
-  if [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ]; then
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ]; then
     return 0
   fi
 

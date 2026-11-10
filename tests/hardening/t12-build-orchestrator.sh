@@ -599,6 +599,25 @@ else
   exit 1
 fi
 
+# ── 12s: healthy v2 + --force + failing module → previous context kept ──────
+setup_repo
+write_healthy_v2
+echo "" > "$EDC_T12_LOG"
+result=0
+out=$(EDC_T12_PARALLEL=1 EDC_T12_FAIL_MODULE=lib EDC_PARALLEL=1 EDC_MAX_CONCURRENCY=2 bash "$SCRIPT" --force 2>&1) || result=$?
+if [ "$result" -ne 0 ] \
+  && [ -f edc-context/manifest.json ] \
+  && grep -q '<!-- t12 -->' edc-context/index.md \
+  && [ -f edc-context/modules/root.md ] \
+  && [ -f AGENTS.md ] \
+  && echo "$out" | grep -q 'coordinator-owned edc-build dag failed'; then
+  echo "PASS: failed forced rebuild keeps the previous context"
+else
+  echo "FAIL (12s): failed forced rebuild must keep the previous context. exit=$result"
+  echo "$out"
+  exit 1
+fi
+
 cd "$ORIG_DIR"
 echo ""
 echo "All T12 checks passed."

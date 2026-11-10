@@ -96,7 +96,9 @@ if (marketplace.metadata.version !== packageVersion) process.exit(1);
 if (!marketplace.plugins.every((entry) => entry.version === packageVersion)) process.exit(1);
 if (plugin.version !== packageVersion) process.exit(1);
 if (manifest.edcVersion !== packageVersion) process.exit(1);
-if (!installer.includes(`EDC_INSTALL_REF="\${EDC_INSTALL_REF:-v${packageVersion}}"`)) process.exit(1);
+const released = fs.readFileSync('CHANGELOG.md', 'utf8').match(/^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}/m);
+if (!released) process.exit(1);
+if (!installer.includes(`EDC_INSTALL_REF="\${EDC_INSTALL_REF:-v${released[1]}}"`)) process.exit(1);
 NODE
 then
   echo "PASS: v1.1.5 distribution, context, and installer versions match"
@@ -307,6 +309,48 @@ if [ "$stdin_install_rc" -eq 0 ] \
 else
   echo "FAIL: piped installer used the current directory as its source (exit=$stdin_install_rc)"
   cat "$TMPDIR_T5/stdin-install.out"
+  exit 1
+fi
+
+# ── 5e4: remote mode runs the installer of the downloaded release (IMP-04) ──
+mkdir -p "$REMOTE_TMP/delegate-bin" "$REMOTE_TMP/delegate-home" "$REMOTE_TMP/delegate-cwd"
+cp "$REMOTE_BIN/curl" "$REMOTE_TMP/delegate-bin/curl"
+cat >"$REMOTE_TMP/delegate-bin/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dest=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$dest" ] || exit 64
+mkdir -p "$dest/plugins/edc/scripts"
+printf 'release runtime\n' >"$dest/plugins/edc/scripts/edc"
+printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$*" >"${EDC_T5_DELEGATE_LOG:?}"' >"$dest/install.sh"
+EOF
+chmod +x "$REMOTE_TMP/delegate-bin/tar"
+cp install.sh "$REMOTE_TMP/delegate-cwd/install.sh"
+set +e
+(
+  cd "$REMOTE_TMP/delegate-cwd" || exit 1
+  EDC_T5_DELEGATE_LOG="$REMOTE_TMP/delegate.log" \
+  EDC_REMOTE_URL_LOG="$REMOTE_TMP/delegate-url.log" \
+  HOME="$REMOTE_TMP/delegate-home" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_TMP/delegate-bin:$PATH" \
+  bash install.sh --agent claude --no-path >"$TMPDIR_T5/delegate.out" 2>&1
+)
+delegate_rc=$?
+set -e
+if [ "$delegate_rc" -eq 0 ] \
+  && [ "$(cat "$REMOTE_TMP/delegate.log" 2>/dev/null)" = "--agent claude --no-path" ]; then
+  echo "PASS: remote install runs the installer of the downloaded release"
+else
+  echo "FAIL: remote install did not run the installer of the downloaded release (exit=$delegate_rc)"
+  cat "$TMPDIR_T5/delegate.out"
   exit 1
 fi
 

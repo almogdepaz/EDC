@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.4}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 # When the script is piped into bash, BASH_SOURCE[0] is empty. Never use the
@@ -24,6 +24,7 @@ else
   SCRIPT_DIR=""
 fi
 EDC_INSTALL_TMP=""
+EDC_INSTALL_REMOTE=0
 
 AGENT=""
 ADD_PATH=1
@@ -126,6 +127,7 @@ prepare_source_tree() {
 
   [ -f "$SCRIPT_DIR/plugins/edc/scripts/edc" ] \
     || die "downloaded archive does not contain EDC plugin runtime: $ARCHIVE_URL"
+  EDC_INSTALL_REMOTE=1
 }
 
 copy_from_source() {
@@ -368,6 +370,18 @@ install_claude_runtime() {
   print_cli_hint claude
   print_path_hint
 }
+
+prepare_source_tree
+if [ "$EDC_INSTALL_REMOTE" -eq 1 ]; then
+  # Remote mode: run the installer of the downloaded release, so that the
+  # installer and the runtime always come from the same tag.
+  [ -f "$SCRIPT_DIR/install.sh" ] || die "downloaded archive does not contain install.sh: $ARCHIVE_URL"
+  release_args=(--agent "$AGENT")
+  [ "$ADD_PATH" -eq 1 ] || release_args+=(--no-path)
+  release_rc=0
+  bash "$SCRIPT_DIR/install.sh" "${release_args[@]}" || release_rc=$?
+  exit "$release_rc"
+fi
 
 case "$AGENT" in
   claude)

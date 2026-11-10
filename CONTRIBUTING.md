@@ -27,4 +27,4 @@ npm run pack:check
    npm publish --access public
    ```
 4. Smoke-install from npm in a temporary pi config directory.
-5. Tag the release and push the branch/tag.
+5. Set the default `EDC_INSTALL_REF` in `install.sh` to the new tag and give the `CHANGELOG.md` heading its release date, in the release commit. Tag that commit. Push the branch and the tag together: `git push --atomic origin main vX.Y.Z`.

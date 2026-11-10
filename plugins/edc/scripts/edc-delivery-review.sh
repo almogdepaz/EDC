@@ -325,8 +325,8 @@ delivery_main() {
 
   echo "→ running delivery review via $EDC_AGENT_CLI..."
   local spawn_rc before_snapshot after_snapshot changed_forbidden
-  before_snapshot=$(mktemp)
-  after_snapshot=$(mktemp)
+  before_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-delivery-snapshot-$$.XXXXXX")
+  after_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-delivery-snapshot-$$.XXXXXX")
   edc_snapshot_review_forbidden_paths "$before_snapshot" "$report_path"
   if edc_spawn "edc-delivery-review" "${EDC_REVIEW_TIMEOUT:-1800}" "$prompt"; then
     spawn_rc=0

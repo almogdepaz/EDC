@@ -23,5 +23,14 @@ else
   echo "PASS: route.mjs keeps dedup state out of the shared temp directory root"
 fi
 
+# 3. Every mktemp call names a template. On macOS, mktemp without a template
+#    ignores TMPDIR and fails in a sandbox that allows writes only below TMPDIR.
+if grep -nE '\$\(mktemp( -d)?\)' "${SCRIPTS[@]}"; then
+  echo "FAIL: mktemp call without a template"
+  exit 1
+else
+  echo "PASS: every mktemp call has a template"
+fi
+
 echo ""
 echo "All T57 checks passed."

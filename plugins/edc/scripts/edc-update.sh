@@ -67,7 +67,7 @@ EOF
 # the on-disk state cannot be safely updated.
 preflight_check() {
   local rc=0 check_err
-  check_err=$(mktemp)
+  check_err=$(mktemp "${TMPDIR:-/tmp}/edc-update-check-$$.XXXXXX")
   bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     11) # healthy v2 — good to go

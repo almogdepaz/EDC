@@ -53,7 +53,7 @@ if [ "$failures" -eq 0 ]; then
     ignore_args+=(--ignore "$value")
   done < <(node "$JSON_CLI" doctor "$MANIFEST")
 
-  tmp_dir=$(mktemp -d)
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/edc-doctor-$$.XXXXXX")
   paths_file="$tmp_dir/paths.txt"
   states_file="$tmp_dir/states.tsv"
   git ls-files > "$paths_file"

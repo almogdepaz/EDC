@@ -1555,7 +1555,7 @@ edc_snapshot_curator_forbidden_paths() {
 edc_diff_curator_forbidden_paths() {
   local before="$1" after="$2"
   local diff_file
-  diff_file=$(mktemp)
+  diff_file=$(mktemp "${TMPDIR:-/tmp}/edc-curator-diff-$$.XXXXXX")
   if diff -u "$before" "$after" > "$diff_file"; then
     rm -f "$diff_file"
     return 0
@@ -1641,8 +1641,8 @@ edc_diff_review_forbidden_paths() {
 
 edc_run_context_curator_edit() {
   local before after changed prompt
-  before=$(mktemp)
-  after=$(mktemp)
+  before=$(mktemp "${TMPDIR:-/tmp}/edc-curator-snapshot-$$.XXXXXX")
+  after=$(mktemp "${TMPDIR:-/tmp}/edc-curator-snapshot-$$.XXXXXX")
   edc_snapshot_curator_forbidden_paths "$before"
 
   echo "→ spawning $EDC_AGENT_CLI for edc-context-curator-edit..."

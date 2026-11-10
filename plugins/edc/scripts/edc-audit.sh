@@ -339,8 +339,8 @@ audit_main() {
 
   edc_worker_manifest_write "$worker_manifest" "$run_id" "$run_dir" "$tasks_jsonl" || exit 1
   local worker_pool_rc=0 before_snapshot after_snapshot changed_forbidden
-  before_snapshot=$(mktemp)
-  after_snapshot=$(mktemp)
+  before_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
+  after_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
   edc_snapshot_review_forbidden_paths "$before_snapshot"
   edc_worker_pool_run "$worker_manifest" || worker_pool_rc=$?
   edc_snapshot_review_forbidden_paths "$after_snapshot"
@@ -388,8 +388,8 @@ audit_main() {
   edc_worker_manifest_write "$synthesis_manifest" "$run_id" "$run_dir" "$synthesis_tasks" || exit 1
 
   local synthesis_rc=0
-  before_snapshot=$(mktemp)
-  after_snapshot=$(mktemp)
+  before_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
+  after_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
   edc_snapshot_review_forbidden_paths "$before_snapshot"
   edc_worker_pool_run "$synthesis_manifest" || synthesis_rc=$?
   edc_snapshot_review_forbidden_paths "$after_snapshot"

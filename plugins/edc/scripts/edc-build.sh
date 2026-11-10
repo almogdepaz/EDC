@@ -72,7 +72,7 @@ EOF
 decide_route() {
   local force="$1"
   local rc=0 check_err
-  check_err=$(mktemp)
+  check_err=$(mktemp "${TMPDIR:-/tmp}/edc-build-check-$$.XXXXXX")
   bash "$CLEAN_SLATE_SH" --check > /dev/null 2>"$check_err" || rc=$?
   case "$rc" in
     0)  # no context dir
@@ -421,8 +421,8 @@ EOF
 
 run_full_build_dag() {
   local before_snapshot after_snapshot changed_forbidden dag_rc=0
-  before_snapshot=$(mktemp)
-  after_snapshot=$(mktemp)
+  before_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-build-snapshot-$$.XXXXXX")
+  after_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-build-snapshot-$$.XXXXXX")
   edc_snapshot_review_forbidden_paths "$before_snapshot"
 
   EDC_BUILD_STAGED_CONTEXT=""

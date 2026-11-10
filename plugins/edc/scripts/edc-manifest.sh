@@ -70,7 +70,7 @@ if [ "${#ignore_globs[@]}" -eq 0 ] && [ -f .edcignore ]; then
   done < .edcignore
 fi
 
-tmp_dir="$(mktemp -d)"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/edc-manifest-$$.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
 input="$tmp_dir/in.json"
 cat > "$input"

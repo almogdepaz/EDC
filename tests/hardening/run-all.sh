@@ -14,10 +14,27 @@ git -C "$ROOT" status --porcelain=v1 --untracked-files=all | LC_ALL=C sort >"$TE
 
 export HOME="$TEST_HOME"
 
-for t in "$ROOT"/tests/hardening/t*.sh; do
-  "$BASH_BIN" "$t" || exit 1
+# Run every test: shell tests first, then Python tests. The default stops at
+# the first failure. EDC_TEST_KEEP_GOING=1 runs all tests and lists every failure.
+failed=()
+for t in "$ROOT"/tests/hardening/t*.sh "$ROOT"/tests/hardening/t*.py; do
+  [ -e "$t" ] || continue
+  start=$SECONDS
+  rc=0
+  case "$t" in
+    *.py) python3 "$t" || rc=$? ;;
+    *) "$BASH_BIN" "$t" || rc=$? ;;
+  esac
+  printf '%s %s (%ss)\n' "$([ "$rc" -eq 0 ] && echo ok || echo FAILED)" "$(basename "$t")" "$((SECONDS - start))" >&2
+  if [ "$rc" -ne 0 ]; then
+    failed+=("$(basename "$t")")
+    [ "${EDC_TEST_KEEP_GOING:-0}" = 1 ] || break
+  fi
 done
-python3 "$ROOT/tests/hardening/t53-update-manifest-promotion.py"
+if [ "${#failed[@]}" -gt 0 ]; then
+  echo "FAIL: ${failed[*]}" >&2
+  exit 1
+fi
 
 git -C "$ROOT" status --porcelain=v1 --untracked-files=all | LC_ALL=C sort >"$TEST_HOME/status-after"
 if ! diff -u "$TEST_HOME/status-before" "$TEST_HOME/status-after"; then

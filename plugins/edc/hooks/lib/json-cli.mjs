@@ -307,18 +307,19 @@ function command() {
       } catch {
         console.error("EDC no-refresh: context policy unavailable/unusable; reviewing source directly without context exclusions.");
       }
-      const promotionFiles = [], excludedFiles = [];
+      const promotionFiles = [], excludedFiles = [], legacyUnmappedFiles = [];
       files.forEach((file, i) => {
         const state = states?.[i] || "";
         if (/^contextless:[a-z0-9-]+:account-only$/.test(state)) {
           excludedFiles.push(file);
+          if (state === "contextless:legacy-unmapped:account-only") legacyUnmappedFiles.push(file);
           console.error(`EDC no-refresh: account-only excluded: ${file}`);
         } else if (args[0] && /^contextless:[a-z0-9-]+:promotion-check$/.test(state)) {
           promotionFiles.push(file);
         } else console.log(file);
       });
       if (args[0]) writeFileSync(args[0], promotionFiles.join("\n"));
-      if (args[1]) writeFileSync(args[1], JSON.stringify(excludedFiles));
+      if (args[1]) writeFileSync(args[1], JSON.stringify({ excludedFiles, legacyUnmappedFiles }));
       return;
     }
     case "review-excluded-files": {
@@ -330,15 +331,25 @@ function command() {
       }
       return;
     }
+    case "review-legacy-unmapped-files": {
+      const json = readJson(args[0]);
+      const files = [...array(json.legacyUnmappedFiles), ...array(json.modules)
+        .filter(module => module.type === "contextless" && module.contextlessId === "legacy-unmapped" && module.reviewPolicy === "account-only")
+        .flatMap(module => array(module.files))];
+      if (files.length) console.log([...new Set(files)].map(file => JSON.stringify(file)).join(", "));
+      return;
+    }
     case "review-direct-manifest": {
       const [target, baseline, head, contextMode, module, promotionPath, exclusionsPath] = args;
       const files = lines(readStdin());
       const modules = files.length ? [{ name: module, doc: "", files }] : [];
       const promotionFiles = promotionPath ? lines(readFileSync(promotionPath, "utf8")) : [];
       if (promotionFiles.length) modules.push({ name: "contextless-promotion-check", doc: "", files: promotionFiles, type: "contextless", contextlessId: "promotion-check", reviewPolicy: "promotion-check" });
-      const excludedFiles = exclusionsPath ? readJson(exclusionsPath) : [];
+      const exclusions = exclusionsPath ? readJson(exclusionsPath) : {};
+      const excludedFiles = array(exclusions.excludedFiles);
+      const legacyUnmappedFiles = array(exclusions.legacyUnmappedFiles);
       if (excludedFiles.length) modules.push({ name: "contextless-account-only", doc: "", files: excludedFiles, type: "contextless", reviewPolicy: "account-only" });
-      writeJson({ target, baseline, head, contextMode, modules, ...(excludedFiles.length ? { excludedFiles } : {}) });
+      writeJson({ target, baseline, head, contextMode, modules, ...(excludedFiles.length ? { excludedFiles } : {}), ...(legacyUnmappedFiles.length ? { legacyUnmappedFiles } : {}) });
       return;
     }
     case "review-routed-manifest": {

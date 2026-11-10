@@ -181,13 +181,18 @@ else
   cat "$tasks_dir/result-contextless-promotion-check.json" 2>/dev/null || true
 fi
 
-# ── 30.6: a nonempty scope must not succeed with zero reviews ──
+# ── 30.6: legacy skips must not hide zero reviews; explicit accounting is valid ──
 MOCK_BIN="$AUTO/fake-bin"
-for policy_case in legacy legacy-full missing-match explicit owned; do
+for policy_case in legacy legacy-full missing-match explicit mixed owned explicit-context mixed-context owned-context; do
   setup_repo "$TMP/$policy_case"
   mkdir -p lib
   printf 'int demo(void) { return 0; }\n' > lib/multi.c
   git add lib/multi.c
+  if [[ "$policy_case" == mixed* ]]; then
+    mkdir -p docs
+    printf 'accounted documentation\n' > docs/accounted.md
+    git add docs/accounted.md
+  fi
   git commit -q -m 'add synthetic review target'
   write_context
   case "$policy_case" in
@@ -197,10 +202,13 @@ for policy_case in legacy legacy-full missing-match explicit owned; do
     missing-match)
       filter='.modules = [{"name":"core","doc":"edc-context/modules/core.md","paths":["lib/multi.c"]}] | .unmapped.allowedGlobs = ["lib/**", "*"]'
       ;;
-    explicit)
-      filter='.contextless.entries = [{"id":"accounted","globs":["lib/**"],"reason":"test accounting","reviewPolicy":"account-only"}]'
+    explicit|explicit-context)
+      filter='.contextless.entries = [{"id":"accounted","globs":["lib/**"],"reason":"test accounting","reviewPolicy":"account-only"}] | .unmapped.allowedGlobs = ["*"]'
       ;;
-    owned)
+    mixed|mixed-context)
+      filter='.modules = [] | .unmapped.allowedGlobs = ["lib/**", "*"]'
+      ;;
+    owned|owned-context)
       filter='.modules[0].match = {"exactFiles":["lib/multi.c"]} | .unmapped.allowedGlobs = ["lib/**", "*"]'
       ;;
   esac
@@ -210,24 +218,35 @@ for policy_case in legacy legacy-full missing-match explicit owned; do
   result_file="$PWD/.git/result.json"
   scope_args=(HEAD --base HEAD~1 --committed-only)
   if [ "$policy_case" = legacy-full ]; then scope_args=(--full --ignore seed.txt); fi
+  if [[ "$policy_case" != *-context ]]; then scope_args+=(--no-context-refresh); fi
   set +e
   PATH="$MOCK_BIN:$PATH" T30_CALL_LOG="$call_log" EDC_RESULT_FILE="$result_file" \
-    EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 "$BASH_BIN" "$SCRIPT" "${scope_args[@]}" \
-    --no-context-refresh >.git/review.out 2>.git/review.err
+    EDC_AGENT_CLI=claude EDC_KEEP_REVIEW_TASKS=1 EDC_REVIEW_CONTEXT_PREPARED=1 \
+    "$BASH_BIN" "$SCRIPT" "${scope_args[@]}" >.git/review.out 2>.git/review.err
   review_rc=$?
   set -e
-  if [ "$policy_case" = owned ]; then
+  if [[ "$policy_case" == owned* ]]; then
     if [ "$review_rc" -eq 0 ] && [ "$(wc -l < "$call_log" | tr -d ' ')" = 1 ] \
       && jq -e '.status == "success"' "$result_file" >/dev/null \
-      && grep -q 'Mock review for no-context-refresh' review-HEAD.md \
+      && grep -Eq 'Mock review for (no-context-refresh|core)' review-HEAD.md \
       && printf 'lib/multi.c\n' | node "$ROOT/plugins/edc/hooks/lib/classify-cli.mjs" edc-context/manifest.json | grep -q 'context-module:core'; then
       check "30.6: module owner wins over legacy catch-all globs" 1
     else
       check "30.6: module owner wins over legacy catch-all globs" 0
       cat .git/review.out .git/review.err
     fi
+  elif [[ "$policy_case" == explicit* ]]; then
+    if [ "$review_rc" -eq 0 ] && [ ! -e "$call_log" ] \
+      && jq -e '.status == "success"' "$result_file" >/dev/null \
+      && grep -q 'lib/multi.c' review-HEAD.md \
+      && grep -q 'account-only' review-HEAD.md; then
+      check "30.6: explicit account-only scope succeeds with accounting and no worker" 1
+    else
+      check "30.6: explicit account-only scope succeeds with accounting and no worker" 0
+      cat .git/review.out .git/review.err "$result_file"
+    fi
   elif [ "$review_rc" -ne 0 ] && [ ! -e "$call_log" ] \
-    && jq -e '.status == "failed" and .exitCode != 0 and .reasonCode == "review-not-reviewed" and (.message | contains("not reviewed")) and .outputs == []' "$result_file" >/dev/null \
+    && jq -e '.status == "failed" and .exitCode != 0 and .reasonCode == "review-not-reviewed" and (.message | contains("not reviewed")) and (.message | contains("legacy-unmapped")) and (.message | contains("lib/multi.c")) and (.message | contains("docs/accounted.md") | not) and .outputs == []' "$result_file" >/dev/null \
     && grep -q 'not reviewed' .git/review.err \
     && [ ! -e review-HEAD.md ]; then
     check "30.6: $policy_case zero-review scope fails with explicit status" 1

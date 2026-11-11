@@ -1084,7 +1084,9 @@ class AccessScanTests(unittest.TestCase):
             "grep -R after cd": (("Bash", {"command": "cd ~ && grep -R socks ."}), h),
             "rg in cd'd cwd": (("Bash", {"command": "cd / && rg CVE-2023"}), "/"),
             "find -L ~/Dev": (("Bash", {"command": "find -L ~/Dev -name '*.md'"}), f"{h}/Dev"),
-            "xargs grep -r": (("Bash", {"command": "echo x | xargs grep -rl foo /Users"}), "/Users"),
+            # the home's parent (/Users on macOS, /home on Linux) is an ancestor of ~/Dev/edc
+            "xargs grep -r": (("Bash", {"command": f"echo x | xargs grep -rl foo {os.path.dirname(h)}"}),
+                              os.path.dirname(h)),
             "work dir (forbidden ancestor)": (("Bash", {"command": f"grep -r PLANT {self.work}"}), str(self.work)),
             "Grep tool": (("Grep", {"pattern": "PLANT", "path": "~/Dev"}), f"{h}/Dev"),
             "Grep tool /": (("Grep", {"pattern": "bug_pattern", "path": "/"}), "/"),
@@ -1193,7 +1195,6 @@ class AccessScanTests(unittest.TestCase):
         enc = self.home.replace("/", "-")
         task = f"/private/tmp/claude-501/{enc}-Dev-edc-enemy-port-p1/0b9c/tasks/b1.output"
         cases = {
-            "private form": (("Bash", {"command": f"tail {task}"}), task),
             "tmp form": (("Read", {"file_path": task[len("/private"):]}), task[len("/private"):]),
             "main checkout": (("Read", {"file_path": f"/tmp/claude-0/{enc}-Dev-edc/s/tasks/x.output"}),
                               f"/tmp/claude-0/{enc}-Dev-edc/s/tasks/x.output"),
@@ -1202,6 +1203,9 @@ class AccessScanTests(unittest.TestCase):
                                      "/private/tmp/claude-0"),
             "recursive tmp": (("Grep", {"pattern": "PLANT", "path": "/tmp"}), "/tmp"),
         }
+        if os.path.isdir("/private"):
+            # a shell token counts as a path only under an existing top-level dir; /private is macOS-only
+            cases["private form"] = (("Bash", {"command": f"tail {task}"}), task)
         for label, (use, path) in cases.items():
             with self.subTest(label):
                 outside, contaminated = self.scan(use)

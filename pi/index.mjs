@@ -522,6 +522,8 @@ function startBackgroundJob(kind, scriptName, args, ctx) {
   const script = `
 set -- ${renderShellArgs(args)}
 status_file=${shellQuote(statusPath.path)}
+# write beside the status file, then rename: readers see the old or the complete new status
+status_tmp="$status_file.tmp.$$"
 log_file=${shellQuote(logPath.path)}
 log_display=${shellQuote(logPath.display)}
 status_dir=${shellQuote(dirname(statusPath.path))}
@@ -546,7 +548,8 @@ status_line() {
   status_line "args" "$args_text"
   status_line "log" "$log_display"
   [ -n "$started_head" ] && status_line "started_head" "$started_head"
-} > "$status_file"
+} > "$status_tmp"
+mv -f "$status_tmp" "$status_file"
 
 rm -f "$result_file"
 EDC_RESULT_FILE="$result_file" ${shellQuote(process.execPath)} ${shellQuote(bootstrap)} ${shellQuote(scriptName)} "$@" > "$log_file" 2>&1
@@ -641,7 +644,8 @@ fi
   [ -n "$failure_reason" ] && status_line "failure_reason" "$failure_reason"
   [ -n "$failure_hint" ] && status_line "failure_hint" "$failure_hint"
   [ -n "$final_review" ] && status_line "final_review" "$final_review"
-} > "$status_file"
+} > "$status_tmp"
+mv -f "$status_tmp" "$status_file"
 `;
 
   const child = spawn("bash", ["-lc", script], {

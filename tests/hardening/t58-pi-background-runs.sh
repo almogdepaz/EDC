@@ -31,7 +31,7 @@ chmod +x "$TRUSTED_PACKAGE/plugins/edc/scripts/edc-review.sh"
 
 EDC_TEST_EXTENSION="$TRUSTED_PACKAGE/pi/index.mjs" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -106,7 +106,18 @@ try {
   assert.ok(status, "review status message should be emitted");
   assert.match(status.content, /status: running/, "status should survive edc-context cleanup while review runs");
 
+  // The final status replaces the running file atomically, so readers never see a partial status.
+  // A hard link keeps the running file's inode allocated; in-place rewrites would update it too.
+  const runningLink = join(cwd, ".git", "edc", "status-running-link");
+  linkSync(statusPathFromMessage, runningLink);
+  assert.match(readFileSync(runningLink, "utf-8"), /^status=running$/m, "link should capture the running status");
+
   assert.ok(await waitFor(() => /status=success/.test(readFileSync(statusPathFromMessage, "utf-8")), 10000));
+  const finalStatus = readFileSync(statusPathFromMessage, "utf-8");
+  assert.match(finalStatus, /^args=/m, "final status should be complete");
+  assert.notEqual(statSync(statusPathFromMessage).ino, statSync(runningLink).ino, "final status must replace the file, not rewrite it in place");
+  assert.match(readFileSync(runningLink, "utf-8"), /^status=running$/m, "running status file must not be rewritten in place");
+  assert.deepEqual(readdirSync(join(cwd, ".git", "edc")).filter((name) => name.startsWith("status.")), [], "no temporary status files should remain");
   assert.match(readFileSync(logPathFromMessage, "utf-8"), /Verified: review-HEAD\.md/);
 } finally {
   if (childPid) {

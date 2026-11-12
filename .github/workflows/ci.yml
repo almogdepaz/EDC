@@ -16,6 +16,8 @@ jobs:
         node-version: [20, 24]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ReviewBench fixtures read the pinned runtime revision.
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
@@ -24,7 +26,12 @@ jobs:
       - name: Run shellcheck
         run: npm run lint:shell
       - name: Run hardening suite
+        env:
+          REVIEWBENCH_TEST_GIT_FIXTURES: "1"
         run: npm test
+      - name: Test ReviewBench gateway
+        if: matrix.node-version == 24
+        run: node --test benchmark/tests/test_reviewbench_gateway.mjs
       - name: Check npm package contents
         run: npm run pack:check
       - name: Verify release tag
@@ -51,6 +58,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ReviewBench fixtures read the pinned runtime revision.
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -60,6 +69,8 @@ jobs:
         run: npm run lint:shell
       - name: Run hardening suite with Apple Bash
         shell: /bin/bash {0}
+        env:
+          REVIEWBENCH_TEST_GIT_FIXTURES: "1"
         run: npm test
       - name: Check npm package contents
         run: npm run pack:check

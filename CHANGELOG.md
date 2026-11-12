@@ -2,13 +2,15 @@
 
 Notable user-facing changes to EDC are documented here.
 
-## [1.1.5] - Unreleased
+## [1.1.5] - 2026-11-12
 
 ### Added
 - canonical global/package runtime inventory, transactional managed-global installation, and structured runtime diagnostics
 - staged multi-phase review results and Pi status projection
 - macOS CI coverage and deterministic benchmark scorer tests
 - vulnerability reporting policy
+- explicit no-refresh and ignore-context review modes across all review lenses
+- optional Octocode v19 research support with repository-path validation
 
 ### Changed
 - global/package runtime validation now fails closed before managed helpers execute
@@ -21,6 +23,10 @@ Notable user-facing changes to EDC are documented here.
 - runtime install lock ownership
 - benchmark recall aggregation and scorer pattern matching
 - hardening test checkout pollution
+- context recovery preserves existing context until the replacement build succeeds
+- reviews fail explicitly when legacy unmapped rules skip every in-scope file
+- Claude prompt-file delivery uses stdin
+- Pi background status updates are atomic
 
 ## [1.1.4] - 2026-07-22
 

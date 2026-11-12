@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.4}"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 # When the script is piped into bash, BASH_SOURCE[0] is empty. Never use the

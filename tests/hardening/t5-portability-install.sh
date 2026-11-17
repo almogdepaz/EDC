@@ -354,6 +354,64 @@ else
   exit 1
 fi
 
+# ── 5e5: remote Pi install registers a pinned git source, not the temp tree ──
+# The outer installer deletes its download directory on exit, and Pi loads a
+# local source from its path without copying it.
+mkdir -p "$REMOTE_TMP/pi-remote-bin" "$REMOTE_TMP/pi-remote-home" "$REMOTE_TMP/pi-remote-cwd"
+cp "$REMOTE_BIN/curl" "$REMOTE_TMP/pi-remote-bin/curl"
+cat >"$REMOTE_TMP/pi-remote-bin/tar" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dest=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -C) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$dest" ] || exit 64
+mkdir -p "$dest"
+cp -R "${EDC_REPO_ROOT:?}/plugins" "$dest/plugins"
+cp -R "${EDC_REPO_ROOT:?}/pi" "$dest/pi"
+cp "${EDC_REPO_ROOT:?}/install.sh" "$dest/install.sh"
+EOF
+chmod +x "$REMOTE_TMP/pi-remote-bin/tar"
+cat >"$REMOTE_TMP/pi-remote-bin/pi" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${PI_INSTALL_LOG:?}"
+EOF
+chmod +x "$REMOTE_TMP/pi-remote-bin/pi"
+cp install.sh "$REMOTE_TMP/pi-remote-cwd/install.sh"
+set +e
+(
+  cd "$REMOTE_TMP/pi-remote-cwd" || exit 1
+  unset EDC_INSTALL_PI_SOURCE
+  EDC_INSTALL_REF=v9.9.9 \
+  EDC_REPO_ROOT="$REPO_ROOT_T5" \
+  EDC_REMOTE_URL_LOG="$REMOTE_TMP/pi-remote-url.log" \
+  PI_INSTALL_LOG="$REMOTE_TMP/pi-remote-args" \
+  HOME="$REMOTE_TMP/pi-remote-home" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_TMP/pi-remote-bin:$PATH" \
+  bash install.sh --agent pi --no-path >"$TMPDIR_T5/pi-remote.out" 2>&1
+)
+pi_remote_rc=$?
+set -e
+pi_remote_expected="git:github.com/almogdepaz/edc@v9.9.9"
+if [ "$pi_remote_rc" -eq 0 ] \
+  && [ "$(sed -n '1p' "$REMOTE_TMP/pi-remote-args" 2>/dev/null)" = "install" ] \
+  && [ "$(sed -n '2p' "$REMOTE_TMP/pi-remote-args" 2>/dev/null)" = "$pi_remote_expected" ] \
+  && grep -qx "installed extension/source path: $pi_remote_expected" "$TMPDIR_T5/pi-remote.out" \
+  && ! grep -q 'edc-install\.' "$TMPDIR_T5/pi-remote.out"; then
+  echo "PASS: remote Pi install registers the pinned release git source"
+else
+  echo "FAIL: remote Pi install registered or printed the temporary download tree (exit=$pi_remote_rc)"
+  cat "$REMOTE_TMP/pi-remote-args" 2>/dev/null || true
+  cat "$TMPDIR_T5/pi-remote.out"
+  exit 1
+fi
+
 rm -rf "$REMOTE_TMP"
 
 # ── 5f: passive/help Pi paths are inert; execution uses trusted bootstrap ──

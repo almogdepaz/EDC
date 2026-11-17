@@ -15,6 +15,9 @@ REPO="almogdepaz/EDC"
 EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
+# Pi identifies a git package by its URL without the ref; keep this spelling
+# identical to pi/install.sh so a pinned install replaces an existing entry.
+PI_GIT_SOURCE="git:github.com/almogdepaz/edc"
 # When the script is piped into bash, BASH_SOURCE[0] is empty. Never use the
 # current directory as the install source in that case.
 EDC_INSTALL_SELF="${BASH_SOURCE[0]:-}"
@@ -379,7 +382,10 @@ if [ "$EDC_INSTALL_REMOTE" -eq 1 ]; then
   release_args=(--agent "$AGENT")
   [ "$ADD_PATH" -eq 1 ] || release_args+=(--no-path)
   release_rc=0
-  bash "$SCRIPT_DIR/install.sh" "${release_args[@]}" || release_rc=$?
+  # Pass the Pi source through the environment: older release installers
+  # reject unknown options but ignore unknown variables.
+  EDC_INSTALL_PI_SOURCE="$PI_GIT_SOURCE@$EDC_INSTALL_REF" \
+    bash "$SCRIPT_DIR/install.sh" "${release_args[@]}" || release_rc=$?
   exit "$release_rc"
 fi
 
@@ -419,14 +425,22 @@ case "$AGENT" in
     if ! command -v pi >/dev/null 2>&1; then
       die "pi CLI not found on PATH. Install pi first: https://pi.dev"
     fi
-    if [ -d "$SCRIPT_DIR/pi" ]; then
+    if [ -n "${EDC_INSTALL_PI_SOURCE:-}" ]; then
+      # Set by a remote install. Its download tree is deleted on exit, and Pi
+      # loads a local source in place, so register the pinned release instead.
+      pi_source="$EDC_INSTALL_PI_SOURCE"
+      echo "Installing EDC as pi extension from $pi_source..."
+      pi install "$pi_source"
+    elif [ -d "$SCRIPT_DIR/pi" ]; then
+      pi_source="$SCRIPT_DIR"
       bash "$SCRIPT_DIR/pi/install.sh" --from-source
     else
+      pi_source="$PI_GIT_SOURCE"
       echo "Installing EDC as pi extension via git..."
-      pi install "git:github.com/almogdepaz/edc"
+      pi install "$pi_source"
     fi
     install_terminal_cli
-    echo "installed extension/source path: $SCRIPT_DIR/pi"
+    echo "installed extension/source path: $pi_source"
     echo "restart pi or run /reload in existing sessions to refresh menu labels."
     echo "Done. Run /edc inside pi for review/security review/delivery review/quality review/status/build/update/doctor. Toggle mode with 'edc mode advisory|inject'."
     print_cli_hint pi

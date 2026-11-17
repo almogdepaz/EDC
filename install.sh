@@ -432,7 +432,7 @@ case "$AGENT" in
       echo "Installing EDC as pi extension from $pi_source..."
       pi install "$pi_source"
     elif [ -d "$SCRIPT_DIR/pi" ]; then
-      pi_source="$SCRIPT_DIR/pi"
+      pi_source="$SCRIPT_DIR"
       bash "$SCRIPT_DIR/pi/install.sh" --from-source
     else
       pi_source="$PI_GIT_SOURCE"

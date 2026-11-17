@@ -378,7 +378,7 @@ EOF
 chmod +x "$REMOTE_TMP/pi-remote-bin/tar"
 cat >"$REMOTE_TMP/pi-remote-bin/pi" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$@" >"${PI_INSTALL_LOG:?}"
+printf '%s\n' "$@" >>"${PI_INSTALL_LOG:?}"
 EOF
 chmod +x "$REMOTE_TMP/pi-remote-bin/pi"
 cp install.sh "$REMOTE_TMP/pi-remote-cwd/install.sh"
@@ -402,6 +402,7 @@ pi_remote_expected="git:github.com/almogdepaz/edc@v9.9.9"
 if [ "$pi_remote_rc" -eq 0 ] \
   && [ "$(sed -n '1p' "$REMOTE_TMP/pi-remote-args" 2>/dev/null)" = "install" ] \
   && [ "$(sed -n '2p' "$REMOTE_TMP/pi-remote-args" 2>/dev/null)" = "$pi_remote_expected" ] \
+  && [ "$(wc -l <"$REMOTE_TMP/pi-remote-args" | tr -d ' ')" -eq 2 ] \
   && grep -qx "installed extension/source path: $pi_remote_expected" "$TMPDIR_T5/pi-remote.out" \
   && ! grep -q 'edc-install\.' "$TMPDIR_T5/pi-remote.out"; then
   echo "PASS: remote Pi install registers the pinned release git source"
@@ -409,6 +410,46 @@ else
   echo "FAIL: remote Pi install registered or printed the temporary download tree (exit=$pi_remote_rc)"
   cat "$REMOTE_TMP/pi-remote-args" 2>/dev/null || true
   cat "$TMPDIR_T5/pi-remote.out"
+  exit 1
+fi
+
+# A checkout install still registers the checkout root, once.
+PI_LOCAL_TREE="$REMOTE_TMP/pi-local-tree"
+mkdir -p "$PI_LOCAL_TREE" "$REMOTE_TMP/pi-local-home"
+cp -R plugins pi install.sh "$PI_LOCAL_TREE/"
+pi_local_root=$(cd "$PI_LOCAL_TREE" && pwd)
+set +e
+(
+  unset EDC_INSTALL_PI_SOURCE
+  PI_INSTALL_LOG="$REMOTE_TMP/pi-local-args" \
+  HOME="$REMOTE_TMP/pi-local-home" \
+  SHELL=/bin/zsh \
+  CI=0 \
+  PATH="$REMOTE_TMP/pi-remote-bin:$PATH" \
+  bash "$PI_LOCAL_TREE/install.sh" --agent pi --no-path >"$TMPDIR_T5/pi-local-install.out" 2>&1
+)
+pi_local_install_rc=$?
+set -e
+if [ "$pi_local_install_rc" -eq 0 ] \
+  && [ "$(sed -n '1p' "$REMOTE_TMP/pi-local-args" 2>/dev/null)" = "install" ] \
+  && [ "$(sed -n '2p' "$REMOTE_TMP/pi-local-args" 2>/dev/null)" = "$pi_local_root" ] \
+  && [ "$(wc -l <"$REMOTE_TMP/pi-local-args" | tr -d ' ')" -eq 2 ] \
+  && grep -qx "installed extension/source path: $pi_local_root" "$TMPDIR_T5/pi-local-install.out"; then
+  echo "PASS: checkout Pi install registers and prints the checkout root"
+else
+  echo "FAIL: checkout Pi install did not register the checkout root once (exit=$pi_local_install_rc)"
+  cat "$REMOTE_TMP/pi-local-args" 2>/dev/null || true
+  cat "$TMPDIR_T5/pi-local-install.out"
+  exit 1
+fi
+
+# Pi matches git packages by exact URL spelling, so both installers must agree.
+root_pi_source=$(sed -n 's/^PI_GIT_SOURCE="\(.*\)"$/\1/p' install.sh)
+pi_dir_source=$(sed -n 's/^REPO_SOURCE="\(.*\)"$/\1/p' pi/install.sh)
+if [ -n "$root_pi_source" ] && [ "$root_pi_source" = "$pi_dir_source" ]; then
+  echo "PASS: root and pi installers use the same Pi git package source"
+else
+  echo "FAIL: Pi git package source differs (install.sh='$root_pi_source', pi/install.sh='$pi_dir_source')"
   exit 1
 fi
 

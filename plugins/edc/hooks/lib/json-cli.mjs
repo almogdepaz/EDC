@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
-import { routeFileSync, loadManifest, classifyPathSync, validateClassifierGlobs } from "./route.mjs";
+import { routeFileSync, loadManifest, manifestSourceCommit, classifyPathSync, validateClassifierGlobs } from "./route.mjs";
 import { dispatchResultCommand } from "./json-result-commands.mjs";
 
 function die(message, code = 1) {
@@ -156,6 +156,15 @@ function command() {
   switch (cmd) {
     case "valid-json": {
       parseJsonText(readFileSync(args[0], "utf8"), args[0]);
+      return;
+    }
+    case "context-manifest-is-object": {
+      process.exit(loadManifest(process.cwd(), args[0], args[1]) ? 0 : 1);
+    }
+    case "context-source-commit": {
+      const source = manifestSourceCommit(loadManifest(process.cwd(), args[0], args[1]));
+      if (!source) die(`could not read top-level sourceCommit from ${args[0]}`);
+      process.stdout.write(source);
       return;
     }
     case "schema-version-is-2": {

@@ -409,6 +409,15 @@ auto_mode() {
     edc_result_scope_from_args "$target" ${extra_args[@]+"${extra_args[@]}"}
   fi
 
+  local context_policy=context
+  [ "$no_context_refresh" -ne 1 ] || context_policy=no-refresh
+  [ "$ignore_context" -ne 1 ] || context_policy=ignored
+  edc_resolve_review_context_choice "$context_policy" || exit $?
+  if [ "$EDC_RESOLVED_CONTEXT_POLICY" = ignored ] && [ "$ignore_context" -ne 1 ]; then
+    ignore_context=1
+    extra_args+=(--ignore-context)
+  fi
+
   edc_octocode_capability_init
 
   # Gate on freshness; recover (build/update + force-retry) unless the caller
@@ -418,7 +427,12 @@ auto_mode() {
   if [ "$no_context_refresh" -ne 1 ] && [ "$ignore_context" -ne 1 ]; then
     if [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
       recover_context_if_needed ${build_args[@]+"${build_args[@]}"} -- ${update_args[@]+"${update_args[@]}"} \
-        || { edc_write_review_result 1 "context-recovery-failed" "context recovery failed before security review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force" "" ""; exit 1; }
+        || {
+          local recovery_rc=$?
+          [ "$recovery_rc" -ne 2 ] || exit 2 # Consent failure already has a precise result.
+          edc_write_review_result 1 "context-recovery-failed" "context recovery failed before security review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force" "" ""
+          exit 1
+        }
     else
       assert_context_fresh \
         || { edc_write_review_result 1 "context-not-fresh" "review-all prepared context is no longer fresh" "rerun review-all so context recovery completes before workers start" "" ""; exit 1; }
@@ -479,6 +493,9 @@ auto_mode() {
     fi
   fi
   local had_warning=0
+  if [ -n "${EDC_FINDINGS_REGISTRY:-}" ]; then
+    node "$EDC_FINDINGS_CLI" register-security "$EDC_REVIEW_TASKS_MANIFEST" "$run_dir" || exit 1
+  fi
 
   if [ -n "$tasks" ]; then
     local prompts_dir="$run_dir/prompts" tasks_jsonl="$run_dir/review-tasks.jsonl" worker_manifest="$run_dir/review-manifest.json"
@@ -496,6 +513,7 @@ auto_mode() {
       allowed_result="$EDC_REVIEW_TASKS_DIR/result-${module}.json"
       echo "→ planning review module: $module"
       resolve_prompt review "$task_path" > "$prompt_path" || exit 1
+      edc_findings_prompt security "$module" >> "$prompt_path" || exit 1
       if [ "$(manifest_module_policy "$module")" = "promotion-check" ]; then
         edc_worker_task_append "$tasks_jsonl" "$task_id" "edc-review/$module" "$module" "$prompt_path" "${EDC_REVIEW_TIMEOUT:-1800}" continue "$allowed_report" "$allowed_result" || exit 1
       else

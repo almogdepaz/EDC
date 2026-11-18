@@ -20,6 +20,8 @@ Usage: edc-review-all.sh [target] [--base <ref>] [--include-working-tree|--commi
 
 Runs security, delivery/architecture, and quality review serially by default.
 Set EDC_PARALLEL=1 to run the three lenses concurrently.
+--findings-json <new-path> adds validated machine findings for differential scope with an explicit base only.
+The destination must not exist and its parent must be an existing non-symlink directory.
 
 Dirty differential reviews require one explicit policy:
   --include-working-tree  review staged, unstaged, deleted, and non-ignored untracked files
@@ -32,12 +34,18 @@ REVIEW_TARGET=""
 REVIEW_BASE=""
 REVIEW_POLICY=""
 CONTEXT_POLICY=context
+FINDINGS_OUTPUT=""
 COMMON_ARGS=()
 IGNORE_ARGS=()
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --findings-json)
+        [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$FINDINGS_OUTPUT" ] || { echo "ERROR: --findings-json requires one new output path" >&2; return 2; }
+        FINDINGS_OUTPUT="$2"
+        shift 2
+        ;;
       --full)
         FULL_SCOPE=1
         shift
@@ -192,7 +200,12 @@ prepare_context_once() {
   # shellcheck source=edc-recover-context.sh
   . "$SCRIPT_DIR/edc-recover-context.sh"
   recover_context_if_needed "$@" \
-    || { edc_result_failure 1 context-recovery-failed "context recovery failed before combined review" "inspect the recovery output above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; return 1; }
+    || {
+      local recovery_rc=$?
+      [ "$recovery_rc" -ne 2 ] || return 2 # Consent failure already has a precise result.
+      edc_result_failure 1 context-recovery-failed "context recovery failed before combined review" "inspect the recovery output above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"
+      return 1
+    }
 }
 
 main() {
@@ -200,10 +213,26 @@ main() {
   trap edc_result_on_exit EXIT
   edc_runtime_preflight_or_exit
   parse_args "$@"
-  edc_octocode_capability_init
-
+  unset EDC_FINDINGS_REGISTRY EDC_FINDINGS_OUTPUT
+  local security_public delivery_public
+  if [ "$FULL_SCOPE" -eq 1 ]; then
+    security_public=review-HEAD.md
+    delivery_public=delivery-review-current.md
+  else
+    security_public="review-$(safe_review_name "${REVIEW_TARGET:-HEAD}").md"
+    delivery_public="delivery-review-$(safe_review_name "${REVIEW_TARGET:-HEAD}").md"
+  fi
+  if [ -n "$FINDINGS_OUTPUT" ]; then
+    [ "$FULL_SCOPE" -eq 0 ] || { echo "ERROR: --findings-json requires an immutable differential candidate; --full is unsupported" >&2; exit 2; }
+    [ -n "$REVIEW_BASE" ] || { echo "ERROR: --findings-json requires an explicit --base or --diff base...target" >&2; exit 2; }
+    REVIEW_BASE=$(git rev-parse --verify "${REVIEW_BASE}^{commit}") || exit 2
+    FINDINGS_OUTPUT=$(node "$EDC_FINDINGS_CLI" check-output "$FINDINGS_OUTPUT" \
+      "$(edc_result_file)" "$security_public" "$delivery_public" "$EDC_COMPLEXITY" "$EDC_ISSUES" \
+      "${EDC_SPAWN_LOG:-$EDC_BUILD_DIR/spawn-log.jsonl}" "$EDC_INDEX" "$EDC_MANIFEST" "$EDC_BUILD_INFO" \
+      "$EDC_ROOT_AGENTS" "$EDC_ALT_AGENTS" "$EDC_CLAUDE_AGENTS") || exit 2
+  fi
   local candidate_target="" security_script delivery_script audit_script
-  local security_public delivery_public parallel_run_dir parallel_run_id
+  local parallel_run_dir parallel_run_id
   local security_result delivery_result quality_result
   local parallel_mode=0 mode_rc=0
   local -a review_args audit_args
@@ -239,10 +268,19 @@ main() {
     audit_args+=(${COMMON_ARGS[@]+"${COMMON_ARGS[@]}"})
   fi
 
-  # Candidate resolution happens before recovery so generated context cannot
-  # silently enter the candidate. Recovery completes once before any lens starts.
+  # Candidate resolution happens before consent/recovery so generated context
+  # cannot silently enter the candidate. Resolve the choice once for all lenses.
+  # shellcheck source=edc-recover-context.sh
+  . "$SCRIPT_DIR/edc-recover-context.sh"
+  edc_resolve_review_context_choice "$CONTEXT_POLICY" || exit $?
+  if [ "$EDC_RESOLVED_CONTEXT_POLICY" = ignored ] && [ "$CONTEXT_POLICY" != ignored ]; then
+    review_args+=(--ignore-context)
+    audit_args+=(--ignore-context)
+  fi
+  CONTEXT_POLICY="$EDC_RESOLVED_CONTEXT_POLICY"
+  edc_octocode_capability_init
   if [ "$CONTEXT_POLICY" = context ]; then
-    prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit 1
+    prepare_context_once ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"} || exit $?
   fi
 
   # Child lens coordinators reuse this run's normalized state, then consume the
@@ -255,16 +293,15 @@ main() {
 
   edc_create_worker_run review-all parallel_run_dir parallel_run_id || exit $?
   mkdir -p "$parallel_run_dir/staged" "$parallel_run_dir/results"
+  if [ -n "$FINDINGS_OUTPUT" ]; then
+    export EDC_FINDINGS_OUTPUT="$FINDINGS_OUTPUT"
+    export EDC_FINDINGS_REGISTRY="$parallel_run_dir/findings"
+    export EDC_KEEP_REVIEW_TASKS=1 EDC_KEEP_AUDIT_TASKS=1
+    mkdir -p "$EDC_FINDINGS_REGISTRY"
+  fi
   security_result="$parallel_run_dir/results/security.json"
   delivery_result="$parallel_run_dir/results/delivery.json"
   quality_result="$parallel_run_dir/results/quality.json"
-  if [ "$FULL_SCOPE" -eq 1 ]; then
-    security_public=review-HEAD.md
-    delivery_public=delivery-review-current.md
-  else
-    security_public="review-$(safe_review_name "${REVIEW_TARGET:-HEAD}").md"
-    delivery_public="delivery-review-$(safe_review_name "${REVIEW_TARGET:-HEAD}").md"
-  fi
   export EDC_REVIEW_DISPLAY_TARGET="${REVIEW_TARGET:-HEAD}"
   export EDC_REVIEW_PARALLEL_STAGED_DIR="$parallel_run_dir/staged"
   export EDC_REVIEW_PROMOTION_OUTPUT="$parallel_run_dir/staged/security.md"
@@ -281,6 +318,13 @@ main() {
     run_phase security "$security_script" "$security_result" ${review_args[@]+"${review_args[@]}"}
     run_phase delivery "$delivery_script" "$delivery_result" ${review_args[@]+"${review_args[@]}"}
     run_phase quality "$audit_script" "$quality_result" ${audit_args[@]+"${audit_args[@]}"}
+  fi
+
+  # Machine records are mandatory only in opt-in mode. Validate the same source
+  # registry used by final aggregation before any public report is replaced.
+  if [ -n "$FINDINGS_OUTPUT" ] && ! node "$EDC_JSON_CLI" review-all-validate-findings ${PHASE_RESULT_SPECS[@]+"${PHASE_RESULT_SPECS[@]}"}; then
+    write_review_all_result || exit 1
+    exit 1
   fi
 
   local promotion_rc=0

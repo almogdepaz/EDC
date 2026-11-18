@@ -30,15 +30,7 @@ fi
 : "${MANIFEST:=$EDC_MANIFEST}"
 
 read_manifest_source_commit() {
-  local val
-  val=$(grep -o '"sourceCommit"[[:space:]]*:[[:space:]]*"[^"]*"' "$MANIFEST" \
-    | head -1 \
-    | sed 's/.*"sourceCommit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || true)
-  if [ -z "$val" ]; then
-    echo "ERROR: could not read sourceCommit from $MANIFEST" >&2
-    return 1
-  fi
-  echo "$val"
+  node "$EDC_JSON_CLI" context-source-commit "$MANIFEST" "$EDC_CONTEXT_DIR"
 }
 
 # Echo the manifest source only when it is an exact canonical commit object.
@@ -69,9 +61,14 @@ assert_context_fresh() {
     echo "ERROR: context missing ($MANIFEST not found)" >&2
     return 1
   fi
+  # Share the contained object reader with the public missing/incomplete choice.
+  if ! node "$EDC_JSON_CLI" context-manifest-is-object "$MANIFEST" "$EDC_CONTEXT_DIR" >/dev/null 2>&1; then
+    echo "ERROR: context manifest is malformed ($MANIFEST)" >&2
+    return 1
+  fi
   local head source_commit
   head=$(git rev-parse HEAD 2>/dev/null) || { echo "ERROR: not a git repo" >&2; return 1; }
-  source_commit=$(read_manifest_source_commit)
+  source_commit=$(read_manifest_source_commit) || return 1
   if [ "$source_commit" != "$head" ]; then
     echo "ERROR: context stale (built at: $source_commit, HEAD: $head)" >&2
     return 1

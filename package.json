@@ -1,6 +1,6 @@
 {
   "name": "@sgtbeatdown/edc",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "EDC for Pi: repository architecture maps, agent context, and context-aware code review for AI coding agents.",
   "type": "module",
   "author": "sgtbeatdown",

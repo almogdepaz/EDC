@@ -78,6 +78,10 @@ For each security-relevant diff region:
 5. Trace attacker-controlled inputs to sinks: auth decisions, filesystem paths, shell/SQL/template execution, network calls, deserialization, sensitive state writes, memory operations.
 6. For candidate findings, prove or disprove reachability. If reachability is uncertain, state the limit instead of fabricating an exploit.
 
+For material changed transformations or adapters, derive the invariant from source and consumer behavior. Try a small valid counterexample and inspect observable values and effects, not only compilation, status, or shape. Prefer existing real-code tests over copied logic or mocks. State the invariant checked, actual verification evidence, and untested boundaries; never claim an unexecuted check passed. Keep this risk-based and bounded within the current lens and assigned evidence permissions; this is not a new mandatory pass or an all-files checklist.
+
+Apply this to security properties such as validation, authorization, escaping, and sensitive state effects; retain attack-path and reachability requirements.
+
 ## Phase 2: security test confidence
 
 Only assess tests as security confidence evidence. Do not perform generic test-quality review.

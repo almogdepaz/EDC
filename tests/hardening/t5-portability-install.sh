@@ -91,7 +91,7 @@ const marketplace = JSON.parse(fs.readFileSync('.claude-plugin/marketplace.json'
 const plugin = JSON.parse(fs.readFileSync('plugins/edc/.claude-plugin/plugin.json', 'utf8'));
 const manifest = JSON.parse(fs.readFileSync('edc-context/manifest.json', 'utf8'));
 const installer = fs.readFileSync('install.sh', 'utf8');
-if (packageVersion !== '1.1.5') process.exit(1);
+if (packageVersion !== '1.1.6') process.exit(1);
 if (marketplace.metadata.version !== packageVersion) process.exit(1);
 if (!marketplace.plugins.every((entry) => entry.version === packageVersion)) process.exit(1);
 if (plugin.version !== packageVersion) process.exit(1);
@@ -101,9 +101,9 @@ if (!released) process.exit(1);
 if (!installer.includes(`EDC_INSTALL_REF="\${EDC_INSTALL_REF:-v${released[1]}}"`)) process.exit(1);
 NODE
 then
-  echo "PASS: v1.1.5 distribution, context, and installer versions match"
+  echo "PASS: v1.1.6 distribution, context, and installer versions match"
 else
-  echo "FAIL: v1.1.5 distribution, context, or installer versions drift"
+  echo "FAIL: v1.1.6 distribution, context, or installer versions drift"
   exit 1
 fi
 
@@ -117,7 +117,7 @@ else
 fi
 
 if [ -f CHANGELOG.md ] \
-  && grep -q '^## \[1.1.5\]' CHANGELOG.md \
+  && grep -q '^## \[1.1.6\]' CHANGELOG.md \
   && [ -f SECURITY.md ] \
   && grep -q 'https://github.com/almogdepaz/edc/security/advisories/new' SECURITY.md; then
   echo "PASS: release and vulnerability-reporting policy files exist"

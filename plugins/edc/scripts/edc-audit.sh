@@ -123,6 +123,7 @@ Rules:
 5. Use the embedded edc-audit skill bundle below.
 
 $(_emit_audit_prompt)
+$(edc_findings_prompt quality "$module")
 EOF
 }
 
@@ -162,6 +163,18 @@ Rules:
 
 $(_emit_audit_reporting_prompt)
 EOF
+  if [ -n "${EDC_FINDINGS_REGISTRY:-}" ]; then
+    cat <<EOF
+Machine synthesis contract (overrides placement of machine records only):
+Copy every record from this run\'s declared edc-findings-v1 worker blocks unchanged, preserving canonical quality:<module>:<local> IDs.
+Emit exactly one edc-findings-v1 block in $issues_output containing each record once, including maintainability findings. Never reconstruct missing records from prose.
+Use schemaVersion 1, status complete/partial/unavailable, findings, limitations; retain all coverage limitations and never turn an incomplete source review into complete coverage.
+When every source review is complete and synthesis finishes, retain status complete even when limitations are nonempty. Missing specs, unrun checks and unavailable optional tools are not new source-coverage gaps by themselves.
+If synthesis cannot finish, report partial or unavailable and explain the missing work; never upgrade an explicit partial or unavailable source report.
+Do not place a machine block in $complexity_output; human summaries in either report reference the same canonical IDs.
+Do not merge records across independent modules, invent IDs, import prior generated findings, or discard independent repair units.
+EOF
+  fi
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -252,6 +265,9 @@ audit_main() {
     rm -f "$candidate_file"
   fi
 
+  edc_resolve_review_context_choice "$context_policy" || exit $?
+  context_policy="$EDC_RESOLVED_CONTEXT_POLICY"
+
   edc_require_agent_cli
   edc_octocode_capability_init
 
@@ -261,7 +277,12 @@ audit_main() {
     : # Explicit no-build mode never recovers or asserts generated context.
   elif [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
     recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-      || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+      || {
+        local recovery_rc=$?
+        [ "$recovery_rc" -ne 2 ] || exit 2 # Consent failure already has a precise result.
+        edc_result_failure 1 "context-recovery-failed" "context recovery failed before quality review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"
+        exit 1
+      }
   else
     assert_context_fresh \
       || { edc_result_failure 1 "context-not-fresh" "review-all prepared context is no longer fresh" "rerun review-all so context recovery completes before workers start"; exit 1; }
@@ -338,6 +359,9 @@ audit_main() {
   fi
 
   edc_worker_manifest_write "$worker_manifest" "$run_id" "$run_dir" "$tasks_jsonl" || exit 1
+  if [ -n "${EDC_FINDINGS_REGISTRY:-}" ]; then
+    node "$EDC_FINDINGS_CLI" register-quality "$worker_manifest" "$run_dir" "$run_dir/staged/issues.md" "$run_dir/staged/complexity.md" || exit 1
+  fi
   local worker_pool_rc=0 before_snapshot after_snapshot changed_forbidden
   before_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
   after_snapshot=$(mktemp "${TMPDIR:-/tmp}/edc-audit-snapshot-$$.XXXXXX")
@@ -405,7 +429,7 @@ audit_main() {
   local synthesis_coverage_gap=0
   if ! edc_file_has_substantive_content "$staged_complexity"; then
     edc_write_coverage_gap_report "$staged_complexity" "Quality Review Coverage Gap" \
-      "Quality review unavailable for complexity analysis; the reviewer did not produce substantive output."
+      "Quality review unavailable for complexity analysis; the reviewer did not produce substantive output." 0
     synthesis_coverage_gap=1
   fi
   if ! edc_file_has_substantive_content "$staged_issues"; then

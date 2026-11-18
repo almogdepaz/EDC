@@ -1,0 +1,25 @@
+{
+  "skill": "edc-review",
+  "fixture": "adapter-contract",
+  "requiredFindings": [
+    {
+      "category": "validation preservation",
+      "evidence": "the string 'false' crosses the authorization boundary and publishes"
+    }
+  ],
+  "forbiddenFindings": [
+    {
+      "category": "compilation proves semantic preservation"
+    },
+    {
+      "category": "unexecuted counterexample claimed as verified"
+    }
+  ],
+  "requiredFiles": [
+    "src/adapter.mjs"
+  ],
+  "requiredEvidence": [
+    "only an explicit true authorizes publishing."
+  ],
+  "attackPathRequired": true
+}

@@ -281,6 +281,9 @@ delivery_main() {
       || { echo "ERROR: base is not a commit-ish ref: $base" >&2; exit 2; }
   fi
 
+  edc_resolve_review_context_choice "$context_policy" || exit $?
+  context_policy="$EDC_RESOLVED_CONTEXT_POLICY"
+
   edc_require_agent_cli
   edc_octocode_capability_init
 
@@ -298,7 +301,12 @@ delivery_main() {
     [ -n "$direct_files" ] || { edc_result_failure 1 no-reviewable-files "no reviewable source files" "inspect ignore rules and explicit exclusions"; exit 1; }
   elif [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ]; then
     recover_context_if_needed ${ignore_args[@]+"${ignore_args[@]}"} \
-      || { edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"; exit 1; }
+      || {
+        local recovery_rc=$?
+        [ "$recovery_rc" -ne 2 ] || exit 2 # Consent failure already has a precise result.
+        edc_result_failure 1 "context-recovery-failed" "context recovery failed before delivery review" "inspect the log above, then rerun edc update --agent $EDC_AGENT_CLI or edc build --agent $EDC_AGENT_CLI --force"
+        exit 1
+      }
   else
     assert_context_fresh \
       || { edc_result_failure 1 "context-not-fresh" "review-all prepared context is no longer fresh" "rerun review-all so context recovery completes before workers start"; exit 1; }
@@ -320,6 +328,11 @@ delivery_main() {
     public_report_path="delivery-review-$safe.md"
     report_path="${EDC_DELIVERY_REVIEW_OUTPUT:-$public_report_path}"
     prompt=$(build_delivery_prompt "$display_target" "$base" "$target_sha" "$base_sha" "$report_path") || exit 1
+  fi
+  if [ -n "${EDC_FINDINGS_REGISTRY:-}" ]; then
+    prompt="$prompt
+$(edc_findings_prompt delivery main)"
+    node "$EDC_FINDINGS_CLI" register-delivery "$report_path" "$EDC_REVIEW_PARALLEL_STAGED_DIR" || exit 1
   fi
   rm -f "$report_path"
 

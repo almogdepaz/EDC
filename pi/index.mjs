@@ -35,7 +35,7 @@ import {
   defaultBaseReviewArgs,
   reviewContextSummary,
   reviewDeclinedMessage,
-  shouldProceedWithReview,
+  chooseReviewContext,
 } from "./lib/review-scope.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -99,8 +99,10 @@ function isKillJobRequest(args) {
 
 function renderEdcHelp() {
   return [
-    "Usage: /edc [--no-context-refresh|--ignore-context]",
-    "Review flags apply to every lens and full/diff scope; default reviews refresh context.",
+    "Usage: /edc [--refresh-context|--no-context-refresh|--ignore-context]",
+    "Missing/stale context: build/update then review, review without generated context, or cancel.",
+    "Fresh context or explicit policy skips the prompt. Refresh conflicts with either no-build flag.",
+    "Review flags apply to every lens and full/diff scope; context mode is separate.",
     "",
     "Opens the interactive EDC menu.",
     "",
@@ -118,7 +120,7 @@ function renderEdcHelp() {
     "Direct commands:",
     "  /edc kill",
     "",
-    "Non-interactive use is intentionally CLI-only:",
+    "Non-interactive use is intentionally CLI-only; choose --refresh-context, --ignore-context, or --no-context-refresh:",
     "  edc review full --agent pi",
     "  edc review diff --agent pi",
     "  edc security full --agent pi",
@@ -487,7 +489,7 @@ if [ "$rc" -ne 0 ]; then${structuredPrefix}
 fi`;
 }
 
-function startBackgroundJob(kind, scriptName, args, ctx) {
+function startBackgroundJob(kind, scriptName, args, ctx, contextChoice) {
   const existing = runningBackgroundJob(ctx.cwd);
   if (existing) {
     return { alreadyRunning: true, ...existing };
@@ -652,7 +654,10 @@ mv -f "$status_tmp" "$status_file"
     cwd: ctx.cwd,
     detached: true,
     stdio: "ignore",
-    env: piSubprocessEnv(ctx),
+    env: {
+      ...piSubprocessEnv(ctx),
+      ...(contextChoice ? { EDC_REVIEW_CONTEXT_CHOICE: contextChoice } : {}),
+    },
   });
   child.on("error", (error) => {
     markRunningBackgroundFailed(
@@ -905,7 +910,7 @@ function interactiveOnlyMessage() {
   return [
     "/edc is interactive-only.",
     "",
-    "Use the EDC CLI for non-interactive runs:",
+    "Use the EDC CLI for non-interactive runs; choose --refresh-context, --ignore-context, or --no-context-refresh:",
     "  edc review full --agent pi",
     "  edc review diff --agent pi",
     "  edc security full --agent pi",
@@ -929,13 +934,17 @@ async function killRunningJobAction(pi, ctx) {
 
 async function startReviewJob(pi, ctx, kind, scriptName, args, commandName = "review", scope = "") {
   const renderedArgs = args || [];
-  const proceed = await shouldProceedWithReview(renderedArgs, ctx);
-  if (!proceed) {
+  const choice = await chooseReviewContext(renderedArgs, ctx);
+  if (choice.error) {
+    sendInfo(pi, "edc-review-preflight", choice.error);
+    return;
+  }
+  if (choice.cancelled) {
     sendInfo(pi, "edc-review-preflight", reviewDeclinedMessage(renderedArgs, commandName, scope));
     return;
   }
 
-  const result = startBackgroundJob(kind, scriptName, renderedArgs, ctx);
+  const result = startBackgroundJob(kind, scriptName, choice.args, ctx, choice.contextChoice);
   if (result.error) {
     sendInfo(pi, "edc-background", result.error);
   } else if (result.alreadyRunning) {
@@ -1070,7 +1079,7 @@ async function handleEdcMenu(pi, args, ctx) {
     case EDC_MENU.FULL_REVIEW:
     case EDC_MENU.DIFF_DEFAULT:
     case EDC_MENU.DIFF_CUSTOM:
-      await runReviewFromMenuScope(pi, ctx, choice, tokenizeArgs(args).filter(arg => arg === "--no-context-refresh" || arg === "--ignore-context"));
+      await runReviewFromMenuScope(pi, ctx, choice, tokenizeArgs(args).filter(arg => arg === "--no-context-refresh" || arg === "--ignore-context" || arg === "--refresh-context"));
       break;
     case EDC_MENU.JOB_STATUS:
       startBackgroundStatusWatcher(ctx);

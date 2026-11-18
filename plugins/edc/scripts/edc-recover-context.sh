@@ -45,10 +45,87 @@ if ! command -v read_canonical_context_source_commit >/dev/null 2>&1; then
   . "$_edc_recover_dir/edc-assert-fresh.sh"
 fi
 
+# Report consent failures through the active orchestrator's existing result API.
+# Security retains its older result writer; the other lenses use edc_result_failure.
+_edc_context_choice_failure() {
+  local reason="$1" message="$2" hint="$3"
+  echo "$message" >&2
+  echo "next step: $hint" >&2
+  if [ "${EDC_REVIEW_RESULT_ACTIVE:-0}" = 1 ]; then
+    edc_write_review_result 2 "$reason" "$message" "$hint" "" ""
+  else
+    edc_result_failure 2 "$reason" "$message" "$hint"
+  fi
+  return 2
+}
+
+# Public wrappers set ask (terminal), check (Pi fresh/no consent), or refresh
+# (explicit consent). Unset retains the internal orchestrator recovery contract.
+# Call after scope/candidate validation and before any model work. The result is
+# a policy, not a context mode; callers must pass ignored through to every lens.
+edc_resolve_review_context_choice() {
+  EDC_RESOLVED_CONTEXT_POLICY="$1"
+  local choice="${EDC_REVIEW_CONTEXT_CHOICE:-}" state answer=""
+  [ "$1" = context ] || return 0
+  [ "${EDC_REVIEW_CONTEXT_PREPARED:-0}" != 1 ] || return 0
+  case "$choice" in
+    ""|refresh) return 0 ;;
+    ask|check) ;;
+    *)
+      _edc_context_choice_failure context-policy-invalid "Invalid public review context choice." \
+        "rerun through edc with --refresh-context, --ignore-context, or --no-context-refresh"
+      return 2
+      ;;
+  esac
+  # Reuse contained JS reads for the UX state and the recovery gate for freshness.
+  state=$(node --input-type=module -e '
+    const { pathToFileURL } = await import("node:url");
+    const { getContextFreshness } = await import(pathToFileURL(process.argv[1]).href);
+    process.stdout.write(getContextFreshness(process.cwd()).state);
+  ' "$_edc_recover_dir/../hooks/lib/route.mjs") || {
+    _edc_context_choice_failure context-freshness-unknown "Could not determine context freshness." \
+      "check repository access, then choose --refresh-context, --ignore-context, or --no-context-refresh"
+    return 2
+  }
+  if [ "$state" = fresh ] && assert_context_fresh 2>/dev/null; then return 0; fi
+  case "$state" in
+    missing|stale) ;;
+    *)
+      _edc_context_choice_failure context-freshness-unknown "Context freshness is unknown; no review work was started." \
+        "check the repository, then choose --refresh-context, --ignore-context, or --no-context-refresh"
+      return 2
+      ;;
+  esac
+  if [ "$choice" = check ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    _edc_context_choice_failure context-policy-required "Context is $state; refresh consent is required before reviewing." \
+      "rerun with --refresh-context, --ignore-context, or --no-context-refresh (non-interactive runs never refresh implicitly)"
+    return 2
+  fi
+  local action=build
+  [ "$state" != stale ] || action=update
+  printf 'EDC context: %s.\n1) %s context then review (may spawn agents)\n2) review without generated context\n3) cancel\ncontext choice [1/2/3]: ' "$state" "$action" >&2
+  if ! IFS= read -r answer; then
+    _edc_context_choice_failure review-cancelled "Review cancelled; context was not refreshed." \
+      "rerun review and choose --refresh-context, --ignore-context, or --no-context-refresh"
+    return 2
+  fi
+  case "$answer" in
+    1) export EDC_REVIEW_CONTEXT_CHOICE=refresh; return 0 ;;
+    2) EDC_RESOLVED_CONTEXT_POLICY=ignored; return 0 ;;
+    *)
+      _edc_context_choice_failure review-cancelled "Review cancelled; context was not refreshed." \
+        "rerun review and choose --refresh-context, --ignore-context, or --no-context-refresh"
+      return 2
+      ;;
+  esac
+}
+
 # Internal: classify why context is not fresh.
 # Echoes "MISSING" or "STALE". Returns 0 on success.
 _edc_classify_context_state() {
-  if [ ! -f "$MANIFEST" ]; then
+  # Missing, unreadable, corrupt, and non-object manifests need a rebuild.
+  # Object manifests still pass through the canonical update-provenance guard.
+  if ! node "$EDC_JSON_CLI" context-manifest-is-object "$MANIFEST" "$EDC_CONTEXT_DIR" >/dev/null 2>&1; then
     echo "MISSING"; return 0
   fi
   local ctx="$EDC_INDEX"
@@ -180,6 +257,15 @@ recover_context_if_needed() {
   if assert_context_fresh 2>/dev/null; then
     return 0
   fi
+  # Freshness can change after the public wrapper checks it. An observation of
+  # fresh context is not consent to start recovery later in the same run.
+  case "${EDC_REVIEW_CONTEXT_CHOICE:-}" in
+    ask|check)
+      _edc_context_choice_failure context-policy-required "Context changed after preflight; refresh was not authorized." \
+        "rerun with --refresh-context, --ignore-context, or --no-context-refresh"
+      return 2
+      ;;
+  esac
 
   _edc_split_recovery_args "$@"
 

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "edcVersion": "1.1.5",
+  "edcVersion": "1.1.6",
   "repoContextFile": "edc-context/index.md",
   "reports": {
     "issues": "edc-context/reports/issues.md",

@@ -42,6 +42,7 @@ edc_resolve_script_dir() {
 EDC_SCRIPTS_DIR="$(edc_resolve_script_dir)"
 export EDC_SCRIPTS_DIR
 EDC_JSON_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/json-cli.mjs"
+EDC_FINDINGS_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/review-findings.mjs"
 EDC_STREAM_FILTER_CLI="$EDC_SCRIPTS_DIR/../hooks/lib/stream-filter.mjs"
 EDC_INDEX="$EDC_CONTEXT_DIR/index.md"
 EDC_MODULES_DIR="$EDC_CONTEXT_DIR/modules"
@@ -109,7 +110,8 @@ edc_file_has_substantive_content() {
 }
 
 edc_write_coverage_gap_report() {
-  local path="$1" title="$2" summary="$3"
+  # The quality complexity summary passes 0: records live only in issues.md.
+  local path="$1" title="$2" summary="$3" machine_record="${4:-1}"
   if [ -e "$path" ] || [ -L "$path" ]; then
     node "$EDC_JSON_CLI" validate-staged-output "$path" "$(dirname "$path")" >/dev/null
   fi
@@ -118,7 +120,20 @@ edc_write_coverage_gap_report() {
     printf '# %s\n\n' "$title"
     printf '## Summary\n\n%s\n\n' "$summary"
     printf '## Recommendation\n\nCONDITIONAL\n'
+    if [ -n "${EDC_FINDINGS_REGISTRY:-}" ] && [ "$machine_record" -eq 1 ]; then
+      cat <<'EDC_FINDINGS_GAP'
+
+```edc-findings-v1
+{"schemaVersion":1,"status":"unavailable","findings":[],"limitations":["coordinator: reviewer produced no substantive output"]}
+```
+EDC_FINDINGS_GAP
+    fi
   } > "$path"
+}
+
+edc_findings_prompt() {
+  [ -n "${EDC_FINDINGS_REGISTRY:-}" ] || return 0
+  node "$EDC_FINDINGS_CLI" prompt "$@"
 }
 
 edc_result_success() {

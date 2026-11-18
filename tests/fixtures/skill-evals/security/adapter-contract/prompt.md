@@ -1,0 +1,1 @@
+Use `edc-review` to review the changed adapter in src/adapter.mjs. Derive the source/consumer contract and a minimal counterexample. Use only the assigned lens. Do not claim tests ran without execution evidence.

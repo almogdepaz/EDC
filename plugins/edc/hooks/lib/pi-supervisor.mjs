@@ -80,7 +80,26 @@ function exitOnce(code) {
   exited = true;
   if (escalationTimer) clearTimeout(escalationTimer);
   escalationTimer = null;
-  process.exit(code);
+  // A successful child exit does not mean our piped output has been delivered.
+  // Empty writes form ordered barriers behind all queued stdout/stderr bytes.
+  // A consumer that never drains must fail within the existing cleanup grace.
+  const outputTimer = setTimeout(() => {
+    process.stderr.write("ERROR: pi subprocess output did not drain before shutdown\n");
+    process.exit(code || 1);
+  }, SUBPROCESS_TERMINATION_GRACE_MS);
+  let pending = 2;
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.write("", (error) => {
+      if (error) {
+        clearTimeout(outputTimer);
+        process.exit(code || 1);
+      }
+      if (--pending === 0) {
+        clearTimeout(outputTimer);
+        process.exit(code);
+      }
+    });
+  }
 }
 
 function waitForKilledGroup() {
@@ -111,7 +130,11 @@ function finish(code, signal = "SIGTERM") {
 }
 
 for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) {
-  process.on(signal, () => finish(signalExitCode(signal), signal));
+  process.on(signal, () => {
+    // exitOnce only starts draining after the managed group is gone.
+    if (exited) process.exit(signalExitCode(signal));
+    finish(signalExitCode(signal), signal);
+  });
 }
 
 process.stdout.on("error", (error) => {

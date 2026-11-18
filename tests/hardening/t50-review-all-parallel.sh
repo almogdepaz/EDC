@@ -7,14 +7,18 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 export EDC_CONFIG_FILE="$TMP/missing-config"
 unset EDC_PARALLEL
 trap 'rm -rf "$TMP"' EXIT
+# Explicitly authorize the existing synthetic recovery boundary.
+export EDC_REVIEW_CONTEXT_CHOICE=refresh
 
 printf '=== T50: review-all concurrency modes ===\n'
 
 prepare_plugin() {
   cp -R "$ROOT/plugins/edc" "$TMP/plugin"
-  cat > "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
-#!/usr/bin/env bash
+  # Retain real consent resolution; override only the existing recovery boundary.
+  cat >> "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
+
 recover_context_if_needed() {
+  [ "${EDC_REVIEW_CONTEXT_CHOICE:-}" = refresh ] || return 1
   printf '%s\n' "$@" > "$EDC_T50_STATE/recovery-args"
   printf 'context prepared\n' >> "$EDC_T50_STATE/context-events"
 }

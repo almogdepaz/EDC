@@ -33,20 +33,30 @@ import {
 } from "./paths.mjs";
 // --- manifest ---
 
-export function loadManifest(projectRoot) {
-  const manifestContent = readContainedRegularFile(projectRoot, EDC_CONTEXT_DIR, EDC_MANIFEST_REL);
+// Shell callers may supply their configured repo-relative containment root.
+// JS/Pi callers retain the canonical layout unless a root is explicitly supplied.
+export function loadManifest(projectRoot, manifestPath = EDC_MANIFEST_REL, containmentRootRel = EDC_CONTEXT_DIR) {
+  const manifestContent = readContainedRegularFile(projectRoot, containmentRootRel, manifestPath);
   if (manifestContent === null) return null;
   try {
-    return JSON.parse(manifestContent);
+    const manifest = JSON.parse(manifestContent);
+    return manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) ? manifest : null;
   } catch {
     return null;
   }
 }
 
+// Preserve the top-level value exactly. In particular, shell command substitution
+// must not turn a sourceCommit ending in a newline into valid provenance.
+export function manifestSourceCommit(manifest) {
+  const source = manifest?.sourceCommit;
+  return typeof source === "string" && !/[\x00-\x20\x7f]/.test(source) ? source : "";
+}
+
 // --- staleness ---
 
 function checkStaleness(projectRoot, manifest) {
-  const sourceCommit = manifest?.sourceCommit;
+  const sourceCommit = manifestSourceCommit(manifest);
   if (!sourceCommit) return null;
   try {
     const head = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -84,7 +94,7 @@ export function getContextFreshness(projectRoot) {
     return { state: "unknown", reason: "git" };
   }
 
-  const sourceCommit = manifest.sourceCommit || "";
+  const sourceCommit = manifestSourceCommit(manifest);
   if (sourceCommit !== headCommit) {
     return { state: "stale", sourceCommit, headCommit };
   }
@@ -353,8 +363,10 @@ function isPathInside(root, candidate) {
 function readContainedRegularFile(projectRoot, containmentRootRel, fileRel) {
   let fd;
   try {
+    if (isAbsolute(containmentRootRel)) return null;
     const physicalProjectRoot = realpathSync(projectRoot);
     const expectedContainmentRoot = resolve(physicalProjectRoot, containmentRootRel);
+    if (!isPathInside(physicalProjectRoot, expectedContainmentRoot)) return null;
     const physicalContainmentRoot = realpathSync(join(projectRoot, containmentRootRel));
     if (physicalContainmentRoot !== expectedContainmentRoot) return null;
 

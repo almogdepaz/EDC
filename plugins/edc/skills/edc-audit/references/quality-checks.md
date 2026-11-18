@@ -107,7 +107,9 @@ Find similar code blocks:
 - types/interfaces that differ by 1-2 fields
 - validation/parsing/serialization logic copied across files
 
-Use the module doc's coupling notes to distinguish legitimate repeated adapters from accidental duplicate sources of truth.
+Use the module doc's coupling notes to distinguish legitimate repeated adapters from accidental duplicate sources of truth. Before extracting duplicate mapping logic, verify that both copies implement the correct behavioral contract; sharing a defect is not simplification.
+
+For material changed transformations or adapters, derive the invariant from source and consumer behavior. Try a small valid counterexample and inspect observable values and effects, not only compilation, status, or shape. Prefer existing real-code tests over copied logic or mocks. State the invariant checked, actual verification evidence, and untested boundaries; never claim an unexecuted check passed. Keep this risk-based and bounded within the current lens and assigned evidence permissions; this is not a new mandatory pass or an all-files checklist.
 
 ## File and function size
 

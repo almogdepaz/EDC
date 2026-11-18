@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const { default: edcExtension } = await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href);
+const { CONTEXT_REVIEW_MENU } = await import(new URL('./lib/review-scope.mjs', pathToFileURL(process.env.EDC_TEST_EXTENSION)).href);
 
 delete process.env.EDC_PI_SUBPROCESS;
 
@@ -53,7 +54,7 @@ try {
   };
   await edcExtension(pi);
 
-  const selections = ["changes vs default branch", "security review", "job status"];
+  const selections = ["changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status"];
   const ctx = {
     cwd,
     hasUI: true,

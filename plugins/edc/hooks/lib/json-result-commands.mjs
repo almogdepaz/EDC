@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
+import { collectFindings, publishArtifact } from "./review-findings.mjs";
 
 function die(message, code = 1) {
   console.error(message);
@@ -177,13 +178,24 @@ function writeResult(args) {
   writeJsonFileAtomic(path, result);
 }
 
-function aggregateReviewAll(args) {
-  const [path, startedHead, finishedHead, ...phaseArgs] = args;
+function reviewAllPhases(phaseArgs) {
   if (phaseArgs.length === 0 || phaseArgs.length % 3 !== 0) die("review-all-aggregate requires phase/result/exit triples", 64);
   const phases = [];
   for (let index = 0; index < phaseArgs.length; index += 3) {
     phases.push(normalizeReviewAllPhase(phaseArgs[index], phaseArgs[index + 1], phaseArgs[index + 2]));
   }
+  return phases;
+}
+
+function collectReviewAllFindings(phases) {
+  const scope = {};
+  applyResultScope(scope);
+  return collectFindings({ repo: process.cwd(), commit: scope.candidateCommit, base: scope.base, kind: scope.candidateKind, registry: process.env.EDC_FINDINGS_REGISTRY, phaseResults: phases });
+}
+
+function aggregateReviewAll(args) {
+  const [path, startedHead, finishedHead, ...phaseArgs] = args;
+  const phases = reviewAllPhases(phaseArgs);
   const failed = phases.find((phase) => phase.status === "failed" || Number(phase.exitCode) !== 0);
   const warning = phases.some((phase) => phase.status === "success-with-warning");
   const status = failed ? "failed" : warning ? "success-with-warning" : "success";
@@ -211,6 +223,25 @@ function aggregateReviewAll(args) {
     result.childResult = failed.resultFile;
     if (failed.details && Object.keys(failed.details).length > 0) result.details = failed.details;
   }
+  if (process.env.EDC_FINDINGS_OUTPUT) {
+    try {
+      const artifact = collectReviewAllFindings(phases);
+      result.findings = { ...publishArtifact(process.env.EDC_FINDINGS_OUTPUT, artifact), status: artifact.status };
+      result.outputs.push(result.findings.path);
+      if (artifact.status === "failed") throw new Error("structured findings incomplete or invalid; inspect artifact errors and retained raw reports");
+      if (artifact.status === "success-with-warning" && result.status === "success") {
+        result.status = "success-with-warning";
+        result.reasonCode = "success-with-warning";
+        result.message = "review-all completed with structured coverage warnings";
+      }
+    } catch (error) {
+      result.status = "failed"; result.exitCode = 1;
+      result.reasonCode = "structured-findings-failed";
+      result.message = error.message;
+      result.failedPhase ||= "findings";
+      result.hint = "inspect retained phase results, raw reports, and findings diagnostics; no prose fallback was used";
+    }
+  }
   writeJsonFileAtomic(path, result);
   printReviewAllSummary(result);
   process.exit(result.exitCode);
@@ -229,6 +260,11 @@ export function dispatchResultCommand(cmd, args) {
     case "validate-staged-output":
       validateStagedOutput(args);
       return true;
+    case "review-all-validate-findings": {
+      const artifact = collectReviewAllFindings(reviewAllPhases(args));
+      if (artifact.status === "failed") die("structured findings validation failed before canonical promotion; raw reports retained");
+      return true;
+    }
     case "review-all-aggregate":
       aggregateReviewAll(args);
       return true;

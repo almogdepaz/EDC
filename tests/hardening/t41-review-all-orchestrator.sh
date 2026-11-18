@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
+# Explicitly authorize the existing synthetic recovery boundary.
+export EDC_REVIEW_CONTEXT_CHOICE=refresh
 
 printf '=== T41: review-all orchestrator ===\n'
 
@@ -73,9 +75,10 @@ cat > "$EDC_RESULT_FILE" <<'JSON'
 {"schemaVersion":1,"kind":"audit","phase":"quality","status":"success","exitCode":0,"reasonCode":"success","message":"quality review succeeded","outputs":["edc-context/reports/issues.md","edc-context/reports/complexity.md"]}
 JSON
 SH
-  cat > "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
-#!/usr/bin/env bash
-recover_context_if_needed() { return 0; }
+  # Retain real consent resolution; override only the existing recovery boundary.
+  cat >> "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
+
+recover_context_if_needed() { [ "${EDC_REVIEW_CONTEXT_CHOICE:-}" = refresh ]; }
 SH
   chmod +x "$TMP/plugin/scripts/edc-review.sh" "$TMP/plugin/scripts/edc-delivery-review.sh" "$TMP/plugin/scripts/edc-audit.sh" "$TMP/plugin/scripts/edc-recover-context.sh"
   git -C "$TMP/work" init -q

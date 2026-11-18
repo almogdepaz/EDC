@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/edc-test.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
+# Explicitly authorize the existing synthetic recovery boundary.
+export EDC_REVIEW_CONTEXT_CHOICE=refresh
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "PASS: $1"; }
@@ -15,9 +17,10 @@ printf '=== T49: dirty candidate scope ===\n'
 prepare_plugin() {
   rm -rf "$TMP/plugin"
   cp -R "$ROOT/plugins/edc" "$TMP/plugin"
-  cat > "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
-#!/usr/bin/env bash
-recover_context_if_needed() { return 0; }
+  # Retain real consent resolution; override only the existing recovery boundary.
+  cat >> "$TMP/plugin/scripts/edc-recover-context.sh" <<'SH'
+
+recover_context_if_needed() { [ "${EDC_REVIEW_CONTEXT_CHOICE:-}" = refresh ]; }
 SH
   chmod +x "$TMP/plugin/scripts/edc-recover-context.sh"
   local phase script kind

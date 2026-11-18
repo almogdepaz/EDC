@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { createHash } from "node:crypto";
 
 const scripts = resolve("plugins/edc/scripts");
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "edc-no-build."));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "edc-no-build.")));
   const env = { ...process.env, EDC_AGENT_CLI: "claude", EDC_REVIEW_MODEL: "test-model", EDC_BUILD_MODEL: "test-model", EDC_PARALLEL: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const git = (...args) => execFileSync("git", args, { cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-q");
@@ -52,8 +53,37 @@ else:
 if not paths:
     print('unexpected prompt (possible hidden context build)', file=sys.stderr); sys.exit(9)
 for path in paths:
+    import os
+    if os.environ.get('EDC_TEST_MISSING_COMPLEXITY') == '1' and 'CANONICAL_COMPLEXITY_REPORT: '+path in prompt:
+        continue
     p = pathlib.Path(path); p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text('## Findings\\n\\nverified candidate source; no findings.\\n')
+    import os, json
+    if os.environ.get('EDC_TEST_STRUCTURED') == '1' and 'CANONICAL_COMPLEXITY_REPORT: '+path not in prompt:
+        if os.environ.get('EDC_TEST_MISSING_BLOCK') != '1' or 'DELIVERY REVIEW TASK' not in prompt:
+            records = []
+            if os.environ.get('EDC_TEST_FINDING') == '1':
+                if 'AUDIT SYNTHESIS TASK' in prompt:
+                    for contents in staged.values():
+                        records.extend(json.loads(contents.split('\x60\x60\x60edc-findings-v1\\n')[1].split('\\n\x60\x60\x60')[0])['findings'])
+                else:
+                    namespace = re.search(r'Use IDs ([A-Za-z0-9:._-]+):F1', prompt).group(1)
+                    records = [{'id':namespace+':F1', 'title':'preserve zero', 'severity':'medium',
+                                'primaryLocation':{'path':'src/new.js','startLine':1,'endLine':1},
+                                'relatedLocations':[{'path':'src/old.js','startLine':1,'endLine':1}],
+                                'description':'zero becomes three', 'impact':'extra attempts occur', 'recommendation':'default only absence',
+                                'verification':{'evidence':['candidate blobs inspected'], 'limitations':['not executed']}}]
+            if os.environ.get('EDC_TEST_SYNTHESIS_LOSS') == '1' and 'AUDIT SYNTHESIS TASK' in prompt:
+                records = []
+            limitations = json.loads(os.environ.get('EDC_TEST_REPORT_LIMITATIONS', '[]'))
+            status = 'complete'
+            if 'DELIVERY REVIEW TASK' in prompt:
+                status = os.environ.get('EDC_TEST_DELIVERY_STATUS', 'complete')
+                if status != 'complete': limitations.append('Assigned source src/old.js could not be inspected.')
+                if limitations: p.write_text('## Delivery / Architecture Review\\n\\nDelivery verdict: No spec available. Observable claims reviewed; verification limits retained.\\n')
+            if status == 'unavailable': records = []
+            with p.open('a') as output:
+                output.write('\\n\x60\x60\x60edc-findings-v1\\n'+json.dumps({'schemaVersion':1, 'status':status, 'findings':records, 'limitations':limitations})+'\\n\x60\x60\x60\\n')
 `, { mode: 0o755 });
   writeFileSync(join(root, ".git/mock-bin/octocode"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   env.PATH = `${join(root, ".git/mock-bin")}:${env.PATH}`;
@@ -64,6 +94,238 @@ for path in paths:
   const prompts = () => promptList().join("\n");
   return { root, env, git, base, candidate, run, prompts, promptList, close: () => rmSync(root, { recursive: true, force: true }) };
 }
+
+test('opt-in findings output uses immutable candidate and exposes provenance; missing block fails without dropping phases', () => {
+  const f = fixture();
+  try {
+    f.env.EDC_TEST_STRUCTURED = '1';
+    f.env.EDC_RESULT_FILE = join(f.root, '.git/combined-result.json');
+    for (const missing of [false, true]) {
+      f.env.EDC_TEST_MISSING_BLOCK = missing ? '1' : '0';
+      const path = join(f.root, missing ? 'partial.json' : 'findings.json');
+      const r = f.run('edc', ['review', '--agent', 'claude', '--diff', `${f.base}...HEAD`, '--committed-only', '--ignore-context', '--findings-json', path]);
+      assert.equal(r.status, missing ? 1 : 0, r.stdout + r.stderr);
+      const artifact = JSON.parse(readFileSync(path, 'utf8'));
+      assert.equal(artifact.candidate.commit, f.candidate);
+      assert.equal(artifact.status, missing ? 'failed' : 'success');
+      assert.equal(artifact.phases.length, 3);
+      assert.equal(artifact.findings.length, 0);
+      assert.ok(artifact.reports.length >= 3);
+      const result = JSON.parse(readFileSync(f.env.EDC_RESULT_FILE, 'utf8'));
+      assert.equal(result.findings.path, path);
+      assert.equal(artifact.kind, 'edc-findings');
+      assert.equal(result.findings.sha256, createHash('sha256').update(readFileSync(path)).digest('hex'));
+      assert.equal(result.phases.length, 3);
+    }
+  } finally { f.close(); }
+});
+
+for (const status of ['complete', 'partial', 'unavailable']) {
+  test(`structured source completeness: ${status} with verification limitations`, () => {
+    const f = fixture();
+    try {
+      const limitations = ['No formal spec found; observable claims reviewed.', 'Tests and external services were not run.', 'Generated context ignored; optional semantic tools unavailable.'];
+      f.env.EDC_TEST_STRUCTURED = '1'; f.env.EDC_TEST_FINDING = '1';
+      f.env.EDC_TEST_DELIVERY_STATUS = status;
+      f.env.EDC_TEST_REPORT_LIMITATIONS = JSON.stringify(limitations);
+      f.env.EDC_RESULT_FILE = join(f.root, '.git/combined.json');
+      const path = join(f.root, 'findings.json');
+      const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', path]);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const artifact = JSON.parse(readFileSync(path, 'utf8'));
+      const result = JSON.parse(readFileSync(f.env.EDC_RESULT_FILE, 'utf8'));
+      const expected = status === 'complete' ? 'success' : 'success-with-warning';
+      assert.equal(artifact.status, expected); assert.equal(result.status, expected);
+      assert.equal(result.findings.status, expected);
+      assert.equal(result.findings.sha256, createHash('sha256').update(readFileSync(path)).digest('hex'));
+      assert.deepEqual(artifact.errors, []);
+      assert.equal(artifact.findings.length, status === 'unavailable' ? 2 : 3);
+      const delivery = artifact.reports.find(report => report.phase === 'delivery');
+      assert.equal(delivery.status, status);
+      assert.deepEqual(delivery.limitations.slice(0, limitations.length), limitations);
+      assert.match(readFileSync(delivery.path, 'utf8'), /Delivery verdict: No spec available/);
+      if (status !== 'complete') assert.match(delivery.limitations.at(-1), /could not be inspected/);
+      if (status === 'complete') {
+        for (const prompt of f.promptList()) {
+          if (prompt.includes('AUDIT SYNTHESIS TASK')) {
+            assert.match(prompt, /When every source review is complete.*retain status complete even when limitations are nonempty/);
+          } else {
+            assert.match(prompt, /status describes completion of the assigned source review/i);
+          }
+        }
+      }
+    } finally { f.close(); }
+  });
+}
+
+for (const fault of ['EDC_TEST_MISSING_BLOCK', 'EDC_TEST_SYNTHESIS_LOSS']) {
+  test(`invalid machine coverage (${fault}) preserves canonical reports and failed artifact receipts`, () => {
+    const f = fixture();
+    try {
+      f.env.EDC_TEST_STRUCTURED = '1'; f.env.EDC_TEST_FINDING = '1'; f.env[fault] = '1';
+      f.env.EDC_RESULT_FILE = join(f.root, '.git/combined.json');
+      mkdirSync(join(f.root, 'edc-context/reports'), { recursive: true });
+      const prior = ['review-HEAD.md', 'delivery-review-HEAD.md', 'edc-context/reports/issues.md', 'edc-context/reports/complexity.md'];
+      for (const path of prior) writeFileSync(join(f.root, path), '# prior validated ' + path + '\n');
+      const path = join(f.root, 'findings.json');
+      const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', path]);
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      for (const path of prior) assert.equal(readFileSync(join(f.root, path), 'utf8'), '# prior validated ' + path + '\n', fault + ': ' + path);
+      const artifact = JSON.parse(readFileSync(path, 'utf8'));
+      const result = JSON.parse(readFileSync(f.env.EDC_RESULT_FILE, 'utf8'));
+      assert.equal(artifact.status, 'failed'); assert.equal(result.status, 'failed');
+      assert.equal(result.findings.status, 'failed');
+      assert.equal(result.findings.sha256, createHash('sha256').update(readFileSync(path)).digest('hex'));
+      assert.match(JSON.stringify(artifact.errors), fault === 'EDC_TEST_MISSING_BLOCK' ? /exactly one declared/ : /synthesis lost/);
+      assert.deepEqual(artifact.phases, result.phases);
+      assert.equal(result.phases.length, 3);
+      for (const phase of result.phases) assert.equal(JSON.parse(readFileSync(phase.resultFile, 'utf8')).status, 'success');
+      for (const report of artifact.reports) assert.ok(readFileSync(report.path).length > 0);
+    } finally { f.close(); }
+  });
+}
+
+test('findings reject coordinator destination collisions before dispatch', () => {
+  for (const destination of ['edc-context/build/last-run.json', '.git/../.git/combined.json', 'review-HEAD.md', 'delivery-review-HEAD.md', 'edc-context/reports/issues.md', 'edc-context/reports/complexity.md', 'edc-context/build/spawn-log.jsonl']) {
+    const f = fixture();
+    try {
+      f.env.EDC_TEST_STRUCTURED = '1';
+      delete f.env.EDC_RESULT_FILE;
+      if (destination.includes('combined.json')) f.env.EDC_RESULT_FILE = join(f.root, '.git/combined.json');
+      mkdirSync(join(f.root, 'edc-context/build'), { recursive: true });
+      mkdirSync(join(f.root, 'edc-context/reports'), { recursive: true });
+      const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', destination]);
+      assert.notEqual(r.status, 0, destination + ': ' + r.stdout + r.stderr);
+      assert.equal(f.promptList().length, 0, destination);
+      assert.match(r.stderr, /collides with coordinator output/, destination);
+    } finally { f.close(); }
+  }
+});
+
+for (const [label, destination] of [
+  ['missing-prefix', '.git/not-created/../result-alias/../findings.json'],
+  ['present-prefix', '.git/present/../result-alias/../findings.json'],
+  ['nested-prefix', '.git/not-created/deeper/../../result-alias/../findings.json'],
+  ['direct-symlink', '.git/result-alias/../findings.json'],
+  ['ordinary', '.git/present/../ordinary.json'],
+]) {
+  test(`structured reserved paths reject ${label} parent traversal before dispatch`, () => {
+    const f = fixture();
+    try {
+      f.env.EDC_TEST_STRUCTURED = '1';
+      mkdirSync(join(f.root, '.git/target/deep'), { recursive: true });
+      mkdirSync(join(f.root, '.git/present'));
+      symlinkSync(join(f.root, '.git/target/deep'), join(f.root, '.git/result-alias'));
+      // Keep raw components: join/resolve would erase the failing spelling.
+      const resultPath = f.root + '/' + destination;
+      f.env.EDC_RESULT_FILE = label === 'ordinary' ? destination : resultPath;
+      const output = join(f.root, '.git/target/findings.json');
+      assert.equal(realpathSync.native(f.root + '/.git/result-alias/..'), join(f.root, '.git/target'));
+      if (label === 'missing-prefix') assert.throws(() => realpathSync.native(f.root + '/.git/not-created/..'), /ENOENT/);
+      const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', output]);
+      assert.notEqual(r.status, 0, r.stdout + r.stderr);
+      assert.equal(f.promptList().length, 0);
+      assert.match(r.stderr, /unsupported reserved coordinator output path.*parent-directory/);
+      assert.ok(r.stderr.includes(f.env.EDC_RESULT_FILE));
+      const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+      assert.equal(result.status, 'failed');
+      assert.equal(result.findings, undefined, 'rejected paths must not advertise a success findings receipt');
+    } finally { f.close(); }
+  });
+}
+
+for (const mode of ['relative', 'absolute', 'alias', 'legacy-traversal']) {
+  test(`reserved path contract preserves ${mode} writer behavior`, () => {
+    const f = fixture();
+    try {
+      const structured = mode !== 'legacy-traversal';
+      f.env.EDC_TEST_STRUCTURED = structured ? '1' : '0';
+      mkdirSync(join(f.root, '.git/target/deep'), { recursive: true });
+      symlinkSync(join(f.root, '.git/target/deep'), join(f.root, '.git/result-alias'));
+      const destination = mode === 'legacy-traversal' ? '.git/not-created/../result-alias/../legacy.json'
+        : mode === 'alias' ? '.git/result-alias/missing/result.json' : '.git/missing/result.json';
+      const resultPath = f.root + '/' + destination;
+      f.env.EDC_RESULT_FILE = mode === 'relative' ? destination : resultPath;
+      const output = join(f.root, 'findings.json');
+      const args = ['HEAD', '--base', f.base, '--committed-only', '--ignore-context'];
+      if (structured) args.push('--findings-json', output);
+      const r = f.run('edc-review-all.sh', args);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const result = JSON.parse(readFileSync(resultPath, 'utf8'));
+      assert.equal(result.status, 'success');
+      assert.equal(f.promptList().length, 4);
+      if (structured) {
+        const bytes = readFileSync(output);
+        assert.equal(JSON.parse(bytes).kind, 'edc-findings');
+        assert.equal(result.findings.sha256, createHash('sha256').update(bytes).digest('hex'));
+      } else assert.equal(result.findings, undefined);
+    } finally { f.close(); }
+  });
+}
+
+test('opt-in nonempty records flow through all lenses and quality synthesis without semantic deduplication', () => {
+  const f = fixture();
+  try {
+    f.env.EDC_TEST_STRUCTURED = '1'; f.env.EDC_TEST_FINDING = '1';
+    const path = join(f.root, 'findings.json');
+    writeFileSync(join(f.root, 'src/new.js'), 'mutable poison');
+    const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', path]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(artifact.findings.length, 3);
+    assert.equal(new Set(artifact.findings.map(x => x.id)).size, 3);
+    for (const finding of artifact.findings) assert.equal(finding.relatedLocations[0].path, 'src/old.js');
+    assert.equal(artifact.candidate.commit, f.candidate);
+  } finally { f.close(); }
+});
+
+test('opt-in working-tree snapshot preserves immutable identity without moving HEAD', () => {
+  const f = fixture();
+  try {
+    f.env.EDC_TEST_STRUCTURED = '1'; f.env.EDC_TEST_FINDING = '1';
+    writeFileSync(join(f.root, 'src/new.js'), 'snapshot-only\n');
+    const path = join(f.root, 'findings.json');
+    const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--include-working-tree', '--ignore-context', '--findings-json', path]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(artifact.candidate.kind, 'working-tree-snapshot');
+    assert.notEqual(artifact.candidate.commit, f.candidate);
+    assert.equal(f.git('rev-parse', 'HEAD'), f.candidate);
+    assert.equal(f.git('show', `${artifact.candidate.commit}:src/new.js`).trim(), 'snapshot-only');
+    assert.equal(artifact.findings.length, 3);
+  } finally { f.close(); }
+});
+
+test('opt-in deterministic complexity coverage gap remains a warning, not duplicate machine output', () => {
+  const f = fixture();
+  try {
+    f.env.EDC_TEST_STRUCTURED = '1'; f.env.EDC_TEST_MISSING_COMPLEXITY = '1';
+    const path = join(f.root, 'findings.json');
+    const r = f.run('edc-review-all.sh', ['HEAD', '--base', f.base, '--committed-only', '--ignore-context', '--findings-json', path]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const artifact = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(artifact.status, 'success-with-warning');
+    assert.deepEqual(artifact.errors, []);
+    assert.equal(artifact.phases.find(p => p.phase === 'quality').status, 'success-with-warning');
+  } finally { f.close(); }
+});
+
+test('findings full scope, missing base, and existing destination reject before model dispatch', () => {
+  const f = fixture();
+  try {
+    const missingBase = f.run('edc-review-all.sh', ['HEAD', '--committed-only', '--ignore-context', '--findings-json', join(f.root, 'new.json')]);
+    assert.notEqual(missingBase.status, 0);
+    assert.match(missingBase.stderr, /requires an explicit --base/);
+    assert.equal(f.promptList().length, 0);
+    const out = join(f.root, 'existing.json'); writeFileSync(out, 'keep');
+    for (const args of [['--full'], ['HEAD', '--base', f.base, '--committed-only']]) {
+      const r = f.run('edc-review-all.sh', [...args, '--ignore-context', '--findings-json', out]);
+      assert.notEqual(r.status, 0);
+      assert.equal(f.promptList().length, 0);
+      assert.equal(readFileSync(out, 'utf8'), 'keep');
+    }
+  } finally { f.close(); }
+});
 
 for (const [script, full] of [["edc-review.sh", ["--full"]], ["edc-delivery-review.sh", ["--full"]], ["edc-audit.sh", []], ["edc-review-all.sh", ["--full"]]]) {
   for (const flag of ["--no-context-refresh", "--ignore-context"]) {

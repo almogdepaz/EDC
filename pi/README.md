@@ -51,7 +51,7 @@ Pi exposes one interactive command:
 
 | Command | Purpose |
 |---|---|
-| `/edc [--no-context-refresh\|--ignore-context]` | Open the EDC menu; optional flags apply to every review scope/lens |
+| `/edc [--refresh-context\|--no-context-refresh\|--ignore-context]` | Open the EDC menu; optional flags apply to every review scope/lens |
 
 Menu actions:
 
@@ -65,14 +65,14 @@ Menu actions:
 - update context — refreshes from the context manifest's recorded source commit to `HEAD`; review base selection is never used
 - doctor / validate context
 
-`/edc` is interactive-only. For non-interactive use, use the terminal CLI:
+`/edc` is interactive-only. For non-interactive use, choose a context policy with the terminal CLI (examples below use source-only review):
 
 ```bash
-edc review full --agent pi
-edc review diff --agent pi
-edc security full --agent pi
-edc delivery diff <base> --agent pi
-edc quality full --agent pi
+edc review full --agent pi --ignore-context
+edc review diff --agent pi --ignore-context
+edc security full --agent pi --ignore-context
+edc delivery diff <base> --agent pi --ignore-context
+edc quality full --agent pi --ignore-context
 edc build --agent pi
 edc build --agent pi --force
 edc update --agent pi
@@ -80,9 +80,11 @@ edc update --agent pi
 
 The unified installer (`bash install.sh --agent pi`) also adds `~/.edc/scripts` to `PATH` in `~/.zshrc` or `~/.bashrc` when possible. Restart your shell after install, or run `export PATH="$HOME/.edc/scripts:$PATH"` for the current shell. Use `--no-path` to skip shell rc edits.
 
-Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, then quality against one candidate by default; exact `EDC_PARALLEL=1` enables concurrent lenses and module workers. Quality diff audits only modules owning changed files; quality full audits all modules. Default reviews prompt before refreshing stale/missing context. Declining cancels and prints no-build CLI examples for the selected lens.
+Review actions first ask for scope, then lens. When a differential scope has reviewable working-tree changes, Pi also asks whether to review the complete working tree, review committed changes only, or cancel. Complete mode passes `--include-working-tree`; committed mode passes `--committed-only`. `diff` without a base uses the detected default branch. Combined review runs security, delivery, then quality against one candidate by default; exact `EDC_PARALLEL=1` enables concurrent lenses and module workers. Quality diff audits only modules owning changed files; quality full audits all modules. For missing/incomplete or stale context, choose build/update context then review, review without generated context, or cancel. The without-context choice passes `--ignore-context` with the selected scope/lens and dirty policy unchanged. Cancel or Escape starts no job. Fresh context and explicit policy flags skip the context prompt; combined reviews and background jobs do not prompt again.
 
-Run `/edc --no-context-refresh` or `/edc --ignore-context` before selecting any full/diff scope and lens to opt out of context generation. No-refresh permits existing context as optional navigation, but falls back to explicit source files when context is absent, stale, incomplete, or malformed; new/unmapped files remain in scope. Ignore-context also forbids generated-context analysis reads/routing and takes precedence when both flags are present. Neither option builds, updates, or repairs context.
+Run `/edc --no-context-refresh` or `/edc --ignore-context` before selecting any full/diff scope and lens to opt out of context generation. No-refresh permits existing context as optional navigation, but falls back to explicit source files when context is absent, stale, incomplete, or malformed; new/unmapped files remain in scope. Ignore-context also forbids generated-context analysis reads/routing and takes precedence when both flags are present. Neither option builds, updates, or repairs context. `/edc --refresh-context` explicitly authorizes the existing recovery path and conflicts with either no-build flag. It does not force a rebuild when context is fresh. Refresh consent is separate from advisory/inject context mode.
+
+Non-interactive terminal reviews with missing/stale context now refuse implicit generation before model work. Migrate automation to `--refresh-context`, `--ignore-context`, or `--no-context-refresh`; configure the model as usual. If context becomes stale after Pi observes it as fresh, the background review fails safely rather than refreshing without consent.
 
 Workers gather only necessary source/supporting evidence and ordinary specs/docs, then report policy and coverage limitations. Existing report paths, candidate/dirty policies, and review checks remain unchanged; direct reviews do not need module fanout or a generated manifest.
 
@@ -164,7 +166,7 @@ edc mode inject
 | `bash` not found | Install or restore the system Bash executable on `PATH`. macOS `/bin/bash` 3.2 is supported. |
 | `node: command not found` | Install Node; EDC orchestrators use it for manifest, routing, and stream handling. |
 | `/edc` job fails immediately under plan/read-only/sandbox packages | Check whether another extension blocked `bash` or writes to `AGENTS.md`, `edc-context/`, `.git/edc/`, or `review-*.md`. This is expected for strict guard packages. |
-| Review says context is missing or stale | Run `/edc` → **Build context** once, or `/edc` → **Update context from default branch** after HEAD moves. Use `/edc` → **Job status** and inspect `.git/edc/<kind>.log` for recovery details. |
+| Review says context is missing or stale | Choose build/update then review, review without generated context, or cancel. For automation, pass an explicit context policy. Use `/edc` → **job status** and inspect `.git/edc/<kind>.log` for recovery details. |
 | Background review reports provider websocket/transport failure | The nested pi subprocess lost provider transport. Rerun the job; if it repeats, run `edc update --agent pi` separately or reduce context/update scope. |
 | Wrong model in nested pi subprocesses | EDC forwards the active pi model as `EDC_PI_MODEL` when `ctx.model.provider` and `ctx.model.id` are available. Check the job log for the propagated model and set explicit model env vars only if you need to override it. |
 

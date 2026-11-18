@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const { default: edcExtension } = await import(pathToFileURL(process.env.EDC_TEST_EXTENSION).href);
+const { CONTEXT_REVIEW_MENU } = await import(new URL('./lib/review-scope.mjs', pathToFileURL(process.env.EDC_TEST_EXTENSION)).href);
 
 delete process.env.EDC_PI_SUBPROCESS;
 
@@ -65,7 +66,7 @@ exit 1
   };
   await edcExtension(pi);
 
-  const selections = ["changes vs default branch", "security review", "job status"];
+  const selections = ["changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -105,7 +106,7 @@ echo 'generic log failure' >&2
 exit 1
 `);
   chmodSync(reviewScript, 0o755);
-  selections.push("changes vs default branch", "security review", "job status");
+  selections.push("changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status");
   const messagesBeforeStructuredStart = messages.length;
   await handler("", ctx);
   const structuredStart = messages.slice(messagesBeforeStructuredStart).find((message) => message.customType === "edc-background");
@@ -126,7 +127,7 @@ echo 'review succeeded without legacy verified log line'
 exit 0
 `);
   chmodSync(reviewScript, 0o755);
-  selections.push("changes vs default branch", "security review", "job status");
+  selections.push("changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status");
   await handler("", ctx);
   assert.ok(await waitFor(() => existsSync(statusPath) && /status=success/.test(readFileSync(statusPath, "utf-8")), 10000));
   await handler("", ctx);
@@ -144,7 +145,7 @@ echo 'review-all succeeded with warning'
 exit 0
 `);
   chmodSync(reviewAllScript, 0o755);
-  selections.push("changes vs default branch", "combined review", "job status");
+  selections.push("changes vs default branch", "combined review", CONTEXT_REVIEW_MENU.BUILD, "job status");
   await handler("", ctx);
   assert.ok(await waitFor(() => existsSync(statusPath) && /status=success-with-warning/.test(readFileSync(statusPath, "utf-8")), 10000));
   await handler("", ctx);
@@ -170,7 +171,7 @@ echo 'review-all failed in delivery phase'
 exit 1
 `);
   chmodSync(reviewAllScript, 0o755);
-  selections.push("changes vs default branch", "combined review", "job status");
+  selections.push("changes vs default branch", "combined review", CONTEXT_REVIEW_MENU.BUILD, "job status");
   await handler("", ctx);
   assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")) && /failed_phase=delivery/.test(readFileSync(statusPath, "utf-8")), 10000));
   await handler("", ctx);
@@ -189,7 +190,7 @@ echo 'HINT: review uses committed diff plus dirty tracked files; commit changes,
 exit 1
 `);
   chmodSync(reviewScript, 0o755);
-  selections.push("changes vs default branch", "security review", "job status");
+  selections.push("changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status");
   await handler("", ctx);
   assert.ok(await waitFor(() => existsSync(statusPath) && /status=failed/.test(readFileSync(statusPath, "utf-8")) && /no changed files/.test(readFileSync(statusPath, "utf-8")), 10000));
   await handler("", ctx);
@@ -208,7 +209,7 @@ exit 1
     "log=.git/edc/review.log",
     "",
   ].join("\n"));
-  selections.push("changes vs default branch", "security review");
+  selections.push("changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD);
   const messagesBeforeRestart = messages.length;
   await handler("", ctx);
   const restartMessage = messages.slice(messagesBeforeRestart).find((message) => message.customType === "edc-background");

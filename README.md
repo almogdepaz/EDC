@@ -101,19 +101,37 @@ edc mode inject         # auto-load context through supported hooks
 edc doctor
 ```
 
+### Review without generated context
+
+You do not need to run `edc build` before reviewing. Use `--ignore-context` to skip context generation and generated-context analysis reads/routing.
+
 Every review lens and alias accepts `--no-context-refresh` or `--ignore-context`, for full and differential scope:
 
 ```bash
+# combined security, delivery, and quality review without generated context
+edc review full --agent pi --ignore-context
+# review committed branch changes only
+edc review diff main --agent pi --ignore-context --committed-only
+
+# skip context refresh, but allow existing context as optional guidance
 edc review diff main --agent pi --no-context-refresh
 edc delivery full --agent pi --ignore-context
 edc quality diff main --agent pi --ignore-context
 ```
 
-Defaults still refresh context. `--no-context-refresh` never builds, updates, or repairs it; existing context is optional navigation only. Missing, malformed, incomplete, or stale context falls back to direct source review, including new/unmapped files. Valid explicit account-only exclusions remain excluded and appear in logs and reports. Security also preserves bounded promotion checks and their structured results. `--ignore-context` also excludes generated-context analysis reads and routing, even when context exists, and takes precedence when both flags are supplied.
+Interactive terminal reviews and Pi `/edc` offer three choices when context is missing/incomplete or stale: build/update context then review, review without generated context (`--ignore-context`), or cancel. Fresh context and explicit context-policy flags skip this prompt. Cancel, Escape, EOF, and invalid terminal choices do not start context or review work.
+
+Non-interactive migration: scripts that previously relied on automatic context generation must now pass `--refresh-context` to authorize recovery, `--ignore-context` for source-only review, or `--no-context-refresh` to allow optional existing guidance. Missing/stale context without a policy fails before model work. For example: `edc review diff main --agent pi --committed-only --refresh-context`. `--refresh-context` authorizes the existing build/update recovery path; it does not force rebuilding fresh context. It conflicts with either no-build flag. `--context-mode advisory|inject` controls context loading, not refresh consent.
+
+`--no-context-refresh` never builds, updates, or repairs it; existing context is optional navigation only. Missing, malformed, incomplete, or stale context falls back to direct source review, including new/unmapped files. Valid explicit account-only exclusions remain excluded and appear in logs and reports. Security also preserves bounded promotion checks and their structured results. `--ignore-context` also excludes generated-context analysis reads and routing, even when context exists, and takes precedence when both flags are supplied.
 
 Ordinary repository instructions, specs, and architecture docs remain available. Direct reviews use an explicit tracked-file inventory for full scope or changed files for diff scope, plus necessary supporting evidence; they do not generate index/module docs or a manifest. Reports retain their existing paths and state the policy and coverage limitations. In Pi, run `/edc --no-context-refresh` or `/edc --ignore-context`, then select any scope and lens.
 
-`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). By default, review commands auto-build or auto-update `edc-context/` first if it is missing or stale. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit in order by default, or concurrently after explicit opt-in. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means one or more review calls failed or omitted output; EDC preserves substantive prose and inserts explicit unavailable-coverage markers instead of discarding the rest of the review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+`--agent` selects which CLI (`claude` / `cursor` / `codex` / `pi`) drives subprocess fanout, and is mandatory for `build`, `update`, `review`, `security`, `delivery`, and `quality` (not for `mode` or `doctor`). Public terminal and Pi reviews require consent before building or updating missing/stale `edc-context/`. Low-level `edc-*.sh` orchestrators and other agent command wrappers retain their internal automatic-recovery contract; they are not the public terminal consent boundary. Use `full` for the current tracked repo and `diff [base]` for `HEAD` versus a base branch; omitted diff base uses the detected default branch. Dirty differential review fails before context recovery or workers unless you pass `--include-working-tree` or `--committed-only`. Include mode creates one immutable synthetic commit containing staged, unstaged, deleted, and non-ignored untracked files, recursively snapshotting dirty initialized submodules, without moving HEAD/refs or changing any real index; combined security, delivery, and quality lenses all review that same commit in order by default, or concurrently after explicit opt-in. Committed-only mode excludes every working-tree change. Security review routes files through `edc-context/manifest.json`: module-mapped files get module context, unexpected unmapped files are reviewed with repo-level context only, and paths matching `unmapped.allowedGlobs` are intentionally skipped but listed in the final review. Quality diff audits only modules owning changed files; quality full audits all modules. Structured result files include scope/base/target, candidate kind/commit, and evidence-derived dirty/untracked inclusion. `success-with-warning` means one or more review calls failed or omitted output; EDC preserves substantive prose and inserts explicit unavailable-coverage markers instead of discarding the rest of the review. `--ignore` may be repeated; passing any `--ignore` flag overrides `.edcignore` for that run, otherwise `.edcignore` is read from the repo root.
+
+### Machine-readable findings (opt-in)
+
+Add `--findings-json <new-path>` to a combined differential `review` / `review-all` with an explicit base. EDC validates versioned records from every expected source report against the immutable candidate and exposes the artifact path/digest in its combined result. Human reports remain available; default and legacy behavior is unchanged. Full scope, existing destinations, malformed records, and missing machine coverage fail explicitly. See [the schema, provenance, and limitations](docs/structured-findings.md).
 
 ### Worker concurrency and pi observability
 

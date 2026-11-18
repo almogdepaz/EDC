@@ -55,6 +55,10 @@ Check boundary contracts:
 - client/adapter abstraction is preserved for external systems instead of direct ad hoc calls from non-owner layers
 - event publisher/subscriber names, payload shapes, and ownership stay consistent when event flows are touched
 
+For material changed transformations or adapters, derive the invariant from source and consumer behavior. Try a small valid counterexample and inspect observable values and effects, not only compilation, status, or shape. Prefer existing real-code tests over copied logic or mocks. State the invariant checked, actual verification evidence, and untested boundaries; never claim an unexecuted check passed. Keep this risk-based and bounded within the current lens and assigned evidence permissions; this is not a new mandatory pass or an all-files checklist.
+
+Use these checks to establish delivered public contracts and integration behavior, not generic local smells or speculative security findings.
+
 ### Integration completeness
 
 Check whether the change is wired through all necessary surfaces:

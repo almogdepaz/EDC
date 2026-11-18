@@ -54,6 +54,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
   return predicate();
 }
 
+const { CONTEXT_REVIEW_MENU } = await import(new URL('./lib/review-scope.mjs', pathToFileURL(process.env.EDC_TEST_EXTENSION)).href);
 const cwd = mkdtempSync(join(tmpdir(), "edc-pi-bg-runs-"));
 let childPid = 0;
 try {
@@ -73,7 +74,7 @@ try {
   await edcExtension(pi);
   assert.equal(typeof handler, "function", "extension should register /edc handler");
 
-  const selections = ["changes vs default branch", "security review", "job status"];
+  const selections = ["changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD, "job status"];
   const ctx = {
     cwd,
     hasUI: true,
@@ -152,6 +153,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
   return predicate();
 }
 
+const { CONTEXT_REVIEW_MENU } = await import(new URL('./lib/review-scope.mjs', pathToFileURL(process.env.EDC_TEST_EXTENSION)).href);
 const tmpBase = mkdtempSync(join(tmpdir(), "edc-pi-bg-quote-"));
 let childPid = 0;
 try {
@@ -180,7 +182,7 @@ try {
   };
   await edcExtension(pi);
 
-  const selections = ["changes vs default branch", "security review"];
+  const selections = ["changes vs default branch", "security review", CONTEXT_REVIEW_MENU.BUILD];
   const ctx = {
     cwd: worktree,
     hasUI: true,

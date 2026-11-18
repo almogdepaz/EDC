@@ -236,6 +236,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     ui: {
       select: async (title, items) => {
         calls.selections.push({ title, items });
+        if (title.startsWith("EDC context:")) return items[0];
         return selections.shift();
       },
       confirm: extra.confirm || (async (title, message) => {
@@ -871,7 +872,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   fs.writeFileSync(`${missingDir}/tracked.txt`, "x\n");
   childProcess.execFileSync("git", ["add", "tracked.txt"], { cwd: missingDir, stdio: "ignore" });
   childProcess.execFileSync("git", ["-c", "user.email=a@example.com", "-c", "user.name=a", "-c", "commit.gpgsign=false", "commit", "-m", "init"], { cwd: missingDir, stdio: "ignore" });
-  const missingSelections = ["changes vs default branch", "combined review"];
+  const missingSelections = ["changes vs default branch", "combined review", "build context then review (may spawn agents)"];
   const missingCtx = {
     cwd: missingDir,
     hasUI: true,
@@ -888,8 +889,8 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   };
   const missingMessagesBefore = calls.messages.length;
   await edcCmd.opts.handler("", missingCtx);
-  if (!calls.confirmations.at(-1)?.message?.includes("EDC context: missing/incomplete") || !calls.confirmations.at(-1)?.message?.includes("reason: manifest")) {
-    console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
+  if (!calls.selections.at(-1)?.title?.includes("EDC context: missing/incomplete") || !calls.selections.at(-1)?.title?.includes("reason: manifest") || calls.selections.at(-1)?.items?.length !== 3) {
+    console.log("MISSING_PROMPT_FAIL:" + JSON.stringify(calls.selections.at(-1)));
     process.exit(1);
   }
   const missingStartMessage = calls.messages.slice(missingMessagesBefore).at(-1);
@@ -917,7 +918,7 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
     sourceCommit,
     modules: [],
   }));
-  const staleSelections = ["changes vs default branch", "combined review"];
+  const staleSelections = ["changes vs default branch", "combined review", "cancel"];
   await edcCmd.opts.handler("", {
     cwd: staleDir,
     hasUI: true,
@@ -932,9 +933,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
       },
     },
   });
-  const stalePrompt = calls.confirmations.at(-1)?.message || "";
+  const stalePrompt = calls.selections.at(-1)?.title || "";
   if (!stalePrompt.includes("EDC context: stale") || !stalePrompt.includes("behind by: 1 commit")) {
-    console.log("STALE_PROMPT_FAIL:" + JSON.stringify(calls.confirmations.at(-1)));
+    console.log("STALE_PROMPT_FAIL:" + JSON.stringify(calls.selections.at(-1)));
     process.exit(1);
   }
   const declineMessage = calls.messages.at(-1)?.content || "";
@@ -959,15 +960,17 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
   }
 
   // Explicit no-build arguments reach the actual detached job for every lens/scope.
-  for (const scope of ["full repo review", "changes vs default branch"]) {
+  for (const scope of ["full repo review", "changes vs default branch", "changes vs custom base"]) {
     for (const lens of ["combined review", "security review", "delivery review", "quality review"]) {
-      for (const flag of ["--no-context-refresh", "--ignore-context"]) {
-        const selections = [scope, lens];
+      for (const flag of ["--no-context-refresh", "--ignore-context", ""]) {
+        const selections = [scope, lens, ...(flag ? [] : ["review without generated context"])];
+        const refs = ["HEAD~1", "HEAD~0"];
         await edcCmd.opts.handler(flag, {
           cwd: staleDir,
           hasUI: true,
           ui: {
             select: async () => selections.shift(),
+            input: async () => refs.shift(),
             confirm: async () => { throw new Error("no-build review must not request context recovery"); },
           },
         });
@@ -977,7 +980,9 @@ wiring=$(EDC_TEST_CWD="$TMP" EDC_TEST_SID="$SESSION_ID" EDC_TEST_EXTENSION="$TRU
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         const status = fs.readFileSync(path, "utf8");
-        if (!status.includes("status=success") || !status.includes(flag)) {
+        const expectedScope = scope === "changes vs custom base" ? "HEAD~0 --base HEAD~1" : scope === "changes vs default branch" ? "HEAD --base master" : lens === "quality review" ? "" : "--full";
+        const expectedArgs = [expectedScope, flag || "--ignore-context"].filter(Boolean).join(" ");
+        if (!status.includes("status=success") || !status.includes(`args=${expectedArgs}\n`) || selections.length !== 0) {
           console.log("NO_BUILD_JOB_ARGS_FAIL:" + JSON.stringify({ scope, lens, flag, status }));
           process.exit(1);
         }

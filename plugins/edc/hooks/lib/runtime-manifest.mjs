@@ -19,7 +19,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 export const RUNTIME_SCHEMA_VERSION = 1;
-export const RUNTIME_VERSION = "1.1.5";
+export const RUNTIME_VERSION = "1.1.6";
 const LOCK_STALE_MS = Number(process.env.EDC_RUNTIME_LOCK_STALE_MS || 120000);
 const RUNTIME_VALIDATION_TIMEOUT_MS = 30000;
 
@@ -62,6 +62,7 @@ export const RUNTIME_MANIFEST = Object.freeze({
     hook("classify-cli.mjs"),
     hook("json-cli.mjs"),
     hook("json-result-commands.mjs", false),
+    hook("review-findings.mjs", false),
     hook("paths.mjs", false),
     hook("pi-supervisor.mjs"),
     hook("platform.mjs", false),

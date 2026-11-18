@@ -1,0 +1,24 @@
+{
+  "skill": "edc-audit",
+  "fixture": "adapter-contract",
+  "requiredFindings": [
+    {
+      "category": "correctness before deduplication",
+      "evidence": "a caller-selected zero becomes three; both mappings share one defect, not two caller findings"
+    }
+  ],
+  "forbiddenFindings": [
+    {
+      "category": "compilation proves semantic preservation"
+    },
+    {
+      "category": "unexecuted counterexample claimed as verified"
+    }
+  ],
+  "requiredFiles": [
+    "src/adapter.mjs"
+  ],
+  "requiredEvidence": [
+    "zero is a valid caller-selected retry count; only absence uses the default."
+  ]
+}

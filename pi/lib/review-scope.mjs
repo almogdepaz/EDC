@@ -10,10 +10,12 @@ export const DIRTY_REVIEW_MENU = Object.freeze({
   CANCEL: "cancel",
 });
 
-function reviewSkipsContextPrompt(args) {
-  const tokens = argTokens(args);
-  return tokens.includes("--no-context-refresh") || tokens.includes("--ignore-context");
-}
+export const CONTEXT_REVIEW_MENU = Object.freeze({
+  BUILD: "build context then review (may spawn agents)",
+  UPDATE: "update context then review (may spawn agents)",
+  WITHOUT: "review without generated context",
+  CANCEL: "cancel",
+});
 
 function gitRefExists(cwd, ref) {
   try {
@@ -128,7 +130,7 @@ export function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cw
       return [
         "EDC context: missing/incomplete.",
         `reason: ${freshness.reason || "unknown"}`,
-        "review will build context before reviewing unless you pass --no-context-refresh or --ignore-context.",
+        "choose whether to build context, review without generated context, or cancel.",
       ].join("\n");
     case "stale": {
       const source = String(freshness.sourceCommit || "unknown");
@@ -139,7 +141,7 @@ export function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cw
         `built at: ${source.slice(0, 8)}`,
         `HEAD: ${head.slice(0, 8)}`,
         `behind by: ${behind} commit${behind === "1" ? "" : "s"}`,
-        "review will update context before reviewing unless you pass --no-context-refresh or --ignore-context.",
+        "choose whether to update context, review without generated context, or cancel.",
       ].join("\n");
     }
     case "unknown":
@@ -149,17 +151,36 @@ export function reviewContextSummary(ctx, freshness = getContextFreshness(ctx.cw
   }
 }
 
-export async function shouldProceedWithReview(args, ctx, freshness) {
-  if (reviewSkipsContextPrompt(args)) return true;
+export async function chooseReviewContext(args, ctx, freshness) {
+  const tokens = argTokens(args);
+  const forwarded = [];
+  let refresh = false;
+  let bypass = false;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === "--refresh-context") { refresh = true; continue; }
+    if (token === "--ignore-context" || token === "--no-context-refresh") bypass = true;
+    forwarded.push(token);
+    if (["--base", "--ignore", "--context-mode"].includes(token) && i + 1 < tokens.length) forwarded.push(tokens[++i]);
+  }
+  if (refresh && bypass) return { error: "--refresh-context conflicts with --ignore-context and --no-context-refresh." };
+  if (refresh || bypass) return { args: forwarded, contextChoice: refresh ? "refresh" : "check" };
   freshness ??= getContextFreshness(ctx.cwd);
-  if (freshness.state !== "missing" && freshness.state !== "stale") return true;
-  if (!ctx.ui?.confirm || ctx.hasUI === false) return true;
-
-  const action = freshness.state === "missing" ? "build" : "update";
-  return ctx.ui.confirm(
-    `EDC context ${freshness.state}`,
-    `${reviewContextSummary(ctx, freshness)}\n\nRun edc ${action} before reviewing? This may spawn agent subprocesses and can take several minutes.`,
-  );
+  // A fresh observation is not consent to refresh if context changes before dispatch.
+  if (freshness.state === "fresh") return { args: forwarded, contextChoice: "check" };
+  if (freshness.state !== "missing" && freshness.state !== "stale") {
+    return { error: "Context freshness is unknown; check the repository before reviewing." };
+  }
+  if (!ctx.ui?.select || ctx.hasUI === false) {
+    return { error: "Choose --refresh-context, --ignore-context, or --no-context-refresh with the EDC CLI before reviewing." };
+  }
+  const refreshLabel = freshness.state === "missing" ? CONTEXT_REVIEW_MENU.BUILD : CONTEXT_REVIEW_MENU.UPDATE;
+  const choice = await ctx.ui.select(reviewContextSummary(ctx, freshness), [
+    refreshLabel, CONTEXT_REVIEW_MENU.WITHOUT, CONTEXT_REVIEW_MENU.CANCEL,
+  ]);
+  if (choice === refreshLabel) return { args: forwarded, contextChoice: "refresh" };
+  if (choice === CONTEXT_REVIEW_MENU.WITHOUT) return { args: [...forwarded, "--ignore-context"], contextChoice: "check" };
+  return { cancelled: true };
 }
 
 function canonicalReviewCli(commandName, args, scope = "") {

@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO="almogdepaz/EDC"
-EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.5}"
+EDC_INSTALL_REF="${EDC_INSTALL_REF:-v1.1.6}"
 INSTALL_URL="https://raw.githubusercontent.com/$REPO/main/install.sh"
 ARCHIVE_URL="https://github.com/$REPO/archive/refs/tags/$EDC_INSTALL_REF.tar.gz"
 # Pi identifies a git package by its URL without the ref; keep this spelling

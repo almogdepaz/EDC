@@ -1,0 +1,42 @@
+{
+  "sources": {
+    "a.js": "export function summarize({ values }) {\n  return { total: values.reduce((sum, value) => sum + value, 0) };\n}\n",
+    "b.js": "import { summarize } from './a.js';\nexport const show = values => summarize(values, 'total').toFixed(1);\nexport const preview = values => summarize(values, 'total').toFixed(0);\n"
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "title": "update callers to the single-request input contract",
+      "severity": "medium",
+      "primaryLocation": { "path": "b.js", "startLine": 2, "endLine": 2 },
+      "relatedLocations": [
+        { "path": "a.js", "startLine": 1, "endLine": 2 },
+        { "path": "b.js", "startLine": 3, "endLine": 3 }
+      ],
+      "description": "summarize expects one object argument containing values: number[]. show and preview instead pass two arguments: a number[] and the string 'total'. Destructuring that array reads its values method, not a numeric array; the helper then accesses values.reduce on a function.",
+      "impact": "For a numeric-array input, both consumers fail before obtaining a total to format. The ignored second string argument does not select a return field.",
+      "recommendation": "Pass one request object containing the numeric values array at both callers.",
+      "verification": {
+        "evidence": ["Inspected the destructured parameter, reduction and both two-argument call sites."],
+        "limitations": ["Source inspection only; the consumers were not executed."]
+      }
+    },
+    {
+      "id": "F2",
+      "title": "read the numeric field before formatting the result",
+      "severity": "medium",
+      "primaryLocation": { "path": "b.js", "startLine": 2, "endLine": 2 },
+      "relatedLocations": [
+        { "path": "a.js", "startLine": 2, "endLine": 2 },
+        { "path": "b.js", "startLine": 3, "endLine": 3 }
+      ],
+      "description": "For a valid request object, summarize returns an object shaped { total: number }, not a number. show and preview use the entire result as a numeric scalar by calling toFixed directly.",
+      "impact": "If the input contract is corrected but scalar result use remains, formatting will fail because the returned object has no toFixed method. This output-use consequence is conditional; the current invalid call fails before returning a result.",
+      "recommendation": "Read the total field from the returned object before formatting it at both callers.",
+      "verification": {
+        "evidence": ["Inspected the object return expression and the consumers' direct toFixed calls."],
+        "limitations": ["No UI execution or successful current return was observed; the input mismatch precedes this conditional consequence."]
+      }
+    }
+  ]
+}
